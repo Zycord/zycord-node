@@ -6,10 +6,56 @@
 
 name: ci
 
+# What runs when, and why it is a condition rather than a second file.
+#
+# Every job below still lives in THIS file and keeps its job id. That is not
+# tidiness: sim/wiring/workflow_test.go parses ci.yml and asserts an exact job
+# set, and it attributes every command it finds to the job that runs it, so a
+# job moved into a new workflow becomes a command nothing reviews — which is
+# the blindness that test's own header records from the last extraction. A
+# job gated with `if:` is still parsed, still policed, and still fails the
+# wiring test the day somebody changes what it runs.
+#
+# The split itself is about billed minutes on a pull request, which is where
+# the same commit is pushed over and over. Four things are therefore skipped
+# for `pull_request` and run on every push to main, every tag and on demand:
+# `canonical`, both legs of `randomx`, `reproducible`, and the `make race`
+# STEP inside `build`. Together they are most of the bill and none of them is
+# a gate that catches a defect a reviewer would otherwise merge blind — they
+# re-verify build determinism and engine behaviour that the merge to main
+# re-checks minutes later.
+#
+# What deliberately did NOT move, because each is the only thing that checks
+# what it checks, at the only time it is useful:
+#
+#   windows      the only Windows execution anywhere at review time; see
+#                windows.yml for the four defects that were green on every
+#                Linux runner.
+#   vectors      the only regeneration of spec/vectors. `go test ./spec/`
+#                passes when the corpus and the implementation have drifted
+#                together, so without this an undeclared consensus change is
+#                reviewed green.
+#   desktop      the bridge contract breaks in ordinary node-zone changes, not
+#                at release time.
+#   fuzz         90 seconds a target; the cheapest real bug-finder here.
+#   build        minus its race step: lint, the import graph, `make test`, the
+#                Wails contamination check — all cheap, and the contamination
+#                check exists in no other workflow.
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
+  # So the full set can be demanded on a branch without minting a tag.
+  workflow_dispatch:
+
+# One run per ref. A force-push to a pull request used to leave the previous
+# run going and start a second alongside it, and on this workflow that is the
+# single largest waste available — larger than any job below. Never applied to
+# a tag: a release run must not be cancellable by whatever is pushed next.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
@@ -57,7 +103,13 @@ jobs:
       # node/mempool's eviction suite under the race detector on every machine
       # this runs on — including this runner. Duplicating the command here is
       # how that fix landed in the Makefile and left CI still failing.
+      # Skipped on a pull request and run on every push to main, every tag and
+      # on demand. The step is kept here, with its command intact, rather than
+      # moved: sim/wiring/workflow_test.go matches this job, directory and
+      # command text and never reads `if:`, so gating keeps it policed where
+      # relocating it would not.
       - name: tests with the race detector
+        if: github.event_name != 'pull_request'
         run: make race
       # The node's crash-safety suite kills real processes; keep it explicit so
       # a failure names the guardrail it broke rather than hiding in the pack.
@@ -187,6 +239,7 @@ jobs:
   # computed a DIFFERENT HASH from an x86 one for the same header: a chain
   # split along CPU architecture, invisible on any single runner.
   randomx:
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -235,9 +288,14 @@ jobs:
   # toolchain do not fix which compiler ran (R1-L2, ARCHITECTURE §1 P6).
   #
   # Built here rather than only at release time, so that a change to the
-  # Dockerfile fails on the pull request that makes it rather than on the day
-  # somebody tries to cut a release.
+  # Dockerfile fails on the merge that lands it rather than on the day somebody
+  # tries to cut a release. It used to say "on the pull request that makes it",
+  # and that is no longer true: three full container builds is the most
+  # expensive job in this workflow, so it is skipped for `pull_request`. A
+  # change to build/Dockerfile is one to run `workflow_dispatch` against on the
+  # branch, before review rather than after.
   canonical:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -333,6 +391,7 @@ jobs:
     uses: ./.github/workflows/windows.yml
 
   reproducible:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -375,10 +434,13 @@ jobs:
       # half of it behind a job about webviews. The `desktop` job exists because
       # it needs a webview toolchain -- its own comment says so -- and this check
       # needs none; hanging it off that apt-get would make it fail for reasons
-      # that have nothing to do with reproducibility. And this site is
-      # unconditional, where release.yml's sits behind `if: matrix.goos ==
-      # 'windows'` and would stop running silently if that leg were ever
-      # renamed; one unconditional site is the insurance.
+      # that have nothing to do with reproducibility. And this site runs on
+      # every push to main and every tag, where release.yml's sits behind
+      # `if: matrix.goos == 'windows'` and would stop running silently if that
+      # leg were ever renamed; this is the site that is not conditioned on a
+      # matrix leg's name, which is the insurance. (It was unconditional until
+      # this job was taken off `pull_request`; the insurance is against a
+      # renamed leg, and a rename still cannot hide from the merge.)
       #
       # What it does not cost: a new external dependency. The `desktop` job in
       # this same workflow already pulls that identical module tree. Whether

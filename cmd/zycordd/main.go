@@ -106,8 +106,9 @@ func main() {
 	noRPC := fs.Bool("no-rpc", false, "do not serve RPC")
 	listen := fs.String("listen", "", "peer-to-peer listen address; empty means outbound-only")
 	advertise := fs.String("advertise", "", "address to advertise to peers; defaults to --listen. Set this when the address peers can reach is not the one this process binds (a forwarded port, a proxy).")
-	peersFlag := fs.String("peers", "", "comma-separated bootstrap peer addresses")
+	peersFlag := fs.String("peers", "", "comma-separated bootstrap peer addresses, merged with the network's built-in seeds")
 	peersFile := fs.String("peers-file", "", "file of bootstrap peer addresses, one per line; # comments and blank lines ignored. Merged with --peers.")
+	noSeeds := fs.Bool("no-seeds", false, "do not use the network's built-in seed addresses; --peers and --peers-file still apply")
 	seed := fs.Int64("seed", 1, "dial-jitter seed, so a run is reproducible")
 	mineThreads := fs.Int("mine-threads", 0,
 		"nonce-search goroutines when mining (0 = one per core)")
@@ -217,11 +218,23 @@ func main() {
 	engine := p2p.NewEngine(c, pool, peerStore, work, reachable)
 	net := p2p.NewNode(identity, engine, peerStore, *seed)
 	net.Logger = log.Default()
-	bootstrap, err := bootstrapList(*peersFlag, *peersFile)
+	bootstrap, err := bootstrapList(*peersFlag, *peersFile, seedsFor(*paramsPath, *devnet, *testnet, *noSeeds))
 	if err != nil {
 		fatal(err)
 	}
 	net.Bootstrap = bootstrap
+	// Say which addresses this node will start from and where they came from.
+	// A seed that is built in is still a seed an operator is entitled to see
+	// before it is dialled — and when the list is empty, saying so is the
+	// difference between a node nobody can reach and a node nobody can
+	// diagnose.
+	switch {
+	case len(bootstrap) == 0:
+		log.Printf("bootstrap: no addresses — this node will not dial anyone " +
+			"until a peer dials it (pass --peers, or drop --no-seeds)")
+	default:
+		log.Printf("bootstrap: %s", strings.Join(bootstrap, " "))
+	}
 	if *listen != "" {
 		if err := net.Listen(*listen); err != nil {
 			fatal(err)
@@ -514,6 +527,36 @@ func mineLoop(c *chain.Chain, m *miner.Miner, net *p2p.Node, metrics *rpc.Metric
 	// pointless.
 	const budget = 1 << 24
 
+	// The wait before a network's first block, and the rate limit on saying so.
+	//
+	// A node started hours before genesis refuses to mine (miner.ErrTooEarly)
+	// and must then do two things it did not have to do before: not spin, and
+	// not go silent. Both are failures an operator reads as "it is broken":
+	// a loop with nothing to pace it burns a core for hours, and a miner that
+	// logs nothing for four hours is indistinguishable from one that is hung —
+	// and the operator's fix for that is to kill it and start editing flags,
+	// which is the whole experience this refusal exists to protect.
+	//
+	// Polling rather than sleeping the whole gap in one go: the wait is a
+	// function of the local clock, and a clock that is corrected — by NTP, by a
+	// laptop waking from suspend — moves the answer under a sleep already
+	// committed to. Thirty seconds is well inside the resolution anybody cares
+	// about here and costs one median-time read per tick.
+	//
+	// The countdown is re-announced on an interval measured by ACCUMULATING the
+	// sleeps rather than by reading the clock a second time. I2-L5's claim is
+	// that Miner.Now is the only reading of wall time in the node, and a
+	// `time.Now()` here to rate-limit a log line would quietly cost that claim
+	// for nothing: the durations being slept are already known exactly.
+	const (
+		mineWaitPoll        = 30 * time.Second
+		mineWaitLogInterval = 10 * time.Minute
+	)
+	var (
+		sinceWaitLog time.Duration
+		sayWait      = true
+	)
+
 	for {
 		select {
 		case <-stop:
@@ -533,6 +576,44 @@ func mineLoop(c *chain.Chain, m *miner.Miner, net *p2p.Node, metrics *rpc.Metric
 				return false
 			}
 		})
+		// Not yet: this node's clock has not reached the earliest timestamp the
+		// next block may carry. Before a network's genesis that is the whole of
+		// what a correctly configured miner is doing, so it is neither an error
+		// nor a reason to reconfigure anything — and the line says so, because
+		// the operator reading it is deciding whether to leave it running.
+		var early *miner.TooEarlyError
+		if errors.As(err, &early) {
+			if sayWait {
+				log.Printf("waiting to mine: the next block cannot be dated before "+
+					"%s (unix %d), and this node's clock reads %s — %s to wait. "+
+					"Leave this running: mining starts on its own and there is "+
+					"nothing to restart or reconfigure.",
+					utcStamp(early.NotBefore), early.NotBefore,
+					utcStamp(early.Now), waitDuration(early.Remaining()))
+				sayWait = false
+				sinceWaitLog = 0
+			}
+			wait := mineWaitPoll
+			if d := waitDuration(early.Remaining()); d < wait {
+				wait = d
+			}
+			if wait <= 0 {
+				wait = time.Second
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(wait):
+			}
+			sinceWaitLog += wait
+			if sinceWaitLog >= mineWaitLogInterval {
+				sayWait = true
+			}
+			continue
+		}
+		// Any other outcome ends the wait, so the next one announces itself at
+		// once rather than inheriting a spent interval.
+		sayWait, sinceWaitLog = true, 0
 		if errors.Is(err, miner.ErrStaleTemplate) {
 			// Somebody else won this height. Build again on the new tip
 			// immediately rather than idling out the interval.
@@ -552,6 +633,38 @@ func mineLoop(c *chain.Chain, m *miner.Miner, net *p2p.Node, metrics *rpc.Metric
 			res.MinerReward.String(), res.Treasury.String(), res.Matured.String(),
 			res.Burned.String(), net.PeerCount())
 	}
+}
+
+// waitDuration converts a second count to a Duration, saturating rather than
+// wrapping.
+//
+// miner.TooEarlyError.Remaining is a uint64 and time.Duration is a SIGNED
+// nanosecond count, so the naive multiplication overflows above about 292
+// years and comes back negative. The value that reaches here is a median-time
+// floor minus a clock, and neither term is this node's to choose: the floor
+// comes from headers, and a chain whose median has been pushed far ahead is a
+// documented attack shape rather than a hypothetical (ARCHITECTURE §12, R1-H2).
+// A negative duration would make `time.After` fire immediately and turn the
+// wait into the spin it exists to prevent.
+func waitDuration(secs uint64) time.Duration {
+	const max = uint64(math.MaxInt64) / uint64(time.Second)
+	if secs > max {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// utcStamp renders a unix second as an RFC 3339 timestamp, always in UTC.
+//
+// Always UTC, never Local, and that is a publication rule rather than a
+// preference: a local timestamp in a log an operator pastes into an issue is a
+// timezone, and a timezone is a location. docs/RELEASE.md §2 makes the same
+// point about commit dates, and sim/wiring's text scan tracks the class.
+func utcStamp(unix uint64) string {
+	if unix > math.MaxInt64 {
+		return "out of range"
+	}
+	return time.Unix(int64(unix), 0).UTC().Format(time.RFC3339)
 }
 
 // prefetchLoop builds the next key epoch's cache ahead of the boundary.
@@ -1003,22 +1116,48 @@ func selectEngine(p *params.Params, mining bool) (pow.Engine, error) {
 	return e, nil
 }
 
-// bootstrapList merges --peers with --peers-file.
+// bootstrapList merges --peers, --peers-file and the network's built-in seeds.
 //
-// A FILE, and never a list compiled into the binary. node/p2p's Bootstrap
-// field says why and the reason is not stylistic: a baked-in list is one
-// nobody can change when an entry goes bad, and for a pseudonymous project it
-// is a map of whoever compiled it. A file is data — an operator can read it,
-// replace it, or point at somebody else's — and a public testnet needs
-// somewhere to start without that becoming a property of the release.
+// **This binary now ships a seed list, and that reverses a decision the tree
+// used to state here.** What stood in this comment was: a file, and never a
+// list compiled into the binary, because a baked-in list is one nobody can
+// change when an entry goes bad and — for a pseudonymous project — a map of
+// whoever compiled it. Both halves of that were and remain true; what changed
+// is the weight on the other side. A network nobody can join without first
+// finding an address out of band is a network with no honest newcomers, and
+// "copy this address from the announcement into a flag" is the step at which
+// they are lost. The launch this exists for invites people to download a
+// binary and run it, and that is not a thing a person does with a seed list
+// they must assemble themselves.
 //
-// Both sources are merged rather than one overriding the other, so an operator
-// can take the shipped list and add a peer of their own without transcribing
-// the file onto a command line.
+// The two objections are answered rather than dismissed, and neither is
+// answered by this function alone:
+//
+//   - **Changeable.** seedsFor names hosts, not addresses. The address behind a
+//     name is DNS and moves without a release; node/p2p resolves names on every
+//     start and expands each to at most maxBootstrapAddrs targets. A bad entry
+//     is repaired in a zone file rather than in a binary somebody already
+//     downloaded.
+//   - **Refusable.** --no-seeds drops the built-in list entirely, --peers and
+//     --peers-file still work with or without it, and the addresses actually
+//     used are logged at startup. An operator who wants nothing to do with the
+//     project's own infrastructure spends one flag, and can see that it worked.
+//
+// What is NOT answered is the deanonymisation half: a seed on infrastructure
+// the project registered is infrastructure the project registered, and no flag
+// on a user's machine changes that. docs/RELEASE.md §4 carries that as a
+// standing risk with the launch seed named as the exception it is, rather than
+// as a rule this quietly stopped following.
+//
+// All three sources are merged rather than one overriding the others, so an
+// operator can add a peer of their own without transcribing anything, and the
+// operator's own entries come first: they are the ones chosen for this node.
 //
 // Duplicates are dropped. The same address reachable twice is not two dial
-// targets, and node/p2p budgets outbound connections by count.
-func bootstrapList(flagPeers, path string) ([]string, error) {
+// targets, and node/p2p budgets outbound connections by count. Dedup is by
+// exact string, so a name and an address that resolve to the same host survive
+// as two entries here and collapse later, in node/p2p, if they ever do.
+func bootstrapList(flagPeers, path string, seeds []string) ([]string, error) {
 	out := splitPeers(flagPeers)
 	if path != "" {
 		raw, err := os.ReadFile(path)
@@ -1068,6 +1207,11 @@ func bootstrapList(flagPeers, path string) ([]string, error) {
 				"pointed at was empty", path)
 		}
 	}
+	// Last, so that an address this operator named is dialled before one the
+	// release chose for them. Order is preserved through the dedup below and
+	// node/p2p adds them to the store in this order.
+	out = append(out, seeds...)
+
 	seen := make(map[string]bool, len(out))
 	uniq := out[:0]
 	for _, a := range out {
@@ -1079,6 +1223,55 @@ func bootstrapList(flagPeers, path string) ([]string, error) {
 	}
 	return uniq, nil
 }
+
+// seedsFor returns the addresses a node joins this network from when the
+// operator names none.
+//
+// It mirrors checkpointsFor exactly, including the rule that matters most: a
+// parameter file passed with --params gets NO seeds. That is not caution, it is
+// the only correct answer — an operator running their own network from their
+// own parameter file is on a network this release knows nothing about, and
+// handing them the public testnet's seeds would have their node dial strangers
+// who will refuse it at the handshake (ErrWrongNetwork) and score it down for
+// trying.
+//
+// The same reasoning empties the other two:
+//
+//   - **devnet** is the throwaway local network, respun many times a day. It
+//     has no public participants by construction and a node that reached out to
+//     one would be leaking a developer's existence for nothing.
+//   - **mainnet** has not launched. There is no address to name, and naming one
+//     before it exists is how a release ships a seed that never answers.
+//
+// So exactly one network has a seed today, and adding the next one is adding a
+// line here. The entries are HOST NAMES rather than addresses, which is what
+// makes the list repairable without a release — see bootstrapList.
+func seedsFor(path string, devnet, testnet, none bool) []string {
+	if none || path != "" || devnet {
+		return nil
+	}
+	if testnet {
+		return []string{testnetSeed}
+	}
+	return nil
+}
+
+// testnetSeed is the public testnet's launch seed: the node that exists so that
+// somebody who has just downloaded a binary has somewhere to start.
+//
+// A name and not an address, deliberately, and the p2p port is not the web one:
+// the same host serves the site and the explorer over TLS on 443, and this is
+// the peer-to-peer listener beside them. What a joining node does with this is
+// resolve it once at startup, bounded to maxBootstrapAddrs targets, and put the
+// results in its own peer store; from then on peer exchange carries the network
+// and this address matters again only on a cold start.
+//
+// **One seed is a single point of failure and is not meant to stay one.** It is
+// what a first day looks like, not a design: the network's own peer exchange is
+// what removes the dependency, and a second seed on infrastructure somebody
+// else operates is the thing that removes it properly. docs/TESTNET.md says so
+// where an operator will read it.
+const testnetSeed = "testnet.zycord.com:9421"
 
 // splitPeers parses a bootstrap list separated by commas or by line breaks.
 //

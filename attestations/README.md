@@ -24,7 +24,10 @@ binary". A certificate cannot see that. Six strangers rebuilding the tag can.
 
 Only `zcd` and `zycordd`. They are pure Go, `CGO_ENABLED=0`, built with
 `-trimpath` and `-buildid=`, and two builds of one commit are byte-identical —
-CI checks that on every push (`.github/workflows/ci.yml`, job `reproducible`).
+CI checks that on every push to `main` and every tag (`.github/workflows/ci.yml`,
+job `reproducible`). It is skipped on a pull request, where the same commit is
+pushed repeatedly and the check would be re-run against bytes nothing has yet
+accepted; the merge re-runs it minutes later.
 
 **The desktop wallet is not attested and cannot be.** Do not sign a claim about
 it. Anyone who declines to trust a binary they cannot rebuild uses `zcd`, which
@@ -37,8 +40,8 @@ one, which reaches WebView2 through pure Go and *is* byte-identical across
 rebuilds. Nor is the second reason that was given for a while — that nothing
 rebuilt the wallet and compared, the way the `reproducible` job does for `zcd`.
 Something does: `make repro-desktop` rebuilds the Windows wallet
-from two other paths and compares, on every pull request and every push to
-`main`, and again on the release's Windows leg.
+from two other paths and compares, on every push to `main` and every tag, and
+again on the release's Windows leg.
 
 The rule does not change with either fact, and the reason that holds on every
 platform is the one to keep in mind. What a release publishes for the wallet is

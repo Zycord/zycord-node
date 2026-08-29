@@ -98,7 +98,7 @@ A `--peers-file` that is named and either cannot be read *or* names no address a
 
 `--peers` separates on line breaks as well as commas, because a value routinely arrives carrying one and running two addresses together into a single token produces one entry nothing answers on. **That is damage control, not a second way to pass a file.** Only `--peers-file` strips comments and a byte order mark; expanding a file into `--peers` instead hands those bytes to the address parser, and a `#` line becomes a bootstrap entry the file never named — accepted with no error and no log line, which is the failure this whole section is about. If the addresses live in a file, name the file.
 
-Nothing is compiled into the binary. A bootstrap list baked into a release is a list nobody can change when one of its entries goes bad, and for a pseudonymous project it is a map of whoever compiled it — so the addresses stay data, on every network.
+The binary carries **one seed address, for the public testnet only** — mainnet has not launched, devnet is local, and a network you pass with `--params` is given none. `--no-seeds` drops it; `--peers` and `--peers-file` work with or without it and are dialled first; and the node prints the list it will actually use when it starts, so what it will dial is something you read rather than something you trust. The seed is a name and not an address, so a bad entry is repaired in DNS rather than in a binary somebody already downloaded — which is the half of "a baked-in list is one nobody can change" that can be answered. The half that cannot is that it is the project's own infrastructure: see [RELEASE.md §4](RELEASE.md).
 
 **Advertising the wrong address is worse than advertising none.** A node that tells peers to dial `192.168.1.40` propagates that address through peer exchange, and every node that tries it wastes a dial. If you cannot forward a port, leave `--listen` off and be periphery — that is the honest configuration and it costs the network nothing.
 
@@ -123,6 +123,19 @@ zcd wallet new --out miner.json
 zycordd --devnet --dir ./devnet \
   --mine --payout $(zcd wallet address --key miner.json)
 ```
+
+**Start it whenever you like.** A node started before its network's first block is due does not mine early and does not need to be started again at the hour: it refuses to build a block whose timestamp its own clock has not reached, waits, and begins on its own. It says so while it waits, with the time it is waiting for and how long is left:
+
+```
+waiting to mine: the next block cannot be dated before 2026-08-30T00:00:01Z
+(unix 1788048001), and this node's clock reads 2026-08-29T20:12:31Z — 3h47m30s
+to wait. Leave this running: mining starts on its own and there is nothing to
+restart or reconfigure.
+```
+
+That is a refusal to *mine*, not a refusal to run: the node peers, syncs and serves its RPC throughout. It is repeated every ten minutes so a long wait does not look like a hang, and it is the only thing standing between an honest early start and a private chain nobody else can use — see [TESTNET.md](TESTNET.md) and ARCHITECTURE §12 for what mining ahead of the clock does to the difficulty rule.
+
+**If it never stops saying this, your clock is wrong.** The wait is computed against this machine's clock, so a clock set days behind waits days. Check it before you check anything else.
 
 The payout address is a plain address. The node never sees the key that controls it, and could not spend the reward if it wanted to.
 

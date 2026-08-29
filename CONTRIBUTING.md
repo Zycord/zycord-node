@@ -89,6 +89,19 @@ make ci          # vet, formatting, the import graph, every test, the differenti
 make fuzz        # a minute of decoder fuzzing; the farm runs hours
 ```
 
+**Run these locally, because a pull request no longer runs all of them.** CI
+skips four things on `pull_request` and runs them on every push to `main`, every
+tag and on manual dispatch: the `canonical` container job, both legs of
+`randomx`, `reproducible`, and the `make race` step. They are most of the bill on
+a workflow where the same commit is pushed a dozen times, and none of them
+catches a defect a reviewer would otherwise merge blind. `make ci` covers the
+race detector locally; if you touch `build/Dockerfile`, `core/pow/randomx/` or
+anything that could move a build byte, run the workflow by hand
+(*Actions → ci → Run workflow*) on your branch before asking for review rather
+than finding out at the merge. Everything else — lint, the import graph,
+`make test`, the vectors, the fuzzers, the desktop bridge and the whole Windows
+suite — still runs on every pull request.
+
 **On Windows, `make` is not the entry point and is not expected to be.** GNU make
 is not installed on a stock Windows machine and is absent from the
 `windows-latest` runner image too, and the recipes are POSIX `sh` throughout.

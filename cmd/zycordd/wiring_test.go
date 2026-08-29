@@ -78,7 +78,8 @@ func allDecls(files []*ast.File) []ast.Decl {
 // and its shape is why the obvious test cannot see it. `signal.Notify`
 // delivers each signal ONCE, to whichever receiver is ready. `zycordd` had
 // five goroutines selecting on the signal channel itself — main, the mine
-// loop, the abandon predicate inside it, the prefetch loop and the heartbeat —
+// loop, the abandon predicate inside it, the prefetch loop and the heartbeat
+// (six now: the mine loop's pre-genesis wait sleeps on it too) —
 // so a SIGTERM woke exactly one of them and the other four carried on; whether
 // the node stopped at all depended on who won. A mutation run against the
 // built binary measured that and found survival strongly GOMAXPROCS-dependent

@@ -231,7 +231,22 @@ func newNodeWithPoolAndStorage(t *testing.T, name string, p *params.Params, payo
 	}
 	n.miner = &miner.Miner{
 		Chain: c, Pool: n.pool, Engine: pow.Dev{}, Payout: payout,
-		Now: func() uint64 { n.clock += p.TargetBlockSeconds; return n.clock },
+		// Advance, then never sit behind the chain this node is on. A node
+		// that accepted blocks from a peer has a tip whose timestamps came
+		// from that peer's clock, while its own counter only moves when it
+		// mines — so an idle follower that starts mining is behind its own
+		// tip, and the miner refuses to build there (miner.ErrTooEarly),
+		// correctly and for the same reason a node started before genesis
+		// refuses. A real node's wall clock does not fall behind a tip it
+		// just accepted; the counter has to be told. Two call sites used to
+		// bump `clock` by hand for exactly this; the floor generalises them.
+		Now: func() uint64 {
+			n.clock += p.TargetBlockSeconds
+			if tip := c.Tip().Time; n.clock <= tip {
+				n.clock = tip + p.TargetBlockSeconds
+			}
+			return n.clock
+		},
 	}
 	n.engine = p2p.NewEngine(c, n.pool, peers, pow.Dev{}, name+":1")
 	identity, err := p2p.NewIdentity()

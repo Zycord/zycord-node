@@ -29,8 +29,10 @@ certificate's Team Name field.
 
 Zycord is published pseudonymously, and [RELEASE.md](RELEASE.md) commits the
 project to keeping it that way — a pseudonym (§1), UTC-normalised timestamps
-(§2), an identity audit before every release (§3), a bootstrap list with nothing
-traceable to the author (§4). Buying a certificate would undo all of it at once.
+(§2), an identity audit before every release (§3), and a bootstrap list held to
+the same rule (§4) — today with one declared exception, the public testnet's
+launch seed, which §4 carries openly rather than quietly. Buying a certificate
+would undo all of it at once.
 
 **So the pseudonym is kept.** That is not a hole in the trust story; it selects a
 different one, and for this project a stronger one:
@@ -39,7 +41,7 @@ different one, and for this project a stronger one:
 > A reproducible build asserts *"this came from this source, and anyone can check."*
 
 For an anonymous L1 the second is the argument that carries, and it is not a
-slogan here: CI rebuilds `zcd` twice on every commit and fails if the two
+slogan here: CI rebuilds `zcd` twice on every push to `main` and every tag, and fails if the two
 binaries differ by a byte (`.github/workflows/ci.yml`, job `reproducible`). You
 do not have to trust the person who built the binary you downloaded. You can
 build it yourself and compare hashes — and if they match, the question of who

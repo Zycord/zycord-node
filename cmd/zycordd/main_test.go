@@ -335,12 +335,15 @@ func TestTheOldPrefetchExpressionWouldFail(t *testing.T) {
 // eight runs out of eight exited, each logging "shutting down" exactly once.
 //
 // The number of waiters here is the number of places in main that take the
-// channel, and it matters: with one waiter the old code passes.
+// channel, and it matters: with one waiter the old code passes. It went from
+// five to six when the mine loop gained its pre-genesis wait — a node that
+// refuses to mine until its clock reaches the next block's earliest timestamp
+// sleeps on a select, and a SIGTERM during a four-hour wait has to reach it.
 func TestOneSignalStopsEveryLoop(t *testing.T) {
 	sig := make(chan os.Signal, 1)
 	stop := stopOnSignal(sig)
 
-	const waiters = 5
+	const waiters = 6
 	var wg sync.WaitGroup
 	woke := make(chan int, waiters)
 	for i := 0; i < waiters; i++ {
@@ -400,7 +403,7 @@ func TestBootstrapListMergesRatherThanOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := bootstrapList("mine.example:9421, seed-b.example:9421", path)
+	got, err := bootstrapList("mine.example:9421, seed-b.example:9421", path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,7 +422,7 @@ func TestBootstrapListMergesRatherThanOverrides(t *testing.T) {
 // silently ignored would produce a node with no peers and no explanation,
 // which is indistinguishable from a network with nobody on it.
 func TestBootstrapFileMissingIsRefused(t *testing.T) {
-	if _, err := bootstrapList("", t.TempDir()+"/absent.txt"); err == nil {
+	if _, err := bootstrapList("", t.TempDir()+"/absent.txt", nil); err == nil {
 		t.Fatal("a missing --peers-file was accepted")
 	}
 }
@@ -457,7 +460,7 @@ func TestBootstrapFileWrittenOnWindowsIsDiallable(t *testing.T) {
 			if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			got, err := bootstrapList("", path)
+			got, err := bootstrapList("", path, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -504,7 +507,7 @@ func TestBootstrapDedupSurvivesCRLF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := bootstrapList("127.0.0.1:9421", path)
+	got, err := bootstrapList("127.0.0.1:9421", path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,7 +548,7 @@ func TestBootstrapFileWithNoAddressesIsRefused(t *testing.T) {
 			if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := bootstrapList("127.0.0.1:9421", path); err == nil {
+			if _, err := bootstrapList("127.0.0.1:9421", path, nil); err == nil {
 				t.Error("a --peers-file naming no address was accepted: the node comes up " +
 					"on a bootstrap list its operator did not think they gave it, and a " +
 					"node with no reachable seed looks exactly like a network with nobody " +
@@ -590,7 +593,7 @@ func TestPeersFlagCarryingLineEndingsSplitsIntoDiallableAddresses(t *testing.T) 
 			[]string{"seed-a.example:9421", "127.0.0.1:9421"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := bootstrapList(c.peers, "")
+			got, err := bootstrapList(c.peers, "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

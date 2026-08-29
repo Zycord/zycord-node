@@ -98,17 +98,55 @@ says which engine is inside it. The commands further down this page write
 
 ### Bootstrap
 
-There is **no peer list compiled into the binary**, on this network or any
-other. `node/p2p`'s `Bootstrap` field says why: a baked-in list is one nobody
-can change when an entry goes bad, and for a pseudonymous project it is a map of
-whoever compiled it.
+**This binary ships one seed address for this network, and nothing for any
+other.** You do not have to find a peer before you can start:
 
-**No address is committed to this repository either**, and that is the same
-decision rather than an oversight: a list in the tree ships with the release and
-is read by everyone who builds it, which is a baked-in list wearing a filename.
-The addresses for a given testnet are published out of band with the release
-that opens it — the announcement and the release notes — and `peers.txt` is a
-file you write from those. Nothing here will hand you one.
+```sh
+zycordd --testnet --dir ./testnet          # joins from the built-in seed
+```
+
+That reverses what this page used to say, so the reasoning it reversed is worth
+keeping in front of you rather than deleting. The objection was, and remains,
+that a baked-in list is one nobody can change when an entry goes bad and — for a
+pseudonymous project — a map of whoever compiled it. What changed is the weight
+on the other side: a network you cannot join without first copying an address
+out of an announcement is a network that loses every newcomer at that step, and
+"download it and run it" is the whole of what a public testnet is asking people
+to do.
+
+Two of the three objections are answered; the third is accepted and named.
+
+- **Changeable.** The seed is a *name*, not an address. What is behind it is DNS
+  and moves without a release — a node resolves it at every start and expands it
+  to at most eight dial targets. A dead seed is repaired in a zone file rather
+  than in a binary somebody already downloaded.
+- **Refusable.** `--no-seeds` drops it. `--peers` and `--peers-file` work with or
+  without it, all three sources merge, and yours are dialled first. The node
+  prints the list it will actually use at startup, so the refusal is checkable
+  rather than promised.
+- **Not answered: it is the project's own infrastructure.** A seed the project
+  registered is a registrar record and a static address, and no flag on your
+  machine changes that. `docs/RELEASE.md` §4 carries it as a standing risk with
+  this seed named as the exception it is. It is one node, and one node is a
+  single point of failure as well as of attribution — the network's own peer
+  exchange is what removes the dependency, and a second seed run by somebody
+  else is what removes it properly. If you run a reachable node, say so; that is
+  how this stops being one address.
+
+The seed matters only until this node has peers of its own. It is added to the
+peer store at every start, so it is always a candidate — what changes is that
+after the first successful connection there are better ones, and peer exchange
+keeps supplying them. `peers.json` carries that set across a restart, but it is
+written on a clean shutdown only: a node that was killed comes back to whatever
+the last clean stop left, which is why the seed still matters on more than a
+first run.
+
+**A network of your own gets none of this.** A parameter file passed with
+`--params` is a network this release knows nothing about, so it is given no
+seeds at all — pointing your private chain at the public testnet's seed would
+have it dial strangers who refuse it at the handshake and score it down for
+asking. `--devnet` is empty for the same reason, and mainnet is empty because it
+has not launched.
 
 Bootstrap addresses are therefore data. Either form works and they merge, so you
 can take a published list and add a peer of your own without transcribing it:
@@ -169,6 +207,20 @@ the same distribution mainnet gets:
 zcd wallet new --out miner.json
 zycordd --testnet --dir ./testnet --mine --payout $(zcd wallet address --key miner.json)
 ```
+
+**Start it before the network opens if you like — that is the intended way to
+use it.** A node whose clock has not reached the earliest timestamp the next
+block may carry refuses to build one, says how long the wait is, and starts
+mining by itself when the time comes. There is nothing to schedule and nothing
+to restart, and it peers and syncs the whole time it waits.
+
+That refusal is why it is safe to publish a start time at all. Without it the
+miner dated its header forward to the median floor instead, which before genesis
+is `genesis_time` itself — so an early start produced a private chain nobody
+else could judge, and, because the difficulty rule measures *declared* solve
+times, one whose target hardened every block against intervals that had nothing
+to do with real elapsed time. Nobody had to be dishonest for that; it is what
+leaving it running overnight used to do.
 
 The payout must be a **persistent (`0x02`)** address — `zcd wallet address`
 prints one by default, and `zycordd` refuses anything else rather than warning.
