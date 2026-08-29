@@ -61,6 +61,20 @@ type Node struct {
 	// code: a bootstrap list baked into a binary is a list nobody can change
 	// when one of its entries goes bad, and — for an anonymous project — a map
 	// of whoever compiled it.
+	//
+	// **This package still holds none, and that is the part of the rule that
+	// did not move.** What changed is one layer up: cmd/zycordd now supplies a
+	// default for the public testnet when the operator names nothing, so the
+	// sentence above is a statement about THIS package rather than about every
+	// binary built from the tree. The distinction is worth keeping sharp — a
+	// library that carried addresses would impose them on every embedder,
+	// including networks it has never heard of, whereas a client's default is
+	// one the client's own flags can refuse.
+	//
+	// Entries may be `host:port` or `ip:port`; names are resolved once at Start
+	// and expanded to at most maxBootstrapAddrs targets each. A name is what
+	// makes an entry repairable without a release, so a caller supplying
+	// defaults should prefer one.
 	Bootstrap []string
 	// DialInterval is how often the dialler tops up connections.
 	DialInterval time.Duration

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"zycord/core/fold"
+	"zycord/core/params"
 	"zycord/core/pow"
 	"zycord/core/state"
 	"zycord/core/types"
@@ -53,6 +54,57 @@ var ErrTargetDoesNotVerify = errors.New(
 	"miner: the header's declared target does not equal the target the difficulty " +
 		"rule re-derives from the same window; the block builder and the difficulty " +
 		"rule disagree, and every block this node produces will be rejected by every peer")
+
+// ErrTooEarly reports that this node's clock has not reached the earliest
+// timestamp the next block on this chain may carry.
+//
+// Like ErrStaleTemplate it is separated from real errors because it is not one.
+// A node started before its network's genesis is in exactly this state, on
+// purpose and for hours, and a caller that logged it as a failure would be
+// reporting a correctly waiting miner as a fault. The answer is to wait; see
+// Miner.blockTime for what waiting prevents.
+var ErrTooEarly = errors.New(
+	"miner: this node's clock has not reached the earliest timestamp the next " +
+		"block may carry, so there is no block to build yet")
+
+// TooEarlyError carries the two readings the refusal came from, so a caller can
+// report how long the wait is rather than only that there is one.
+//
+// The gap is the whole of what an operator needs — it is what stands between a
+// node that looks idle and a node that has been told when it will start — and
+// computing it for an error string and then discarding it is the mistake
+// sync.WithheldError records having made on the other path.
+type TooEarlyError struct {
+	// NotBefore is the earliest timestamp a block may declare here: one second
+	// past the median of the last MedianTimeBlocks headers. Before a network's
+	// genesis that median is genesis_time itself.
+	NotBefore uint64
+	// Now is this node's clock at the moment of the refusal.
+	Now uint64
+}
+
+// Remaining is how many seconds are left before mining can begin.
+//
+// Saturating rather than signed: the caller reaches this only when the refusal
+// fired, which is `Now <= NotBefore-1`, so the subtraction cannot go negative —
+// and a future caller who reaches it anyway gets zero rather than a duration
+// underflowed to five hundred billion years.
+func (e *TooEarlyError) Remaining() uint64 {
+	if e.Now >= e.NotBefore {
+		return 0
+	}
+	return e.NotBefore - e.Now
+}
+
+func (e *TooEarlyError) Error() string {
+	return fmt.Sprintf("%s: the next block must be dated %d at the earliest, "+
+		"this node's clock reads %d (%ds to wait)",
+		ErrTooEarly.Error(), e.NotBefore, e.Now, e.Remaining())
+}
+
+// Unwrap keeps errors.Is(err, ErrTooEarly) true for callers that only need to
+// know which case they are in.
+func (e *TooEarlyError) Unwrap() error { return ErrTooEarly }
 
 // Miner assembles and seals blocks on top of a chain.
 //
@@ -120,6 +172,34 @@ func (m *Miner) Assemble() (*types.Block, error) {
 	view := m.Chain.Snapshot()
 	tip, s := view.Tip, view.State
 
+	// Is there an honest block to build at all? See blockTime — and note that
+	// this asks the question about THIS parent, not about whatever the tip
+	// happens to be by the time it is asked.
+	//
+	// **The order here is load-bearing and it is not the obvious one.** Asking
+	// before the snapshot reads a median window ending at the tip *then*, and
+	// the snapshot may hand back a later tip — so the header would be built on
+	// a parent whose own window was never the one the timestamp was checked
+	// against, and that window's floor can be higher. Nothing downstream would
+	// catch it: Apply compares height and ParentID and never a time, the fold
+	// reads Header.Time nowhere, and MineOneWhile's two self-checks cover the
+	// proof of work and the declared target only. The node would commit a
+	// block violating the median-past rule onto its own chain and announce it,
+	// and every peer would refuse it at pow.CheckMedianTime and score the
+	// sender down — a self-fork produced by the miner's own construction,
+	// which is precisely the failure ErrSealDoesNotVerify and
+	// ErrTargetDoesNotVerify exist to make impossible for the other two
+	// header fields.
+	//
+	// Taken after the snapshot, and anchored at the snapshot's own tip, the
+	// floor and the parent are the same chain by construction. A reorg that
+	// replaces that height under us is then the ordinary stale template: the
+	// ParentID no longer matches and Apply says so.
+	now, err := m.blockTime(p, tip)
+	if err != nil {
+		return nil, err
+	}
+
 	seqBase := s.Get(types.SeqBaseFeeSlot())
 	parBase := s.Get(types.ParBaseFeeSlot())
 	// Genesis (height 0) is never assembled here — zcd genesis builds it —
@@ -135,7 +215,7 @@ func (m *Miner) Assemble() (*types.Block, error) {
 			Version:      types.HeaderVersion,
 			Height:       tip.Height + 1,
 			ParentID:     tip.ID(),
-			Time:         m.headerTime(tip),
+			Time:         now,
 			EmissionAddr: m.Payout,
 			Target:       pow.NextTarget(m.Chain.RecentHeaders(int(p.DifficultyWindow)+1), p),
 			// The seed epoch is not a choice: the fold pins it to the one
@@ -441,16 +521,54 @@ const maxDropPasses = 4
 // certificates a rule named rather than all of them.
 const maxRuleDrops = 4
 
-// headerTime returns a timestamp that satisfies the median-past rule without
-// consulting anything else. The future side is not a validity rule (R1-H2), so
-// there is nothing to clamp on that end.
-func (m *Miner) headerTime(tip types.Header) uint64 {
+// blockTime returns the timestamp the next block will declare, or a
+// *TooEarlyError if this node's clock has not reached it.
+//
+// The rule it enforces is one sentence: **a miner never declares a time it has
+// not reached.** The median-past rule (R1-H2) fixes the earliest timestamp the
+// next block on this chain may carry; until the local clock passes that floor,
+// there is no honest block to build and this waits rather than inventing one.
+//
+// It used to clamp instead — `if now <= floor { return floor + 1 }` — and the
+// clamp is what made a node started before its network's genesis mine a
+// private, future-dated chain. Every consequence of that followed from this one
+// expression:
+//
+//   - Before `genesis_time` the floor IS `genesis_time` (block 0 is the whole
+//     median window), so the clamp dated block 1 at `genesis_time + 1` however
+//     early the miner was started. The chain then advanced one declared second
+//     per six blocks, which is all the median-past rule requires.
+//   - Peers judged none of it. A block past the future-time limit is withheld
+//     rather than rejected (R1-H2), and past `HorizonSeconds` it is dropped —
+//     so an early miner is alone without being told so.
+//   - `pow.NextTarget` reads *declared* solve times. Pinned near zero against a
+//     30 s goal, they drive the target down by the per-block clamp every block,
+//     with no feedback from real time, until the miner has priced itself out.
+//     The chain it then hands the network at genesis carries a difficulty no
+//     real hashrate supports.
+//
+// None of that needed an attacker. It is what an honest operator got for
+// starting early and leaving it running, which is exactly what an operator is
+// invited to do — so the refusal belongs here, in the one place that reads a
+// clock (I2-L5), rather than in whichever caller happens to remember it.
+//
+// The clamp is gone rather than kept alongside: with the refusal in front of
+// it, `now > floor` on every path that reaches the return, and `now` is the
+// only value it could produce. There is still deliberately nothing bounding the
+// future side here, because that side is not a validity rule.
+// The window ends at `tip`, the parent this block will actually declare, and
+// NOT at whatever the chain's tip is when this runs. That is the same anchoring
+// checkDeclaredTarget uses and for the same reason: the rule a peer will judge
+// this header by reads the window ending at its parent, so any other window is
+// a different question with a different answer. `RecentHeaders` is the
+// tip-anchored form and is the wrong one here.
+func (m *Miner) blockTime(p *params.Params, tip types.Header) (uint64, error) {
 	now := m.Now()
-	p := m.Chain.Params()
-	if floor := pow.MedianTime(m.Chain.RecentHeaders(p.MedianTimeBlocks), p); now <= floor {
-		return floor + 1
+	window := m.Chain.HeadersEndingAt(tip.Height, p.MedianTimeBlocks)
+	if floor := pow.MedianTime(window, p); now <= floor {
+		return 0, &TooEarlyError{NotBefore: floor + 1, Now: now}
 	}
-	return now
+	return now, nil
 }
 
 // Seal solves proof of work for a candidate, up to a budget of attempts.

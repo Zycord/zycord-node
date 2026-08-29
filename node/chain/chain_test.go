@@ -53,7 +53,19 @@ func openNodeWith(t *testing.T, dir string, p *params.Params, payout types.Addre
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := &node{dir: dir, p: p, chain: c, pool: mempool.New(p, mempool.DefaultPolicy()), clock: p.GenesisTime}
+	// The clock starts at the tip's own timestamp, not always at genesis.
+	//
+	// Reopening a chain that already has blocks and resetting the clock to
+	// genesis models a machine whose clock jumped backwards by the age of the
+	// chain, and the miner now refuses to build in exactly that state
+	// (miner.ErrTooEarly) — correctly, and for the same reason a node started
+	// before its network's genesis refuses. Seeding from the tip is what a real
+	// node has for free: wall time is ahead of the tip it just loaded.
+	clock := p.GenesisTime
+	if tip := c.Tip().Time; tip > clock {
+		clock = tip
+	}
+	n := &node{dir: dir, p: p, chain: c, pool: mempool.New(p, mempool.DefaultPolicy()), clock: clock}
 	n.miner = &miner.Miner{
 		Chain:  c,
 		Pool:   n.pool,
@@ -61,6 +73,16 @@ func openNodeWith(t *testing.T, dir string, p *params.Params, payout types.Addre
 		Payout: payout,
 		Now: func() uint64 {
 			n.clock += p.TargetBlockSeconds
+			// Never behind the chain this node is on. A branch built elsewhere
+			// and adopted by fork choice can carry timestamps ahead of this
+			// counter, and the miner then refuses to build (miner.ErrTooEarly)
+			// because its clock has not reached the median floor — correctly,
+			// and for the same reason a node started before genesis refuses.
+			// A real node has this for free: wall time does not fall behind a
+			// tip it just accepted. The counter has to be told.
+			if tip := c.Tip().Time; n.clock <= tip {
+				n.clock = tip + p.TargetBlockSeconds
+			}
 			return n.clock
 		},
 	}

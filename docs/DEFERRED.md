@@ -64,6 +64,19 @@ that misreport, measure nothing, or are held by no test. Worth fixing before a
 public testnet is stood up as a measuring instrument; none of them blocks a
 launch, because none changes shipped behaviour.
 
+- **The public testnet has exactly one bootstrap seed, and it is ours.**
+  `cmd/zycordd` ships `testnet.zycord.com:9421` so that a newcomer can start a
+  downloaded binary without first copying an address out of an announcement.
+  [RELEASE.md](RELEASE.md) §4 requires bootstrap nodes to be community-operable
+  and to be nothing traceable to the author, and one project-run seed satisfies
+  neither. *Deferred:* the alternative is a testnet nobody can join on the first
+  day, which loses the honest newcomers the rule exists to protect; the entry is
+  a DNS name so it moves without a release, `--no-seeds` refuses it, and the
+  node prints the list it will dial. *Reopens:* when a second seed on
+  infrastructure somebody else operates is published — that is what retires the
+  §4 exception and the single point of failure in the same step. Until then the
+  network's reachability is one host's uptime.
+
 - **Differential runner drives parameter-shaped rules only at shipped values.**
   Every consensus rule written twice that compares a field against a parameter is
   exercised only at the value the shipped networks carry. *Deferred:* about the
