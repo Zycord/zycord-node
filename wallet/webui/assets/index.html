@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zycord wallet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233f6f4f'/%3E%3Ccircle cx='11' cy='12' r='2' fill='%23fff'/%3E%3Ccircle cx='21' cy='12' r='2' fill='%23fff'/%3E%3Cpath d='M5 22c3-3 5-3 8 0s5 3 8 0 4-2 6-1' stroke='%23fff' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<div id="gate" class="gate">
+  <div class="gate-card">
+    <h1 class="logo">Zycord</h1>
+    <p class="muted" id="gate-keypath"></p>
+
+    <form id="gate-token" class="hidden" autocomplete="off">
+      <label for="token">Session token</label>
+      <p class="muted small">This page was opened without the token from the printed URL. Paste it, or reopen the full URL.</p>
+      <input type="password" id="token" autocomplete="off" spellcheck="false">
+      <button type="submit" id="token-submit" class="primary">Continue</button>
+    </form>
+
+    <form id="gate-setup" class="hidden">
+      <p class="muted small">Choose the encrypted key file this wallet opens, and the node it asks.</p>
+      <label for="setup-key">Key file</label>
+      <div class="amount-row">
+        <input type="text" id="setup-key" spellcheck="false" placeholder="/path/to/wallet.json">
+        <button type="button" id="setup-browse" class="ghost hidden">Browse…</button>
+      </div>
+      <label for="setup-rpc">Node</label>
+      <input type="text" id="setup-rpc" spellcheck="false" value="http://127.0.0.1:9420">
+      <label for="setup-network">Network</label>
+      <select id="setup-network">
+        <option value="zycord">Mainnet</option>
+        <option value="zycord-devnet">Devnet</option>
+      </select>
+      <label for="setup-confirm">Second node <span class="muted">(optional, cross-checks balances)</span></label>
+      <input type="text" id="setup-confirm" spellcheck="false" placeholder="a second, independent node">
+      <button type="submit" class="primary">Save</button>
+      <p class="muted small">
+        The network is your assertion, not the node's. A node reporting a different chain id is
+        refused rather than believed.
+      </p>
+    </form>
+
+    <form id="gate-unlock" class="hidden">
+      <label for="passphrase">Passphrase</label>
+      <input type="password" id="passphrase" autocomplete="current-password">
+      <button type="submit" id="unlock" class="primary">Unlock</button>
+      <p class="muted small">The key is decrypted into this process's memory and never written anywhere. Locking overwrites it.</p>
+    </form>
+
+    <p id="gate-error" class="error hidden"></p>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <div class="brand">
+      <span class="logo">Zycord</span>
+      <span class="badge" id="network-badge">—</span>
+    </div>
+    <div class="header-right">
+      <span class="muted small" id="height">height —</span>
+      <button id="lock" class="ghost">Lock</button>
+    </div>
+  </header>
+
+  <nav>
+    <button class="tab active" data-panel="panel-balance">Balance</button>
+    <button class="tab" data-panel="panel-send">Send</button>
+    <button class="tab" data-panel="panel-receive">Receive</button>
+    <button class="tab" data-panel="panel-node">Node</button>
+    <button class="tab hidden" id="tab-settings" data-panel="panel-settings">Settings</button>
+  </nav>
+
+  <main>
+    <section id="panel-balance" class="panel">
+      <div class="row-between">
+        <h2>Balance</h2>
+        <button id="refresh-balance" class="ghost">Refresh</button>
+      </div>
+      <div id="balances"></div>
+      <p class="muted small">
+        There is no transaction list, here or anywhere. A Zycord node keeps no history —
+        it holds the current state and nothing else — so an interface that showed one would be
+        promising something the network does not have.
+      </p>
+    </section>
+
+    <section id="panel-send" class="panel hidden">
+      <h2>Send</h2>
+      <form id="send-form" autocomplete="off">
+        <label for="send-to">To</label>
+        <input type="text" id="send-to" spellcheck="false" placeholder="0x…">
+
+        <label for="send-amount">Amount</label>
+        <div class="amount-row">
+          <input type="text" id="send-amount" spellcheck="false" placeholder="0.00000000">
+          <select id="send-unit">
+            <option value="zcd">ZCD</option>
+            <option value="drops">drops</option>
+          </select>
+        </div>
+
+        <label for="send-source">From</label>
+        <select id="send-source">
+          <option value="persistent">Persistent address</option>
+          <option value="one-shot">One-shot address</option>
+        </select>
+
+        <label class="checkbox"><input type="checkbox" id="send-sweep"> Sweep — send the whole balance</label>
+        <p class="muted small" id="sweep-note">
+          A one-shot address is burned by any debit, so it must be emptied in one certificate:
+          anything left under it is unreachable forever (docs/WALLET.md rule 1).
+        </p>
+
+        <details>
+          <summary>Fee and window</summary>
+          <label for="send-refund">Refund address <span class="muted">(defaults to your persistent address)</span></label>
+          <input type="text" id="send-refund" spellcheck="false" placeholder="0x…">
+          <div class="grid-3">
+            <div>
+              <label for="send-headroom">Headroom</label>
+              <input type="number" id="send-headroom" min="1" value="8">
+            </div>
+            <div>
+              <label for="send-ttl">TTL (blocks)</label>
+              <input type="number" id="send-ttl" min="1" value="30">
+            </div>
+            <div>
+              <label for="send-seqtip">Sequential tip</label>
+              <input type="number" id="send-seqtip" min="0" value="100">
+            </div>
+          </div>
+          <label for="send-partip">Parallel tip</label>
+          <input type="number" id="send-partip" min="0" value="5">
+          <p class="muted small">
+            The maximum is a solvency bound and the tip is what a producer is paid. Raising the
+            headroom costs nothing unless the market moves into it; it is only reserved from the
+            balance and refunded in the same block.
+          </p>
+        </details>
+
+        <button type="submit" class="primary" id="send-preview">Review</button>
+      </form>
+      <p id="send-error" class="error hidden"></p>
+      <div id="send-review" class="review hidden"></div>
+      <p id="send-ok" class="ok hidden"></p>
+    </section>
+
+    <section id="panel-receive" class="panel hidden">
+      <h2>Receive</h2>
+      <div id="receive"></div>
+      <p class="muted small">
+        Use the persistent address for anything paid more than once — it can never be burned,
+        so it has no grief surface. Use a one-shot address for a single expected payment;
+        it is burned the first time it is debited, which is what keeps that payment unlinkable
+        to the next one.
+      </p>
+    </section>
+
+    <section id="panel-node" class="panel hidden">
+      <div class="row-between">
+        <h2>Node</h2>
+        <button id="refresh-node" class="ghost">Refresh</button>
+      </div>
+      <div id="node"></div>
+    </section>
+    <section id="panel-settings" class="panel hidden">
+      <h2>Settings</h2>
+      <form id="settings-form" autocomplete="off">
+        <label for="settings-key">Key file</label>
+        <div class="amount-row">
+          <input type="text" id="settings-key" spellcheck="false">
+          <button type="button" id="settings-browse" class="ghost hidden">Browse…</button>
+        </div>
+        <label for="settings-rpc">Node</label>
+        <input type="text" id="settings-rpc" spellcheck="false">
+        <label for="settings-network">Network</label>
+        <select id="settings-network">
+          <option value="zycord">Mainnet</option>
+          <option value="zycord-devnet">Devnet</option>
+        </select>
+        <label for="settings-confirm">Second node <span class="muted">(optional)</span></label>
+        <input type="text" id="settings-confirm" spellcheck="false">
+        <button type="submit" class="primary">Save and lock</button>
+        <p class="muted small">
+          Saving locks the wallet. A key unlocked against one network must not survive into
+          another: addresses are derived from the key rather than from a chain, so they exist
+          everywhere and read zero on a chain that has never seen them — which looks like an
+          empty wallet rather than like a mistake.
+        </p>
+      </form>
+      <p id="settings-error" class="error hidden"></p>
+    </section>
+  </main>
+
+  <footer>
+    <span class="muted small" id="footer-rpc"></span>
+    <span class="muted small" id="footer-mode"></span>
+  </footer>
+</div>
+
+<script src="transport.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

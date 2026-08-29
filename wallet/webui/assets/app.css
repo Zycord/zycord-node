@@ -1,0 +1,285 @@
+/* One stylesheet, no framework, no build step.
+   Light and dark are both first-class: the wallet is a tool people open at
+   any hour, and a window that ignores the system setting is a window that
+   glares. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f7f6f3;
+  --surface: #ffffff;
+  --surface-2: #f0eee9;
+  --line: #dcd7cd;
+  --text: #1c1a17;
+  --muted: #6b655c;
+  --accent: #3f6f4f;
+  --accent-text: #ffffff;
+  --warn-bg: #fdf3e3;
+  --warn-line: #d9a441;
+  --warn-text: #6b4a0d;
+  --error: #a33a2a;
+  --ok: #2f6b45;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181a;
+    --surface: #1e2124;
+    --surface-2: #24282c;
+    --line: #333a40;
+    --text: #e6e3dd;
+    --muted: #9aa0a6;
+    --accent: #6fae83;
+    --accent-text: #10231a;
+    --warn-bg: #33280f;
+    --warn-line: #b8862c;
+    --warn-text: #f0d9a8;
+    --error: #e0796a;
+    --ok: #7fc79a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.error { color: var(--error); white-space: pre-wrap; }
+.ok { color: var(--ok); }
+code, .mono { font-family: var(--mono); }
+
+/* ---- the gate: token, then passphrase ---- */
+
+.gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.gate-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 28px;
+}
+
+.logo {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+h1.logo { margin: 0 0 4px; font-size: 26px; }
+
+/* ---- chrome ---- */
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand .logo { font-size: 18px; }
+.header-right { display: flex; align-items: center; gap: 14px; }
+
+.badge {
+  font-size: 12px;
+  font-family: var(--mono);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.badge.devnet { border-color: var(--warn-line); color: var(--warn-text); background: var(--warn-bg); }
+
+nav {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  background: none;
+  border: none;
+  /* Flush with the nav's own rule: the active tab's underline replaces that
+     1px rather than hanging below it, which is what a rounded corner and a
+     stray pixel of margin were doing. */
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--muted);
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+main { max-width: 760px; margin: 0 auto; padding: 24px 20px 60px; }
+h2 { font-size: 17px; margin: 0 0 14px; font-weight: 600; }
+
+footer {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 20px 28px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.row-between { display: flex; align-items: center; justify-content: space-between; }
+
+/* ---- cards ---- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.kind { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.amount { font-family: var(--mono); font-size: 24px; font-weight: 600; }
+.amount-sub { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+.addr {
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
+  color: var(--muted);
+  margin-top: 10px;
+}
+
+.spent {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  color: var(--warn-text);
+}
+
+/* ---- forms ---- */
+
+label { display: block; margin: 14px 0 5px; font-size: 13px; font-weight: 500; }
+label.checkbox { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+label.checkbox input { width: auto; margin: 0; }
+
+input, select {
+  width: 100%;
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+input[type="text"], input#token, input#passphrase { font-family: var(--mono); font-size: 13px; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.amount-row { display: flex; gap: 8px; }
+.amount-row input { flex: 1; }
+.amount-row select { width: 110px; }
+
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+@media (max-width: 520px) { .grid-3 { grid-template-columns: 1fr; } }
+
+details { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 10px; }
+summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+
+button {
+  font: inherit;
+  font-size: 14px;
+  border-radius: 7px;
+  padding: 9px 16px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+}
+button:hover { border-color: var(--muted); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+button.primary {
+  width: 100%;
+  margin-top: 18px;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 550;
+}
+button.ghost { padding: 5px 12px; font-size: 13px; }
+button.danger { background: var(--error); border-color: var(--error); color: #fff; }
+
+.copy { margin-top: 8px; }
+
+/* The scratch element the clipboard fallback selects from. Off-screen rather
+   than display:none, because a hidden element cannot be selected. */
+.offscreen {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  opacity: 0;
+}
+
+/* ---- the review panel: the trusted display ---- */
+
+.review {
+  margin-top: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px;
+}
+.review.irreversible { border-color: var(--warn-line); }
+
+.review h3 { margin: 0 0 12px; font-size: 15px; }
+
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-family: var(--mono); word-break: break-all; }
+
+.notice {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-line);
+  color: var(--warn-text);
+  font-size: 13px;
+}
+
+.review-actions { display: flex; gap: 10px; margin-top: 16px; }
+.review-actions button { flex: 1; margin-top: 0; }

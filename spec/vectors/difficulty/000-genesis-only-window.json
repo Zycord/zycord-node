@@ -1,0 +1,11 @@
+{
+  "name": "genesis-only-window",
+  "description": "Fewer than two headers — the real shape of the window at height 1, where chain.RecentHeaders has only genesis to return. NextTarget's len(recent)\u003c2 branch must answer GENESIS_TARGET outright, ignoring whatever the lone header itself declares — which is why it declares MAX_TARGET here rather than the GENESIS_TARGET a real genesis header would carry: an implementation that skipped the early return and fell through to the general formula would answer with the header's own claimed target instead, and this is the vector that catches it.",
+  "params": "mainnet",
+  "headers": [
+    "0x010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000211f699063009a433f587174525951ebbd85a7968d3615061b4355dc3c14444000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000"
+  ],
+  "expect": {
+    "next_target": "441711766194596082395824375185729628956870974218904739530401550323154944"
+  }
+}

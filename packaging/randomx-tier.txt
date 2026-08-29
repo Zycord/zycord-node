@@ -1,0 +1,51 @@
+THIS ARCHIVE IS FROM THE UNATTESTED TIER. READ THIS BEFORE YOU VERIFY IT.
+=========================================================================
+
+What you have
+-------------
+
+`zcd` and `zycordd` built with the RandomX proof-of-work engine. These are the
+binaries that can join mainnet and the public testnet. Both networks declare
+`pow_engine: randomx-v1`, and a node that cannot verify that engine refuses to
+start on them rather than falling back to something weaker.
+
+    zcd version        prints the engine this binary carries
+    zcd params         prints the engine the network requires
+
+They must name the same thing. If they do, this binary can join.
+
+What this archive is NOT
+------------------------
+
+It is not reproducible, and it has no line in `SHA256SUMS.binaries`.
+
+RandomX is C++. Building it means cgo, and cgo means a system C toolchain ends
+up in the output: `-trimpath` and a pinned Go toolchain stop being sufficient
+the moment there is one. Two people building this tag on two machines will not
+get identical bytes, so there is nothing here for a stranger to compare a
+rebuild against, and publishing a per-binary checksum for it would read as an
+attestation this project does not make.
+
+`SHA256SUMS.randomx`, published beside these archives, is a transfer check: it
+tells you the file arrived intact. It is not evidence about what is in it.
+
+The other tier, and why it exists
+---------------------------------
+
+The archives WITHOUT `-randomx` in the name are pure Go, `CGO_ENABLED=0`, and
+byte-identical across machines. Clone the repository at this tag, run
+`make build`, and compare your `bin/zcd` against `SHA256SUMS.binaries`. If they
+match, that binary contains this source and nothing else — which is the claim
+this project offers in place of a code-signing certificate.
+
+Those binaries hold no RandomX engine, so they run `--devnet` and refuse
+mainnet and the public testnet.
+
+The two tiers are disjoint sets. That is stated plainly rather than left to be
+discovered: the reproducible one is not the one you can mine with, and the one
+you can mine with is not the one anybody can attest. Read the source, read the
+attestations for the pure-Go tier, and decide with both facts in front of you.
+`docs/INSTALL.md` in this archive carries the longer version.
+
+There is no coin yet. Genesis has not happened. Anyone selling you ZCD today is
+scamming you.

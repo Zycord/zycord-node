@@ -1,0 +1,52 @@
+# Line endings are the repository's business, not the checkout's.
+#
+# This file exists because of the `windows` CI job, and because of what would
+# have happened to it. `gofmt -l` reports a CRLF file as needing formatting --
+# measured, on a file whose only difference from a clean one is its line
+# endings -- while `go build` compiles it happily. So a checkout that converts
+# to CRLF fails the formatting step of every job that runs one, on every file,
+# for a reason that is not in any file.
+#
+# Whether that happens is not decided here today: `actions/checkout` does not
+# set core.autocrlf, and the windows-latest image does not either (its
+# Install-Git.ps1 sets only safe.directory), so the value comes from whatever
+# default the Git for Windows build on the image happens to carry. That is a
+# property of a runner image, it can change without anything in this tree
+# changing, and a green CI run is not evidence about it either way -- the same
+# shape of invisible platform dependency this branch is about.
+#
+# `text=auto eol=lf` settles it from inside the repository: git still decides
+# what is text and what is binary, and every text file lands in the working
+# tree with LF whenever git next writes that file, on every platform and every
+# git configuration. Nothing changes on Linux or macOS, where the tree is
+# already LF throughout (`git ls-files --eol` reports i/lf for every file and no
+# binary files at all).
+#
+# "Whenever git next writes that file" is the whole of the caveat, and it is not
+# small. An existing clone made with core.autocrlf=true does not heal on pull:
+# only the files whose blobs changed get re-written, so the rest stay CRLF in the
+# working tree while `git status` reports clean -- the clean filter normalises
+# them on the way in, so nothing signals it -- and `gofmt -l .` still names them.
+# Measured: 182 files still CRLF after fetching this commit into such a clone.
+# CONTRIBUTING.md carries the one-line fix for that case.
+#
+# And it is not only about CI, which is where this started. `wallet/webui`
+# embeds the wallet frontend with `//go:embed assets`, so the line endings of
+# those files are *bytes in the binary*. Two checkouts of one commit, differing
+# in nothing but line endings, build two different `zcd`:
+#
+#     CRLF checkout  1c9ba71530bee09ed050affec82512a179a5cab1bdf7806b59dc7a43bfeff77e  7862272 bytes
+#     LF checkout    9770768530e6818b2c1a733739f4708985df0690ad61672492a855a5a4f0829c  7860736 bytes
+#
+# 1536 bytes apart, one carriage return per embedded line. docs/INSTALL.md tells
+# every user to rebuild and compare hashes, and calls that check "the entire
+# substitute for a signature this project has" -- so a Windows rebuilder using
+# the installer default got a mismatch and every reason to conclude the release
+# had been tampered with. That is the reproducibility claim failing on one
+# platform, silently, for a reason no file in the tree mentioned.
+#
+# It is not only about CI. A Windows contributor who checks this repository out
+# with the Git for Windows default gets a tree that fails `gofmt -l .` before
+# they have written a line, which is a poor first five minutes and says nothing
+# true about their checkout.
+* text=auto eol=lf

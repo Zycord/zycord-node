@@ -1,0 +1,74 @@
+{
+    "version": "0.0.0",
+    "description": "Zycord — a proof-of-work-launched L1 built from self-certifying state transitions. Node, CLI and wallet.",
+    "homepage": "https://github.com/PUBLISHER/zycord",
+    "license": "MIT",
+    "notes": [
+        "There is no coin yet. Genesis has not happened. Anyone selling you ZCD today is scamming you.",
+        "",
+        "THIS PACKAGE IS DEVNET-ONLY, AND ON WINDOWS THERE IS NO OTHER ONE.",
+        "",
+        "These binaries are pure Go, CGO_ENABLED=0, and byte-identical to anyone else's build of",
+        "this tag -- which is also why they carry no RandomX engine. Mainnet and the public testnet",
+        "both declare pow_engine randomx-v1, and a node that cannot verify a network's engine",
+        "refuses to start on it rather than falling back to something weaker. So `zycordd --devnet`",
+        "works and `zycordd` on mainnet or `--testnet` refuses, by design, at start-up.",
+        "",
+        "`zcd version` prints the engine this binary carries; `zcd params` prints the one the",
+        "network requires. They must name the same thing.",
+        "",
+        "Linux and macOS get a second archive with -randomx in its name that does join those",
+        "networks. Windows does not, and it is the release pipeline rather than the code: a local",
+        "`make build-randomx` with a MinGW-w64 toolchain works, but the release cannot build it --",
+        "cgo does not cross-compile from the Linux runner without a mingw toolchain in the image,",
+        "and the windows-latest runner has neither GNU make nor zip on PATH. To mine on Windows",
+        "today, build it yourself with `make build-randomx`.",
+        "The two tiers are disjoint sets either way -- the archive you can reproduce is not the one",
+        "you can mine with. See docs/INSTALL.md, 'Two tiers of assurance'.",
+        "",
+        "This package is not code-signed, and that is a decision rather than an omission: an",
+        "Authenticode certificate is a CA attesting to a verified legal identity, and this project",
+        "is published pseudonymously. What it offers instead is a build you can reproduce —",
+        "clone the repository at this tag, run `make build`, and compare the SHA-256 of bin\\zcd",
+        "against SHA256SUMS.binaries in the release. See docs/INSTALL.md.",
+        "",
+        "You will not see a SmartScreen warning, and the reason is worth knowing: Scoop does not",
+        "strip the mark of the web, it never attaches one. Mark-of-the-web is applied by browsers",
+        "and by the shell's attachment-execution API, not by the raw HTTP client Scoop downloads",
+        "through."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/PUBLISHER/zycord/releases/download/v0.0.0/zycord-0.0.0-windows-amd64.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "extract_dir": "zycord-0.0.0-windows-amd64"
+        },
+        "arm64": {
+            "url": "https://github.com/PUBLISHER/zycord/releases/download/v0.0.0/zycord-0.0.0-windows-arm64.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "extract_dir": "zycord-0.0.0-windows-arm64"
+        }
+    },
+    "bin": [
+        "zcd.exe",
+        "zycordd.exe"
+    ],
+    "checkver": {
+        "github": "https://github.com/PUBLISHER/zycord"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/PUBLISHER/zycord/releases/download/v$version/zycord-$version-windows-amd64.zip",
+                "extract_dir": "zycord-$version-windows-amd64"
+            },
+            "arm64": {
+                "url": "https://github.com/PUBLISHER/zycord/releases/download/v$version/zycord-$version-windows-arm64.zip",
+                "extract_dir": "zycord-$version-windows-arm64"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS"
+        }
+    }
+}

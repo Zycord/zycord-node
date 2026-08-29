@@ -1,0 +1,89 @@
+# Build output
+/bin/
+/dist/
+
+# The same binaries when they are NOT built through the Makefile. `make build`
+# writes into /bin/ above, but a bare `go build ./cmd/zycordd` -- what anybody
+# checking one thing quickly actually types -- defaults to the package name in
+# the current directory, so it lands here at the root where nothing matched it.
+# The desktop section below records that this is not hypothetical: a 16 MB PE
+# built that way was committed once already and had to be removed from history
+# rather than deleted at the tip. It happened again while this line was being
+# written, which is why the pattern is by name rather than a blanket rule --
+# a blanket *.exe would also hide packaging/ artefacts somebody may mean to add.
+# The list was one name short of complete, and the missing name is `spec/gen`
+# -- a `main` package like the other two, so `go build ./spec/gen` lands a
+# binary at `/gen`. One was tracked in this repository for a long stretch and
+# no text grep ever saw it: a compiled binary embeds the absolute path of every
+# source file it was built from, and `git grep -I` skips binaries in silence.
+# That is what `sim/wiring.TestNothingPublishedIsOpaqueToTheTextScan` now
+# refuses.
+/zcd
+/zcd.exe
+/zycordd
+/zycordd.exe
+/gen
+/gen.exe
+
+# The identity terms for the pre-release anonymity audit: the real name, the
+# account handle, the codename of the author's other project. They cannot live
+# in a tracked file, because a tracked pattern for a handle publishes the
+# handle -- which is the leak it exists to catch.
+#
+# `sim/wiring` no longer reads this file: the loader and the run-time identity
+# class were removed, and RELEASE.md §3 step 2 now points at a terms file kept
+# OUTSIDE the repository entirely (`$ZYCORD_IDENTITY_TERMS`). The entry stays
+# because the name is the obvious one to reach for, and a terms file created
+# here by habit must not become a commit.
+/.anonymity-patterns
+
+# Go
+*.test
+*.out
+/coverage.*
+
+# Fuzzing corpora written by `go test -fuzz` (the committed corpus lives in
+# testdata/, which is deliberately NOT ignored).
+/**/testdata/fuzz/**/[0-9a-f]*
+
+# Editor / OS noise. Never commit these: they leak local paths and usernames,
+# and this project is anonymous by design.
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+
+# Desktop wallet build output. Nothing in it is source; /dist/ above already
+# covers what `make dist` writes.
+#
+# The .exe line is not redundant: on Windows the binary must carry the
+# extension to be executable at all, so that is the name desktop/README.md and
+# the `windows` CI job build, and the extensionless pattern above does not
+# match it. Without this an 11 MB binary shows up in `git status` for every
+# Windows contributor who follows the README.
+#
+# "Eventually gets committed" was not hypothetical for long: reviewing the
+# branch that added this line, a 16MB PE built by that very README command was
+# committed to it, and had to be removed from the history rather than deleted
+# at the tip. It was built without -trimpath, so it also carried a local
+# username and an absolute path -- the thing the editor/OS section above says
+# must never be committed, in a repository that is anonymous by design.
+#
+# It then happened a third time, and the same sentence explains it: the list was
+# one name short of complete. The two names below are the ones desktop/README.md
+# tells you to type -- `go build -o zycord-wallet[.exe]`, which also passes
+# -trimpath -- and neither is what a bare `go build .` inside desktop/ emits.
+# That command names its output after the DIRECTORY, so it writes
+# `desktop/desktop[.exe]`, and it passes no -trimpath, so the binary embeds the
+# absolute path of every source file it was built from: a local username and a
+# home directory, in the one repository that must carry neither. A 7 MB PE of
+# exactly that name was committed and merged before anything caught it, because
+# no pattern here matched the name and `git grep -I` cannot see inside a binary.
+# Keep all four names. The constraint is that the ignore list must cover every
+# name the toolchain can choose, not only the names the documentation suggests,
+# and `go build` chooses the directory name whenever `-o` is absent.
+desktop/zycord-wallet
+desktop/zycord-wallet.exe
+desktop/desktop
+desktop/desktop.exe
