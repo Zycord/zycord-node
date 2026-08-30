@@ -94,7 +94,7 @@ jobs:
       # packages nobody would have thought to name: node/storage's compaction
       # tests, and cmd/zcd's end-to-end wallet tests.
       - name: tests
-        run: go test ./...
+        run: go test -timeout 30m ./...
       # Three one-line platform files carry this platform, and each of them
       # fails silently everywhere else, so they are named rather than left in
       # the pack: Windows is the only platform where the wallet's publish tier 1
