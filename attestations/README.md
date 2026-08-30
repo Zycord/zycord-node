@@ -88,7 +88,10 @@ checking for a year.
 
 ## The publisher's own attestation is not one of these
 
-The project key signs `SHA256SUMS`, which says the release came from whoever
-holds that key. That is a different claim, it lives in the release, and it is not
-evidence about the build machine. Nothing in this directory is signed with the
-project key.
+The release carries a build-provenance attestation, which says the bytes came
+out of the project's own workflow at a named commit. That is a different claim,
+it lives in the release, and it is not evidence about the build machine — it is
+evidence about *ours*, made by the machine that did the building. Nothing in
+this directory is produced by the publisher, and that is the entire reason it
+exists: an attestation you can only get from us proves nothing you could not
+already have taken on trust.

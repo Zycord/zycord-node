@@ -69,11 +69,11 @@ section exists to prevent.
 What that means for you, in one line each:
 
 - **You want to run a node or mine.** Take the archive with `-randomx` in its
-  name. Verify it against `SHA256SUMS.randomx`, and the signature on that list
-  against the project key: together they tell you the file arrived intact and
-  that the list naming it came from the same place every release does. Neither
-  is an attestation of the binary — nobody can rebuild a cgo build and compare —
-  so read the source, which is the same source the attested tier is built from.
+  name. Verify it with `gh attestation verify`, which says these bytes came out
+  of the project's own workflow, and against `SHA256SUMS.randomx`, which says
+  the file arrived intact. Neither is a rebuild — nobody can reproduce a cgo
+  build and compare — so the source is what you read, and it is the same source
+  the attested tier is built from.
 - **You want to check that this project's source is what it says it is.** Take
   the plain archive, rebuild it with `make build`, and compare against
   `SHA256SUMS.binaries`. That binary runs `--devnet` and refuses mainnet; what
@@ -254,10 +254,10 @@ sudo install -m755 zycord-<version>-linux-amd64-randomx/zycordd /usr/local/bin/
 zcd version    # must name randomx-v1
 ```
 
-It is checksummed by `SHA256SUMS.randomx`, that list is signed by the project
-key, and it is still **not** in `SHA256SUMS.binaries`, because it is a cgo build
-and nobody can rebuild it byte for byte. The signature covers where the list
-came from, never what the binary is. Read the two-tiers table above before you decide that is acceptable;
+It is checksummed by `SHA256SUMS.randomx`, it carries a build-provenance
+attestation, and it is still **not** in `SHA256SUMS.binaries`, because it is a
+cgo build and nobody can rebuild it byte for byte. The attestation covers where
+the bytes came from, never what the binary is. Read the two-tiers table above before you decide that is acceptable;
 the point of stating it is that it is your decision rather than an assumption we
 made for you. `UNATTESTED.txt` inside the archive says the same thing where you
 will actually be standing when you unpack it.
@@ -361,70 +361,37 @@ download, on the very page that tells you a mismatch means a compromised
 binary. A check whose normal result is a failure is a check people learn to
 ignore, so both spellings above carry the flag, and so does `install.sh`.
 
-### The signature
+### The provenance
 
-`SHA256SUMS.asc` is signed with the project key. Its full fingerprint is
+There is no signature over `SHA256SUMS`, and that is a change made on purpose
+rather than a corner cut.
 
-```
-E724 39CE DD85 11F9 D607 550B 87FD 60D5 EB4A 0B29
-```
-
-and it is published in the whitepaper header ([whitepaper.md](whitepaper.md))
-and in the genesis announcement ([RELEASE.md](RELEASE.md) §6). It never rotates
-silently: a key that changes without a signed statement from the old one is
-indistinguishable from a compromise, and should be treated as one.
-
-**The fingerprint is the anchor, not the key file.** Get the key from wherever
-is convenient and then check what you got against the line above; a key file
-whose fingerprint is that one is the project key no matter which host handed it
-to you, and one whose fingerprint is anything else is worthless no matter how
-trustworthy the host looked.
-
-Three places carry it. Any of them will do:
+A release is built by GitHub Actions and goes from there to whoever downloads
+it. Nothing passes through a machine that could hold a signing key. So a key in
+that path has exactly two homes and both are worse than none: an Actions secret,
+which belongs to whoever can push a workflow file, or a manual step somebody
+has to remember, which is a step nobody performs and a promise the documents
+keep making anyway. What is published instead is produced by the build:
 
 ```sh
-# 1. This repository, if you have a clone. No network, no keyserver.
-gpg --import packaging/zycord-release-key.asc
-
-# 2. The release page, as an asset beside the archives.
-curl -fsSLO https://github.com/<publisher>/zycord/releases/download/v<version>/zycord-release-key.asc
-gpg --import zycord-release-key.asc
-
-# 3. A keyserver. Use this one.
-gpg --keyserver hkps://keyserver.ubuntu.com \
-    --recv-keys E72439CEDD8511F9D607550B87FD60D5EB4A0B29
+gh attestation verify zycord-<version>-<os>-<arch>.tar.gz --repo <publisher>/zycord
 ```
 
-Then confirm what entered your keyring, before you rely on it:
+That is a signed statement, made by GitHub's own infrastructure at build time,
+that these exact bytes came out of **this repository's workflow, at this
+commit**. It is checked against a transparency log, it needs no key of ours and
+no keyring of yours, and there is nothing for anyone to leak.
 
-```sh
-gpg --fingerprint E72439CEDD8511F9D607550B87FD60D5EB4A0B29
-```
+**What it does not say, since the distinction is the point of this whole page.**
+It does not say the bytes match the source; only a rebuild says that, and the
+next section is how you do one. It says who built them and from what. Read
+together — the attestation for origin, the rebuild for content — they cover
+more ground than a code-signing certificate does, and neither one costs an
+identity.
 
-**Do not use `keys.openpgp.org` for this key.** It is the default keyserver in
-several GnuPG builds, and it serves a stripped copy: the bare public-key packet,
-with no user ID and no self-signature. GnuPG refuses that copy —
-
-```
-gpg: key 87FD60D5EB4A0B29: new key but contains no user ID - skipped
-```
-
-— and the key never enters the keyring, so the `gpg --verify` below fails with
-what looks like a bad signature and is in fact a missing key. That server strips
-user IDs by policy until an address is confirmed through it, which is not
-something a pseudonymous project can do. The three sources above all carry the
-user ID and the self-signature, and all three are the same key: check the
-fingerprint and none of that has to be taken on faith.
-
-```sh
-gpg --verify SHA256SUMS.asc SHA256SUMS
-```
-
-`gpg` will add that the key is not certified with a trusted signature. That is
-expected and it is not a failure: it means you have not told your keyring that
-you personally vouch for this key, which is exactly what the fingerprint is
-there to settle. What matters is that the signature verifies, and that the key
-it verified against is the fingerprint printed above.
+The project key still exists and is still used, for signed announcements and
+anything else where a human statement needs an author. It simply no longer
+appears in the download path.
 
 ### The build itself — the check that actually replaces a certificate
 

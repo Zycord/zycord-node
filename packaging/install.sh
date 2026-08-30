@@ -26,20 +26,13 @@ set -eu
 # unstamped copy rather than fetching from a host that does not exist.
 REPO_URL="${ZYCORD_REPO_URL:-https://github.com/PUBLISHER/zycord}"
 
-# The project key's fingerprint, which is the one thing in this file that is
-# not a placeholder and must never become one. It is not an identity surface:
-# it is the anti-impersonation anchor, published in full in the whitepaper
-# header and in the genesis announcement precisely so that a reader can check
-# a key file against it without knowing who holds the key. Hard-coded here so
-# that the failure message below can print something actionable — a script that
-# says "import the project key" without saying which key, from where, is not
-# telling anyone anything they can act on.
-PROJECT_KEY_FPR="E72439CEDD8511F9D607550B87FD60D5EB4A0B29"
-PROJECT_KEY_FPR_SPACED="E724 39CE DD85 11F9 D607 550B 87FD 60D5 EB4A 0B29"
+# `gh attestation verify` wants owner/name, not a URL, and deriving it here
+# means the --repo flag keeps working for a fork or a mirror without a second
+# thing to pass.
+REPO_SLUG=""
+
 VERSION=""
 PREFIX="${PREFIX:-/usr/local/bin}"
-KEYRING="${ZYCORD_KEYRING:-}"
-SKIP_SIGNATURE=0
 
 usage() {
     cat <<'USAGE'
@@ -47,15 +40,13 @@ usage: sh install.sh --version vX.Y.Z [options]
 
   --version VERSION   release tag to install (required)
   --prefix DIR        install into DIR (default: /usr/local/bin)
-  --keyring FILE      GPG keyring holding the project key
   --repo URL          release host (default: the public repository)
-  --no-signature      check the SHA-256 sums but not the signature over them
 
---no-signature is a real reduction in what this proves, and it is offered
-because "no gpg on the box" otherwise means "skip verification entirely",
-which is worse. Without it you have verified that the files match a
-SHA256SUMS you downloaded from the same place; with it you have verified that
-SHA256SUMS was written by whoever holds the project key.
+What this proves depends on what is installed. The checksum check always runs
+and shows the files match this release's own list. If `gh` is present the build
+provenance is checked too, which is what says the release came out of the
+project's workflow rather than from whoever served you the list. The script
+tells you which of the two it managed.
 USAGE
 }
 
@@ -63,9 +54,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --version) VERSION="${2:?--version needs a value}"; shift 2 ;;
         --prefix)  PREFIX="${2:?--prefix needs a value}"; shift 2 ;;
-        --keyring) KEYRING="${2:?--keyring needs a value}"; shift 2 ;;
         --repo)    REPO_URL="${2:?--repo needs a value}"; shift 2 ;;
-        --no-signature) SKIP_SIGNATURE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "install.sh: unknown option $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -81,6 +70,9 @@ die() { echo "install.sh: $*" >&2; exit 1; }
 case "$REPO_URL" in
     *PUBLISHER*) die "this copy was not stamped by the release process; pass --repo <url> or set ZYCORD_REPO_URL" ;;
 esac
+# After the guard, so an unstamped copy dies on the URL rather than on a slug
+# derived from a placeholder.
+REPO_SLUG=$(printf '%s' "$REPO_URL" | sed -e 's|^[a-z]*://||' -e 's|^[^/]*/||' -e 's|/*$||')
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required and was not found"; }
 
 need curl
@@ -120,58 +112,30 @@ echo "==> fetching ${NAME}"
 curl -fsSL --proto '=https' --tlsv1.2 -O "${BASE}/${NAME}.tar.gz"
 curl -fsSL --proto '=https' --tlsv1.2 -O "${BASE}/SHA256SUMS"
 
-if [ "$SKIP_SIGNATURE" -eq 0 ]; then
-    command -v gpg >/dev/null 2>&1 || die "gpg is required to verify the signature; install it, or pass --no-signature and understand what that gives up"
-    curl -fsSL --proto '=https' --tlsv1.2 -O "${BASE}/SHA256SUMS.asc"
-    echo "==> verifying the signature over SHA256SUMS"
-    if [ -n "$KEYRING" ]; then
-        gpg --no-default-keyring --keyring "$KEYRING" --verify SHA256SUMS.asc SHA256SUMS \
-            || die "the signature over SHA256SUMS did not verify against $KEYRING"
-    else
-        # Against the caller's own keyring. If the project key is not in it,
-        # gpg fails here and that is the correct outcome: an installer that
-        # fetched the key from the same server as the files would be checking
-        # that the server agrees with itself.
-        #
-        # So this script does not fetch the key. It prints where to get one and
-        # what to compare it against, because "import the project key first" is
-        # not actionable advice when the default keyserver serves a copy GnuPG
-        # refuses to import (no user ID, no self-signature) and nothing here
-        # named a keyserver that does not.
-        gpg --verify SHA256SUMS.asc SHA256SUMS || {
-            cat >&2 <<KEYHELP
-install.sh: the signature over SHA256SUMS did not verify.
-
-If gpg said the public key is not available, the key is simply not in your
-keyring yet. Import it, then re-run this script:
-
-  gpg --keyserver hkps://keyserver.ubuntu.com \\
-      --recv-keys ${PROJECT_KEY_FPR}
-
-or, without a keyserver, take zycord-release-key.asc from the release page or
-packaging/zycord-release-key.asc from a clone, and \`gpg --import\` it.
-
-Do NOT use keys.openpgp.org for this key: it serves a copy with no user ID and
-no self-signature, which gpg reports as "new key but contains no user ID -
-skipped" and does not import.
-
-Whichever source you use, the key is only worth the fingerprint it matches, and
-the fingerprint is published in the whitepaper header and in the genesis
-announcement:
-
-  ${PROJECT_KEY_FPR_SPACED}
-
-  gpg --fingerprint ${PROJECT_KEY_FPR}
-
-If the key IS in your keyring and the signature still does not verify, do not
-install this file.
-KEYHELP
-            exit 1
-        }
-    fi
+# Build provenance, where the tooling for it exists.
+#
+# There is no signature to check any more, and that is a deliberate change
+# rather than something lost. A release is built by GitHub Actions and goes
+# straight to whoever downloads it; nothing passes through a machine that could
+# hold a signing key, so a key in this path would either live in CI -- where it
+# belongs to whoever can push a workflow file -- or describe a step nobody
+# performs. What replaces it is an attestation the build itself produces,
+# keyless, naming the workflow and the commit the bytes came out of.
+#
+# `gh` is not a dependency of this script and is not going to become one: it is
+# a large Go program and this installs on machines that have curl and a shell.
+# So the check runs when it happens to be available and is NAMED, not silently
+# skipped, when it is not -- a check that vanishes without saying so is how an
+# installer teaches people that verification is optional.
+if command -v gh >/dev/null 2>&1; then
+    echo "==> verifying build provenance"
+    gh attestation verify "${NAME}.tar.gz" --repo "${REPO_SLUG}" \
+        || die "provenance did not verify; do not install this file"
 else
-    echo "==> skipping the signature check (--no-signature)"
-    echo "    This verifies the files against a SHA256SUMS from the same host, and nothing more."
+    echo "==> gh is not installed, so build provenance was NOT checked"
+    echo "    The checksum below proves the file matches this release's own list."
+    echo "    It cannot prove the list came from the project. To check that:"
+    echo "      gh attestation verify ${NAME}.tar.gz --repo ${REPO_SLUG}"
 fi
 
 echo "==> verifying checksums"

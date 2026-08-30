@@ -816,21 +816,18 @@ dist: dist-clean
 	@# fingerprint comparison against docs/whitepaper.md, which is a check no
 	@# file in this directory can perform for the reader.
 	@#
-	@# Shipping it at all is not optional: the default keyserver serves a copy
-	@# of this key with no user ID and no self-signature, which `gpg --import`
-	@# refuses, so a user following the published instructions could not
-	@# complete the signature check at all. An asset beside the archives means
-	@# the import needs no keyserver.
+	@# Shipping it at all is still wanted: releases are no longer signed, but
+	@# the key is what signs announcements, and an asset beside the archives is
+	@# a source that needs no keyserver -- the default one serves a copy with no
+	@# user ID and no self-signature, which `gpg --import` refuses outright.
 	@cp packaging/zycord-release-key.asc $(DIST)/zycord-release-key.asc
 	@echo
 	@cat $(DIST)/SHA256SUMS
 	@echo
-	@echo "Sign with the project key before publishing:"
-	@echo "  gpg --armor --detach-sign $(DIST)/SHA256SUMS"
-	@echo
-	@echo "Publish $(DIST)/zycord-release-key.asc as a release asset beside the"
-	@echo "archives, and check its fingerprint against the whitepaper header first:"
-	@echo "  gpg --show-keys --with-fingerprint $(DIST)/zycord-release-key.asc"
+	@echo "Nothing here is signed, and nothing is waiting to be. What says where"
+	@echo "these bytes came from is the build's own provenance attestation, which"
+	@echo "the release workflow produces and anyone can check:"
+	@echo "  gh attestation verify <archive> --repo <publisher>/zycord"
 	@echo
 	@echo "This is the ATTESTED tier and it is devnet-only: CGO_ENABLED=0 and no"
 	@echo "-tags randomx, so every binary above refuses to start on mainnet and on"
