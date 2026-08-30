@@ -168,13 +168,14 @@ jobs:
           fi
           echo "zcd is reproducible: $local"
 
-      # zycord-release-key.asc rides along with the archives. It is the
-      # project's public key, staged by `make dist` out of packaging/, and it is
-      # here so that the release page carries it: the default keyserver serves a
-      # copy stripped of its user ID that `gpg --import` refuses, so a user who
-      # cannot get the key from the release page cannot perform the signature
-      # check at all. Nothing signs anything in CI, and this file is a public
-      # key — it is an asset to publish, not a secret.
+      # zycord-release-key.asc rides along with the archives, and no longer
+      # because a download has to be verified with it -- nothing in a release is
+      # signed, and `gh attestation verify` is what covers origin now. It ships
+      # because the key signs ANNOUNCEMENTS, and the default keyserver serves a
+      # copy stripped of its user ID that `gpg --import` refuses outright: a
+      # reader checking a signed announcement needs a source that works, and the
+      # release page is one that needs no keyserver. Nothing signs anything in
+      # CI, and this file is a public key -- an asset to publish, not a secret.
       - uses: actions/upload-artifact@v4
         with:
           name: zycord-cli
@@ -406,14 +407,13 @@ jobs:
   # properties, and `/releases/latest` is the URL that stops rotting at the
   # next tag.
   #
-  # **It is created as a DRAFT and that is deliberate.** The release notes tell
-  # a reader to check `SHA256SUMS.asc` and `SHA256SUMS.randomx.asc`, and those
-  # two signatures are made by hand off CI -- §8's rule, unchanged: a signing
-  # key in an Actions secret is a key held by whoever can push a workflow file,
-  # and for a pseudonymous project that key is the only answer to "is this the
-  # same author as last time". A draft means the window where the files are
-  # public but unverifiable does not exist. The owner signs two small files,
-  # attaches them, and presses publish.
+  # **It publishes rather than drafting, and nothing here is signed by hand.**
+  # The draft existed so two checksum lists could be signed with the project key
+  # off CI, and that was never a process anybody performed: a release is built
+  # here and downloaded there, so nothing passes through a machine that could
+  # hold the key. What covers origin instead is the attestation step below,
+  # which the build makes about itself, keylessly, and which anyone can check
+  # with `gh attestation verify`.
   #
   # `gh release create` rather than a third-party action: the CLI is already on
   # the runner, so this adds no supply-chain surface to the one job in this
@@ -482,16 +482,37 @@ jobs:
         with:
           subject-path: 'release/*.tar.gz,release/*.zip'
 
-      # Draft. See the header: the signatures are added by hand before this
-      # becomes visible.
-      - name: Open the draft release
+      # Published, not drafted, and the draft went with the signatures it was
+      # waiting for.
+      #
+      # The job used to hold the release back so two checksum lists could be
+      # signed with the project key off CI. That never worked as a process: a
+      # release is built here and downloaded there, so nothing passes through a
+      # machine that could hold the key, and the step lived in the documents
+      # rather than in anybody's terminal. An instruction a reader cannot follow
+      # is worse than none, because it teaches them that checking is optional.
+      # The attestation step above replaced it -- made by the build, about the
+      # build, with no secret to hold or to leak.
+      #
+      # So the bytes go from this runner to whoever downloads them with nobody
+      # in between, which is the property the pipeline exists for.
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
+          notes=$(mktemp)
+          {
+            printf 'Built by GitHub Actions from `%s`.\n\n' "${GITHUB_SHA}"
+            printf 'Verify what you downloaded:\n\n'
+            printf '```sh\n'
+            printf 'gh attestation verify <archive> --repo %s\n' "${GITHUB_REPOSITORY}"
+            printf 'sha256sum --check --ignore-missing SHA256SUMS\n'
+            printf '```\n\n'
+            printf 'See docs/INSTALL.md for which archive you want, and why there are two.\n'
+          } > "$notes"
           gh release create "${GITHUB_REF_NAME}" \
-            --draft \
             --title "${GITHUB_REF_NAME}" \
-            --notes 'Draft. Two signatures are attached by hand before this is published — see docs/RELEASE.md §8. Replace these notes with the release notes before publishing.' \
+            --notes-file "$notes" \
             release/*
-          echo "draft created for ${GITHUB_REF_NAME}"
+          echo "published ${GITHUB_REF_NAME}"
