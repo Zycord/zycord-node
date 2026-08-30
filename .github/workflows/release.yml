@@ -394,3 +394,104 @@ jobs:
             dist/zycord-wallet-*
             dist/SHA256SUMS.desktop
           if-no-files-found: error
+
+  # The GitHub Release itself: everything the build jobs produced, in one place
+  # a stranger can download without an account.
+  #
+  # **This job exists because `upload-artifact` is not a download.** The three
+  # jobs above end by uploading to the run, and an artifact there needs a
+  # GitHub login to fetch, expires in ninety days, and has no stable URL. So a
+  # tag produced binaries that nobody outside could get at, and the download
+  # buttons on the site had nothing to point at. A Release has none of those
+  # properties, and `/releases/latest` is the URL that stops rotting at the
+  # next tag.
+  #
+  # **It is created as a DRAFT and that is deliberate.** The release notes tell
+  # a reader to check `SHA256SUMS.asc` and `SHA256SUMS.randomx.asc`, and those
+  # two signatures are made by hand off CI -- §8's rule, unchanged: a signing
+  # key in an Actions secret is a key held by whoever can push a workflow file,
+  # and for a pseudonymous project that key is the only answer to "is this the
+  # same author as last time". A draft means the window where the files are
+  # public but unverifiable does not exist. The owner signs two small files,
+  # attaches them, and presses publish.
+  #
+  # `gh release create` rather than a third-party action: the CLI is already on
+  # the runner, so this adds no supply-chain surface to the one job in this
+  # workflow that holds a write token.
+  publish:
+    needs: [cli, cli-randomx, desktop]
+    # Tags only. This workflow also answers `workflow_dispatch`, which exists so
+    # the pipeline can be exercised without minting a tag -- and on that event
+    # GITHUB_REF_NAME is a BRANCH name, so without this line a test run would
+    # open a draft release called `main`. Nothing depends on this job, so
+    # skipping it satisfies no `needs:` and hides nothing.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      # Only this job writes. The workflow's default stays `contents: read`.
+      contents: write
+      # For the provenance attestation below. No secret is involved: the
+      # identity is the workflow's own OIDC token.
+      id-token: write
+      attestations: write
+    steps:
+      # Pinned to commits, not tags, because this job holds a write token and a
+      # tag is mutable. The rest of this workflow reads only.
+      - name: Collect every artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: staging
+
+      # The per-leg checksum files have to be merged, and this is the step that
+      # would be wrong to skip.
+      #
+      # `cli-randomx` runs once per target and each leg writes its OWN
+      # `SHA256SUMS.randomx` covering only the archive that leg built. Four legs
+      # therefore produce four files of the same name. What INSTALL.md and the
+      # release notes describe -- and what `--check --ignore-missing` is written
+      # against -- is ONE list covering every archive the release publishes, so
+      # the legs are concatenated rather than one of them being picked. The
+      # wallet's `SHA256SUMS.desktop` has the same shape for the same reason.
+      - name: Stage the release
+        run: |
+          set -eu
+          mkdir -p release
+          cp staging/zycord-cli/* release/
+          cp staging/zycord-cli-randomx-*/*.tar.gz release/
+          cp staging/zycord-wallet-*/zycord-wallet-* release/
+          cat staging/zycord-cli-randomx-*/SHA256SUMS.randomx | sort -k2 > release/SHA256SUMS.randomx
+          cat staging/zycord-wallet-*/SHA256SUMS.desktop     | sort -k2 > release/SHA256SUMS.desktop
+          echo '--- staged ---'
+          ls -l release/
+          echo '--- SHA256SUMS.randomx ---'
+          cat release/SHA256SUMS.randomx
+
+      # Provenance, and it is a THIRD claim rather than a substitute for either
+      # of the two the project already makes.
+      #
+      # `SHA256SUMS.binaries` answers "rebuild this and compare" and no cgo
+      # artefact can ever appear in it. The project key answers "same author as
+      # every other release". This answers "these exact bytes came out of this
+      # workflow, from this commit" -- and it needs no stored secret, because
+      # the identity is the OIDC token GitHub mints for this run.
+      #
+      # It is worth most for the `-randomx` tier, which is the one people
+      # actually run and the one nothing can reproduce.
+      - name: Attest what this workflow built
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: 'release/*.tar.gz,release/*.zip'
+
+      # Draft. See the header: the signatures are added by hand before this
+      # becomes visible.
+      - name: Open the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release create "${GITHUB_REF_NAME}" \
+            --draft \
+            --title "${GITHUB_REF_NAME}" \
+            --notes 'Draft. Two signatures are attached by hand before this is published — see docs/RELEASE.md §8. Replace these notes with the release notes before publishing.' \
+            release/*
+          echo "draft created for ${GITHUB_REF_NAME}"
