@@ -205,6 +205,31 @@ repro-randomx: require-clean-tree
 DOCKER ?= docker
 CANONICAL_IMAGE ?= zycord-build
 
+# Every container run that WRITES INTO THE BIND MOUNT takes these, and the
+# reason is one bug rather than a preference.
+#
+# The image's default user is root, and on Linux a root process writing into a
+# `-v $(PWD):/src` bind mount leaves root-owned files ON THE HOST. So `bin/`
+# and `dist/` came back undeletable and the next `make clean` -- which CI runs
+# between the two canonical builds it compares -- died on `rm: cannot remove
+# 'bin/zcd': Permission denied`, having built everything correctly first. The
+# artefacts were right; the workspace was left unusable, which is why the job
+# had never once completed.
+#
+# HOME travels with the uid because the two are one change: Go keeps its build
+# and module caches under HOME, root's is /root, and a process running as
+# somebody else cannot write there. /tmp is writable by any uid and dies with
+# the container, so a run still fetches its own modules and stays as hermetic
+# as it was.
+#
+# Nothing about the output moves: `-trimpath` and SOURCE_DATE_EPOCH decide what
+# reaches a binary and a uid was never part of it. The comparison these targets
+# exist for is what proves that, and it is the check that could never run.
+#
+# A run that only reads -- `go env GOARCH` below -- does not need them and does
+# not take them.
+DOCKER_AS_CALLER ?= --user "$(shell id -u):$(shell id -g)" -e HOME=/tmp
+
 .PHONY: canonical-image
 canonical-image:
 	$(DOCKER) build -t $(CANONICAL_IMAGE) build/
@@ -215,7 +240,7 @@ canonical-image:
 # replacing the first.
 .PHONY: canonical
 canonical: canonical-image
-	$(DOCKER) run --rm -v "$(PWD):/src" $(CANONICAL_IMAGE) \
+	$(DOCKER) run --rm -v "$(PWD):/src" $(DOCKER_AS_CALLER) $(CANONICAL_IMAGE) \
 	  make build build-randomx VERSION=$(VERSION)
 	@echo "canonical build complete; compare with sha256sum $(BIN)/zcd $(BIN)/zycordd $(BIN)/zcd-randomx $(BIN)/zycordd-randomx"
 
@@ -262,7 +287,7 @@ canonical-dist-diff: canonical
 	arch=$$($(DOCKER) run --rm $(CANONICAL_IMAGE) go env GOARCH); \
 	if [ -z "$$arch" ]; then echo "could not read GOARCH from $(CANONICAL_IMAGE)"; exit 1; fi; \
 	echo "comparing canonical against dist for linux/$$arch (the container's own architecture)"; \
-	$(DOCKER) run --rm -v "$(PWD):/src" $(CANONICAL_IMAGE) \
+	$(DOCKER) run --rm -v "$(PWD):/src" $(DOCKER_AS_CALLER) $(CANONICAL_IMAGE) \
 	  make dist PLATFORMS=linux/$$arch VERSION=$(VERSION); \
 	stage=$(DIST)/zycord-$(DIST_VERSION)-linux-$$arch; \
 	for pair in "$(BIN)/zcd:$$stage/zcd" "$(BIN)/zycordd:$$stage/zycordd"; do \
