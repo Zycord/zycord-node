@@ -2183,9 +2183,54 @@ func raceSyncAgainstApplier(t *testing.T, p *params.Params, source *node, blocks
 	var wg gosync.WaitGroup
 	var landedByGossip atomic.Int64
 	stop := make(chan struct{})
+	// Closed by the racing sync the first time it asks for a body. Until then
+	// the applier does not touch the victim's chain.
+	//
+	// **This is a partial gate and the distinction from the rejected one is the
+	// whole of why it is here.** The alternative the comment above rejects, and
+	// the sabotage the paragraph above that measures, both hold the applier
+	// back until the sync is DONE: the sync lands everything, `gossiped` is 0
+	// by construction, and the all-sync half of the guard can never fire. This
+	// releases the applier at the sync's FIRST body, so the two race for all
+	// sixty blocks after it, and `gossiped` is decided by the schedule exactly
+	// as before.
+	//
+	// What it removes is the one schedule that is not a race at all: the
+	// applier landing block 1 before `sync.Run` has read anything. `res.Applied`
+	// only counts under `reorg.Adopted`, so a sync whose branch stopped being a
+	// winning reorg before it began reports 0 having fetched and validated all
+	// sixty. That is a walkover, and on windows-latest it was every attempt —
+	// 8 of 8, each `applier 1, sync 0`.
+	//
+	// **What it costs the guard, measured rather than argued.** The worry is
+	// real and is the mirror of the objection above: a gate on either path
+	// makes that path's half of `gossiped > 0 && synced > 0` easier. So the
+	// misses were classified before this landed. Sixty runs on linux/amd64,
+	// unpatched, produced nine miss-attempts:
+	//
+	//	7   applier 1, sync 0     the walkover
+	//	1   applier 2, sync 0     the walkover
+	//	1   applier 0, sync 60    all-sync, the other half firing
+	//
+	// Eight of the nine are the schedule this gate removes. The ninth is the
+	// half a gate on the applier CANNOT suppress, and the direction is what
+	// settles it: delaying the applier can only make `gossiped == 0` likelier,
+	// never rarer. So the half that catches an all-sync run is left able to
+	// fire, which is precisely what the rejected alternative would have taken
+	// away. Patched, the same sixty runs miss zero times — and at a baseline
+	// all-sync rate of 1 in 60 that sample cannot tell "unchanged" from
+	// "somewhat rarer", which is said here rather than glossed.
+	fetching := make(chan struct{})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		// Nothing to leak: if the sync never asks for a body, this returns on
+		// stop, which Run's caller closes before it waits.
+		select {
+		case <-fetching:
+		case <-stop:
+			return
+		}
 		for h := uint64(1); h <= uint64(blocks); h++ {
 			select {
 			case <-stop:
@@ -2215,7 +2260,11 @@ func raceSyncAgainstApplier(t *testing.T, p *params.Params, source *node, blocks
 
 	// A source that yields on every body, so the two goroutines interleave
 	// inside the fetch loop rather than one finishing before the other starts.
-	slow := &yieldingPeer{peer: &peer{t: t, chain: source.chain}}
+	slow := &yieldingPeer{
+		peer:     &peer{t: t, chain: source.chain},
+		release:  &gosync.Once{},
+		fetching: fetching,
+	}
 	raced, err := sync.Run(victim.chain, pow.Dev{}, slow, 16)
 	close(stop)
 	wg.Wait()
@@ -2255,9 +2304,21 @@ func raceSyncAgainstApplier(t *testing.T, p *params.Params, source *node, blocks
 // the competing applier can land a block between this sync's fetch and its
 // commit. Without it the fetch loop usually runs to completion uninterrupted
 // and the interleaving under test never happens.
-type yieldingPeer struct{ *peer }
+//
+// It also carries the start gate, when one is wanted: `release` fires once, on
+// the first body, and is what tells a competing applier that this sync has
+// actually begun. Both fields are optional so the type stays usable where only
+// the yield is wanted.
+type yieldingPeer struct {
+	*peer
+	release  *gosync.Once
+	fetching chan<- struct{}
+}
 
 func (y *yieldingPeer) Body(id types.Hash) (*types.Block, error) {
+	if y.release != nil {
+		y.release.Do(func() { close(y.fetching) })
+	}
 	runtime.Gosched()
 	return y.peer.Body(id)
 }
