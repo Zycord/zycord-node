@@ -56,18 +56,25 @@ promise what the network does not have.
 ## Install
 
 ```sh
-# macOS / Linux — builds from source on your machine, so nothing is signed and
-# nothing needs to be
-brew tap <publisher>/zycord https://github.com/<publisher>/homebrew-zycord
-brew install <publisher>/zycord/zycord
+# Anyone with a Go toolchain — no release needed, and nobody to trust.
+git clone <this repository> && cd zycord
 
-# Windows — no SmartScreen warning
-scoop bucket add zycord https://github.com/<publisher>/scoop-zycord
-scoop install zycord
-
-# Anyone with a Go toolchain
-git clone <this repository> && cd zycord && make build
+make build           # pure Go, reproducible, devnet only
+make build-randomx   # needs a C++ toolchain; this is the one that joins a network
 ```
+
+**Those two builds are not interchangeable, and picking the wrong one is the
+most common way to be stuck.** `make build` is pure Go and byte-identical
+across machines, which is what lets a stranger rebuild this tag and compare —
+but it carries no proof-of-work engine, so it *refuses to start* on mainnet and
+on the public testnet, both of which declare `randomx-v1`. `make build-randomx`
+is the one that joins, needs a C++ toolchain, and is reproducible nowhere. The
+release publishes both, labelled, and [docs/INSTALL.md](docs/INSTALL.md) is
+where the difference is argued rather than asserted.
+
+Homebrew and Scoop are named in `packaging/` and in the install guide, but the
+tap and bucket repositories do not exist yet, so those two commands are not
+offered here. Until they do, the paths above and a release archive are the ways in.
 
 Or download a release, verify it, and unpack it — [docs/INSTALL.md](docs/INSTALL.md)
 has the per-platform detail, the verification commands, and **why there is no

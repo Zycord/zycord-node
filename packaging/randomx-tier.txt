@@ -29,6 +29,11 @@ attestation this project does not make.
 `SHA256SUMS.randomx`, published beside these archives, is a transfer check: it
 tells you the file arrived intact. It is not evidence about what is in it.
 
+It is signed with the project key, as `SHA256SUMS.randomx.asc`. That signature
+tells you the list was published by the same holder as every other release --
+origin -- and it still tells you nothing about whether these bytes can be
+rebuilt. They cannot. The two claims are kept apart on purpose.
+
 The other tier, and why it exists
 ---------------------------------
 

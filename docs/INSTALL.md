@@ -69,9 +69,11 @@ section exists to prevent.
 What that means for you, in one line each:
 
 - **You want to run a node or mine.** Take the archive with `-randomx` in its
-  name. Verify it against `SHA256SUMS.randomx` — a transfer check, not an
-  attestation — and read the source, which is the same source the attested tier
-  is built from.
+  name. Verify it against `SHA256SUMS.randomx`, and the signature on that list
+  against the project key: together they tell you the file arrived intact and
+  that the list naming it came from the same place every release does. Neither
+  is an attestation of the binary — nobody can rebuild a cgo build and compare —
+  so read the source, which is the same source the attested tier is built from.
 - **You want to check that this project's source is what it says it is.** Take
   the plain archive, rebuild it with `make build`, and compare against
   `SHA256SUMS.binaries`. That binary runs `--devnet` and refuses mainnet; what
@@ -252,9 +254,10 @@ sudo install -m755 zycord-<version>-linux-amd64-randomx/zycordd /usr/local/bin/
 zcd version    # must name randomx-v1
 ```
 
-It is checksummed by `SHA256SUMS.randomx` and it is **not** in
-`SHA256SUMS.binaries`, because it is a cgo build and nobody can rebuild it byte
-for byte. Read the two-tiers table above before you decide that is acceptable;
+It is checksummed by `SHA256SUMS.randomx`, that list is signed by the project
+key, and it is still **not** in `SHA256SUMS.binaries`, because it is a cgo build
+and nobody can rebuild it byte for byte. The signature covers where the list
+came from, never what the binary is. Read the two-tiers table above before you decide that is acceptable;
 the point of stating it is that it is your decision rather than an assumption we
 made for you. `UNATTESTED.txt` inside the archive says the same thing where you
 will actually be standing when you unpack it.
