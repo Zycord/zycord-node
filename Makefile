@@ -341,6 +341,16 @@ race:
 	# An explicit timeout, because Go's ten-minute default is now the wrong number
 	# on both platforms this is developed on.
 	#
+	# **45m, raised from 30m, and the number comes from a measurement rather than
+	# from taste.** The timeout here is PER PACKAGE, and `sim` is the one that
+	# decides it: on the CI runner it measured 1522s under `-race` -- 85% of a
+	# 30m budget -- and the next run of the same suite hit 1800.033s and was
+	# killed by the alarm. Nothing had slowed down; the package was simply at the
+	# edge, and runner variance carried it over. A budget a package sits at 85%
+	# of is a budget that fails on load rather than on a defect, and a red build
+	# nobody can attribute is worse than a slow one. 45m is 1.8x the measurement
+	# and still bounded: a genuinely wedged test is still killed, with a stack.
+	#
 	# The race detector's cost is not portable, and it is not stable either.
 	# `node/mempool` builds thousands of Ed25519-signed certificates across its
 	# eviction tests, and under `-race` that measured **139s on linux/amd64 and
@@ -357,7 +367,7 @@ race:
 	# ceiling against a hang, not a budget to spend: the real cost here is re-signing the
 	# same fixtures in ten separate tests, and building them once per package would
 	# take this back under the default on both platforms.
-	$(GO) test -race -timeout 30m ./...
+	$(GO) test -race -timeout 45m ./...
 
 # The consensus-state access guard (R5-G2).
 #

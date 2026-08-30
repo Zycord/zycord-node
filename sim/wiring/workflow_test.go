@@ -518,7 +518,7 @@ func TestTheWholeTreeSuitesRunOnlyWhereTheyWereReviewed(t *testing.T) {
 		{"desktop", "desktop", "go vet -tags desktop,webkit2_41 ./..."},
 		{"desktop", "desktop", "go test -tags desktop,webkit2_41 ./..."},
 		{"windows", "", "go vet ./..."},
-		{"windows", "", "go test ./..."},
+		{"windows", "", "go test -timeout 30m ./..."},
 		{"windows", "desktop", "go test -tags desktop ./..."},
 	}
 
