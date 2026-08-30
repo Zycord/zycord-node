@@ -250,6 +250,18 @@ the same reason the wallet may not: there is nothing for a stranger to compare a
 rebuild against. It has its own `SHA256SUMS.randomx`, which is a transfer check
 and is described as one.
 
+**That file is signed, and signing it says a third thing rather than upgrading
+either of the first two.** `SHA256SUMS.binaries` answers *"rebuild this and
+compare"* and no cgo artefact can ever appear in it. `SHA256SUMS.randomx`
+answers *"did the file arrive intact"*. The detached signature beside it answers
+*"was this list published by the holder of the project key"* — origin, not
+attestation. A reader who checks it learns that the list came from the same
+place every previous release came from, and learns nothing whatever about
+whether the bytes it names can be rebuilt. They cannot. Publishing the tier
+unsigned was leaving the only artefact most people run with no origin evidence
+at all, which is a different failure from the one the tier boundary exists to
+prevent.
+
 Windows has no `-randomx` leg, and the reason is the pipeline rather than the
 code: a local `make build-randomx` on Windows with a MinGW-w64 toolchain does
 produce a working binary (measured — `zcd version` on it names `randomx-v1`),
@@ -350,7 +362,7 @@ There is nothing else to trust, and deliberately nothing else to publish **in th
 - [ ] `make canonical-dist-diff` green on the tagged commit — the canonical container's pure-Go `zcd` and `zycordd` are byte-identical to the `linux/<container arch>` binaries `make dist` stages — the target reads that arch out of the container, so the box is tickable on this project's arm64 hardware too (§5). CI runs it; this is the by-hand confirmation. It is the check that would have caught the canonical build certifying a binary no release contains, and reading `go version -m bin/zcd bin/zcd-randomx` once after it is how you see the tags rather than infer them.
 - [ ] `go list -m all` at the root does not mention Wails, and `make check-imports` is green with no edit. The desktop module is isolated or it is not.
 - [ ] `make dist` run, `SHA256SUMS` signed with the project key **by hand, off CI** — a signing key in a CI secret is a key held by whoever can push a workflow file.
-- [ ] **`make dist-randomx` run on every target the release publishes it for** (linux amd64/arm64, darwin amd64/arm64 — one native runner each, because cgo needs a C++ toolchain for the target), and `SHA256SUMS.randomx` published beside the archives. It is **not** signed into `SHA256SUMS` and it gets **no** line in `SHA256SUMS.binaries` (§5): it is a transfer check over an unattested tier, and merging it into either file would say something about those bytes that nobody can check.
+- [ ] **`make dist-randomx` run on every target the release publishes it for** (linux amd64/arm64, darwin amd64/arm64 — one native runner each, because cgo needs a C++ toolchain for the target), and `SHA256SUMS.randomx` published beside the archives, **with its own detached signature `SHA256SUMS.randomx.asc`**, signed by hand off CI exactly as `SHA256SUMS` is. It is still **not** merged into `SHA256SUMS` and it still gets **no** line in `SHA256SUMS.binaries` (§5): merging it into either would say something about those bytes that nobody can check. The signature is about the list's origin and not about the bytes it names — see §5 — and it is there because this is the tier almost everyone runs, so shipping it with no origin evidence at all was the larger of the two mistakes available.
 - [ ] **A released binary was started against the tagged parameters and did not refuse.** Unpack an archive — the actual published one, not `bin/zycordd` — and run `make release-smoke ZYCORDD=<path>`. It starts the node against the embedded **mainnet** set with no `--devnet` and no `--params`, waits for `cmd/zycordd`'s own `proof of work: <engine> engine` line, and fails with the process's output if the node exited instead. **Do this for the `-randomx` archive of every platform in the matrix**, and once for a plain archive to see the refusal it is supposed to produce — a check that has only ever passed is a check nobody has seen work. Every other gate in this document builds an artefact and hashes it, and a hash cannot tell you a binary starts; that is precisely how six platforms of binaries that refuse to start on mainnet passed a green pipeline and three package managers. This is the same walk the empty-keyring verification below uses: one clean host, one archive, from download to a running node.
 - [ ] **The release notes name the two tiers separately and say they are disjoint.** The attested archives are byte-identical and devnet-only; the `-randomx` archives join mainnet and the public testnet and are attested by nothing. Listing both under one "reproducible builds" heading is the blur §5 exists to prevent, and here it would be worse than a blur — it would tell a miner that the binary they are about to run is one somebody rebuilt and compared.
 - [ ] Scoop manifest and Homebrew formulae updated with the tag and the real hashes (`packaging/`), and installed once on a machine that has never seen this project. The test that matters is on a clean host. **Read `zcd version` on that host and check the notes it was installed with agree with it** — both package managers install the pure-Go tier, so both must say so before a user starts a node with it (§5).
