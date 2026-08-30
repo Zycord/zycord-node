@@ -35,11 +35,34 @@ FROM debian@sha256:731dd1380d6a8d170a695dbeb17fe0eade0e1c29f654cf0a3a07f372191c3
 #
 # Change SNAPSHOT and you change the compiler; that is a release decision and
 # it belongs in a diff, which is the whole point of writing it down here.
+#
+# **http, not https, and that is not a downgrade.** These two lines used to say
+# https and the image could never build: they replace sources.list BEFORE
+# `ca-certificates` exists in it -- installing that package is the very next
+# command -- so `apt-get update` reached for a trust store the image does not
+# have yet and every build died at `The certificate issuer is unknown`. It is a
+# bootstrap loop, not a bad certificate: the CA bundle is fetched over the
+# transport whose verification needs the CA bundle.
+#
+# What TLS was buying here is not what pins this image, and apt says so by
+# design. Integrity comes from the OpenPGP signature on each InRelease file,
+# checked against debian-archive-keyring, which the base image carries and the
+# digest above fixes -- which is why every Debian image in the world ships
+# `http://deb.debian.org` as its default. `[check-valid-until=no]` disables the
+# expiry check on an archive frozen years ago; it does not disable that
+# signature check. And the SNAPSHOT timestamp still decides the package set on
+# its own, so a network attacker gets to serve bytes that apt refuses rather
+# than a compiler nobody chose.
+#
+# The alternative -- install ca-certificates first, then switch to a pinned
+# https snapshot -- was rejected: it fetches a package from the LIVE mirrors
+# this file exists to stop depending on, so it would trade the pin for the
+# transport, which is exactly backwards.
 ARG SNAPSHOT=20250811T000000Z
 RUN set -eux; \
     printf '%s\n' \
-      "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${SNAPSHOT}/ bookworm main" \
-      "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/${SNAPSHOT}/ bookworm-security main" \
+      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${SNAPSHOT}/ bookworm main" \
+      "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${SNAPSHOT}/ bookworm-security main" \
       > /etc/apt/sources.list; \
     rm -f /etc/apt/sources.list.d/*; \
     apt-get update; \
