@@ -229,6 +229,24 @@ jobs:
             label: darwin-amd64
           - os: macos-latest
             label: darwin-arm64
+          # Windows is CROSS-COMPILED from Linux, and it is the only leg that
+          # is. The others build natively because cgo needs a C++ toolchain for
+          # the target and the cheapest way to have one is to BE the target.
+          # `windows-latest` is the exception that argues the other way: it
+          # ships neither GNU make nor `zip`, both of which this recipe uses, so
+          # being the target would cost two tools to buy one compiler. mingw on
+          # Ubuntu has all three.
+          #
+          # The Makefile treats this as a supported path rather than a
+          # workaround: `dist-randomx` refuses a GOOS assigned on the command
+          # line and its own error message tells you to put it in the
+          # environment instead, which is exactly what the build step does.
+          - os: ubuntu-latest
+            label: windows-amd64
+            goos: windows
+            cc: x86_64-w64-mingw32-gcc
+            cxx: x86_64-w64-mingw32-g++
+            apt: gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -244,10 +262,20 @@ jobs:
       # not see into core/pow/randomx/upstream/, so a modified vendor tree can
       # be shipped without ever being noticed by a build. ci.yml runs this same
       # check; a release does not inherit CI's word for it.
+      - name: the cross toolchain
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+
       - name: the vendored tree matches PINNED
         run: go test -count=1 -run TestVendoredTreeMatchesPinned ./core/pow/randomx/
 
       - name: build the RandomX archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
         run: make dist-randomx
 
       # The check that was missing from the entire pipeline: start the binary
@@ -257,7 +285,13 @@ jobs:
       #
       # The path is read off disk rather than reconstructed from the tag,
       # because the recipe that wrote it is the authority on what it is called.
+      # A native leg runs the binary it just built. The cross-compiled one
+      # cannot -- an .exe does not run here -- so it is smoke-tested by
+      # `randomx-smoke-windows` below, on Windows, against this very archive.
+      # Skipping it quietly here would make the one platform nobody can test
+      # locally into the one platform nobody tested at all.
       - name: the archived node starts against the tagged mainnet parameters
+        if: matrix.goos == ''
         run: make release-smoke ZYCORDD="$(ls dist/randomx/*-randomx/zycordd | head -1)"
 
       - uses: actions/upload-artifact@v4
@@ -267,6 +301,71 @@ jobs:
             dist/randomx/*.tar.gz
             dist/randomx/SHA256SUMS.randomx
           if-no-files-found: error
+
+  # The Windows archive, started on Windows.
+  #
+  # `cli-randomx` cross-compiles this one from Linux and therefore cannot run
+  # what it built, so the check that matters most for the platform with the
+  # most casual miners would have been the only one skipped. This job is that
+  # check, against the archive the release actually publishes rather than
+  # against a rebuild: it downloads the artefact, unzips it, and starts the
+  # node against the tagged mainnet parameters.
+  #
+  # It reproduces `make release-smoke` rather than calling it, for the reason
+  # windows.yml already records: GNU make is not on this image, so the Makefile
+  # is not the entry point here. The success condition is the same one -- the
+  # `proof of work: <engine> engine` line, which cmd/zycordd prints only after
+  # selectEngine returns and so cannot appear on the refusal path. Matching the
+  # prefix rather than an engine name keeps this correct if the parameters ever
+  # name a different engine: what is checked is that the binary and the
+  # parameters agree.
+  randomx-smoke-windows:
+    needs: cli-randomx
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zycord-cli-randomx-windows-amd64
+          path: dl
+
+      - name: unpack the published archive
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dl -Filter *-windows-amd64-randomx.zip | Select-Object -First 1
+          if (-not $zip) { throw "no windows randomx archive in the artefact" }
+          Expand-Archive -Path $zip.FullName -DestinationPath unpacked
+          Get-ChildItem -Recurse unpacked | Select-Object FullName
+
+      # No DLL beside the binary and none installed: a dynamically linked mingw
+      # build dies here with a missing-module dialog before any of our code
+      # runs, which is exactly the failure the static link in
+      # core/pow/randomx/randomx_cgo.go exists to prevent. So this step is also
+      # the test for that.
+      - name: the archived node starts against the tagged mainnet parameters
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse unpacked -Filter zycordd.exe | Select-Object -First 1
+          if (-not $exe) { throw "no zycordd.exe in the archive" }
+          $dir = Join-Path $env:RUNNER_TEMP "smoke"
+          $log = Join-Path $env:RUNNER_TEMP "smoke.log"
+          $p = Start-Process -FilePath $exe.FullName `
+                 -ArgumentList "--dir","$dir","--no-rpc" `
+                 -RedirectStandardOutput $log -RedirectStandardError "$log.err" `
+                 -PassThru -NoNewWindow
+          $ok = $false
+          foreach ($i in 1..120) {
+            Start-Sleep -Seconds 1
+            foreach ($f in @($log, "$log.err")) {
+              if ((Test-Path $f) -and (Select-String -Path $f -Pattern 'proof of work: ' -Quiet)) {
+                $ok = $true
+              }
+            }
+            if ($ok -or $p.HasExited) { break }
+          }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Get-Content $log,"$log.err" -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "the archived node did not start against the tagged mainnet parameters" }
+          Write-Host "the published Windows archive starts and names its engine"
 
   desktop:
     needs: windows
@@ -419,7 +518,7 @@ jobs:
   # the runner, so this adds no supply-chain surface to the one job in this
   # workflow that holds a write token.
   publish:
-    needs: [cli, cli-randomx, desktop]
+    needs: [cli, cli-randomx, randomx-smoke-windows, desktop]
     # Tags only. This workflow also answers `workflow_dispatch`, which exists so
     # the pipeline can be exercised without minting a tag -- and on that event
     # GITHUB_REF_NAME is a BRANCH name, so without this line a test run would

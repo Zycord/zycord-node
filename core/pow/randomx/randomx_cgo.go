@@ -13,6 +13,20 @@ package randomx
 // left to the toolchain on darwin, which links libc++ itself and warns about
 // the duplicate if we name it too.
 #cgo linux LDFLAGS: -lstdc++
+// Windows links the runtime STATICALLY, and that is the whole difference
+// between an archive somebody can unzip and run and one that opens a dialog
+// about a missing DLL.
+//
+// A mingw-w64 build otherwise leaves the binary depending on libstdc++-6.dll,
+// libgcc_s_seh-1.dll and libwinpthread-1.dll, none of which a stock Windows
+// carries and none of which this archive ships. The failure is not one a user
+// can act on either: Windows reports the missing module by name before any
+// code of ours has run, so the node never gets to say anything about itself.
+//
+// -lwinpthread comes after -lstdc++ because RandomX starts threads and the
+// GCC runtime pulls the pthread shim in; ld resolves left to right and the
+// shorter list does not link.
+#cgo windows LDFLAGS: -static -lstdc++ -lwinpthread
 
 #include <stdlib.h>
 #include "upstream/randomx.h"
