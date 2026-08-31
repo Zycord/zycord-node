@@ -32,7 +32,7 @@ tells you the file arrived intact. It is not evidence about what is in it.
 What says where these bytes came from is the build's own provenance
 attestation, not a signature of ours:
 
-    gh attestation verify <this archive> --repo <publisher>/zycord
+    gh attestation verify <this archive> --repo thesimstoshi/zycord
 
 That is GitHub attesting, at build time, that the file came out of the
 project's workflow at a named commit. It still tells you nothing about whether

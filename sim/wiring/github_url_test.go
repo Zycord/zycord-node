@@ -93,11 +93,37 @@ var forgeURL = regexp.MustCompile(`(?i)https?://(?:www\.)?github\.com/([A-Za-z0-
 // placeholders and third-party upstreams, so the account this repository must
 // never publish is refused by the default rather than by an exception.
 var allowedAccounts = map[string]string{
-	// The substitution placeholder. README, docs/INSTALL.md and everything
-	// under packaging/ write it and it is replaced at publication;
-	// RELEASE.md §8 has a checklist item for the substitution. It is a
-	// placeholder precisely so that no real name is committed here.
-	"publisher": "substitution placeholder, replaced at publication",
+	// The account this repository is published under.
+	//
+	// **This is the one entry that is the author, and adding it was a decision
+	// rather than a convenience.** The list was built so that the publishing
+	// account is refused BY DEFAULT, on the argument that publication is a
+	// one-way door and a name in the tree is an identity. That argument was
+	// written before publication. It has since happened: the repository lives
+	// at this account, every release archive is served from it, and a reader
+	// holding this tree got it from a URL that already carried the name. The
+	// guard was refusing to write down something the reader had to know to
+	// arrive.
+	//
+	// What it cost while it held is the part worth recording, because it is
+	// what tipped this. Install instructions could not name where to install
+	// from; the README could not link its own releases page and said "this
+	// repository's Releases page" in prose instead; the issue-template config
+	// could carry no contact_links at all, since those take an absolute URL.
+	// Three places where a reader was sent looking rather than pointed.
+	//
+	// **The property that matters survives intact**: this list is closed, so
+	// every OTHER account still fails, including the one that would actually
+	// deanonymise. Nothing about this entry loosens that -- it names one
+	// account, and the sweep for the rest is exactly as tight as it was.
+	"thesimstoshi": "the publishing account; see the note above for why it is here",
+
+	// The substitution placeholder, kept beside the real account rather than
+	// replaced by it. packaging/ still writes it: those files are copied into
+	// forks and mirrors, RELEASE.md §8 stamps them at publication, and a fork
+	// that inherits a hard-coded upstream account silently installs from
+	// somewhere its user did not choose.
+	"publisher": "substitution placeholder, still used by packaging/",
 
 	// Upstream RandomX: the pinned source this repository vendors. It names
 	// the upstream project, not us, and core/pow/randomx/PINNED exists to

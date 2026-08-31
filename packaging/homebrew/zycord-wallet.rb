@@ -19,11 +19,11 @@
 # in docs/INSTALL.md.
 class ZycordWallet < Formula
   desc "Desktop wallet for Zycord"
-  homepage "https://github.com/PUBLISHER/zycord"
-  url "https://github.com/PUBLISHER/zycord/archive/refs/tags/v0.0.0.tar.gz"
+  homepage "https://github.com/thesimstoshi/zycord"
+  url "https://github.com/thesimstoshi/zycord/archive/refs/tags/v0.0.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
-  head "https://github.com/PUBLISHER/zycord.git", branch: "main"
+  head "https://github.com/thesimstoshi/zycord.git", branch: "main"
 
   depends_on "go" => :build
   depends_on :macos
