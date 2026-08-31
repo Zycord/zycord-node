@@ -104,9 +104,11 @@
 #              would still be built and uploaded next to it. A gate that does not
 #              stop anything is a notification.
 #
-# Nothing here signs anything. SHA256SUMS is signed with the project key, by
-# hand, on a machine that is not a CI runner — a signing key in a CI secret is
-# a signing key held by whoever can push a workflow file.
+# Nothing here signs anything with the project key, and nothing downstream does
+# either. What this workflow produces instead is a build-provenance attestation
+# made by the build, about the build, with no secret to hold or to leak; the
+# `publish` job below records why the hand-signing step it replaced never
+# existed outside the documents that described it.
 
 name: release
 

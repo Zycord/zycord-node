@@ -272,17 +272,17 @@ is what the source compiles to*, checked by rebuilding; the checksum lists for
 that workflow*. The key remains what signs announcements — it just has no part
 in a download.
 
-Windows has no `-randomx` leg, and the reason is the pipeline rather than the
-code: a local `make build-randomx` on Windows with a MinGW-w64 toolchain does
-produce a working binary (measured — `zcd version` on it names `randomx-v1`),
-but nothing in `release.yml` can build one. cgo does not cross-compile from the
-Linux runner without a mingw toolchain in the image, and `windows-latest` ships
-neither GNU make nor `zip` on `PATH` — the same wall this section already
-records for `dist-desktop`. Holding the release for that would trade a stated
-limitation for an unstated delay, so Windows ships the pure-Go archive and
-`docs/INSTALL.md` and the Scoop notes say what it can and cannot do. Adding the
-leg later is a line in `release.yml`'s `cli-randomx` matrix, a mingw toolchain
-step, and a paragraph deleted from `INSTALL.md`.
+Windows x86-64 has a `-randomx` leg and it is the only one that is
+cross-compiled. `windows-latest` ships neither GNU make nor `zip` on `PATH`, so
+building natively would cost two tools to buy one compiler, while mingw on
+Ubuntu has all three; `dist-randomx` treats that as a supported path rather than
+a workaround, and refuses a `GOOS` assigned on the command line so the intent
+has to be put in the environment. The cost of cross-compiling is that the job
+cannot start what it built, so `randomx-smoke-windows` downloads the archive on
+a Windows runner and starts `zycordd.exe` there. Windows arm64 still has no leg:
+no cross-toolchain in the image, no native runner, so it ships the pure-Go
+archive and `docs/INSTALL.md` and the Scoop notes say what it can and cannot
+do.
 
 Wails reaches WebView2 through pure Go, so the Windows build has no cgo in it: it builds at `CGO_ENABLED=0` on a machine with no C compiler, and two builds of one commit are identical to the byte. `CGO_ENABLED=0` is *pinned* for that target rather than inherited from whichever machine runs it, so the property is stated instead of accidental.
 
