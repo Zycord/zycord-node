@@ -239,6 +239,46 @@ const selfPath = "sim/wiring/anonymity_test.go"
 //
 // Every other class is asserted over the vendored tree exactly as it is over
 // ours.
+// runnerLabel matches the GitHub-hosted runner labels that carry a hardware
+// vendor's name in them.
+//
+// There is exactly one today and the pattern is written tightly enough that a
+// second one has to be added deliberately: `macos-<n>-intel`, which is what
+// GitHub calls its x86-64 macOS image now that the numbered Intel images have
+// reached end of life. A workflow cannot spell it any other way -- `runs-on`
+// takes a literal label, not an expression that could be assembled from parts
+// -- so the choice is this pattern or no x86-64 macOS build at all.
+var runnerLabel = regexp.MustCompile(`\bmacos-[0-9]+-intel\b`)
+
+// vendorInRunnerLabel reports whether a hardware-vendor match sits INSIDE a
+// runner label in a workflow file, which is the one place the class fires on
+// something that is not about this machine.
+//
+// **This is the narrowest exemption the guard has and it is deliberately not
+// shaped like the other one.** `skipped` exempts a whole file for a whole
+// class; this exempts a single match, at a single position, on a line of a
+// workflow file, and only when that position falls inside a label GitHub
+// publishes. A vendor name anywhere else on the same line still fires, and so
+// does one in a workflow comment.
+//
+// The reasoning the class encodes is "a CPU vendor in this tree narrows who
+// wrote it". A runner label narrows nothing: it names a machine GitHub owns and
+// rents to everybody, and it is in the tree because the release has to build
+// for that architecture. Weighed the other way, the cost of not having it is
+// every x86-64 Mac losing the only archive that can join a network -- a real
+// population, paying for a false positive.
+func vendorInRunnerLabel(rel, class, line string, at []int) bool {
+	if class != classVendor || !strings.HasPrefix(rel, ".github/workflows/") {
+		return false
+	}
+	for _, span := range runnerLabel.FindAllStringIndex(line, -1) {
+		if at[0] >= span[0] && at[1] <= span[1] {
+			return true
+		}
+	}
+	return false
+}
+
 func skipped(rel, class string) bool {
 	if rel == selfPath {
 		// This file contains every pattern it scans for, so without the skip it
@@ -299,9 +339,12 @@ func TestNoMachineIdentifierIsPublished(t *testing.T) {
 				if skipped(f.path, id.class) {
 					continue
 				}
-				for _, m := range id.pattern.FindAllString(line, -1) {
+				for _, at := range id.pattern.FindAllStringIndex(line, -1) {
+					if vendorInRunnerLabel(f.path, id.class, line, at) {
+						continue
+					}
 					findings = append(findings, f.path+":"+strconv.Itoa(lineNo+1)+
-						"  ["+id.class+"] "+m)
+						"  ["+id.class+"] "+line[at[0]:at[1]])
 				}
 			}
 		}
@@ -381,5 +424,60 @@ func TestNothingPublishedIsOpaqueToTheTextScan(t *testing.T) {
 			"opaque blob; if something does, that is a review conversation and not\n"+
 			"an entry in an exemption table.",
 			len(opaque), strings.Join(opaque, "\n  "))
+	}
+}
+
+// TestTheRunnerLabelExemptionIsNarrow arms the one exemption that could hide a
+// real leak, because an exemption nobody probes is a hole nobody sees.
+//
+// Every occurrence on a line is judged, not the first. That is how the guard
+// itself works and it is the whole point of the mixed case below: a line
+// carrying the label AND a genuine mention must exempt one and report the
+// other, which a test that looked at a single match would call either way and
+// be wrong half the time.
+func TestTheRunnerLabelExemptionIsNarrow(t *testing.T) {
+	const wf = ".github/workflows/release.yml"
+	// Assembled rather than written out, so this file does not itself carry a
+	// vendor name the sweep would then have to be taught to ignore.
+	vendor := "int" + "el"
+	word := regexp.MustCompile(`(?i)\b` + vendor + `\b`)
+
+	for _, c := range []struct {
+		name string
+		path string
+		line string
+		// want[i] is whether the i-th occurrence on the line is exempted.
+		want []bool
+	}{
+		{"the label itself", wf, "          - os: macos-15-" + vendor, []bool{true}},
+		{"the label under runs-on", wf, "    runs-on: macos-15-" + vendor, []bool{true}},
+		{"label and a real mention together", wf,
+			"          - os: macos-15-" + vendor + "  # built on my " + vendor + " box",
+			[]bool{true, false}},
+		{"prose in a workflow", wf,
+			"      # measured on an " + vendor + " laptop", []bool{false}},
+		{"a version that is not a label", wf,
+			"    runs-on: macos-" + vendor, []bool{false}},
+		{"the same label outside a workflow", "docs/RELEASE.md",
+			"we build on macos-15-" + vendor, []bool{false}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			found := word.FindAllStringIndex(c.line, -1)
+			if len(found) != len(c.want) {
+				t.Fatalf("fixture carries %d occurrence(s), want[] has %d: %q",
+					len(found), len(c.want), c.line)
+			}
+			for i, at := range found {
+				got := vendorInRunnerLabel(c.path, classVendor, c.line, at)
+				if got != c.want[i] {
+					t.Errorf("occurrence %d at %d: exempted=%v, want %v\n"+
+						"  path: %s\n  line: %s\n"+
+						"The exemption covers a vendor name INSIDE a runner label in a\n"+
+						"workflow file and nothing else. If this now passes something\n"+
+						"wider, the class has stopped meaning what it says.",
+						i, at[0], got, c.want[i], c.path, c.line)
+				}
+			}
+		})
 	}
 }
