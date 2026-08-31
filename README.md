@@ -8,6 +8,59 @@ The result is a network whose **per-node cost falls as the network grows**, inst
 
 ---
 
+## Mine in 60 seconds
+
+The public testnet is live. There is no faucet — coins come from mining, which
+is the distribution mainnet gets too.
+
+**Take the archive with `-randomx` in its name** from this repository's
+Releases page. The plain one carries no proof-of-work engine and refuses to
+join a real network — it exists to be rebuilt and compared, not to be run.
+`zycord.com` has per-platform links if you would rather click than choose.
+
+Linux, or macOS on Apple Silicon:
+
+```sh
+tar xzf zycord-*-randomx.tar.gz
+cd zycord-*-randomx
+./zcd wallet new --out miner.json
+./zycordd --testnet --dir ./testnet \
+  --mine --payout $(./zcd wallet address --key miner.json)
+```
+
+**Windows** (PowerShell), from the `-windows-amd64-randomx.zip`:
+
+```powershell
+Expand-Archive zycord-*-windows-amd64-randomx.zip -DestinationPath .
+cd zycord-*-windows-amd64-randomx
+.\zcd.exe wallet new --out miner.json
+.\zycordd.exe --testnet --dir .\testnet `
+  --mine --payout (.\zcd.exe wallet address --key miner.json)
+```
+
+**What you should see.** `bootstrap: testnet.zycord.com:9421` and then
+`peers=1` or more within a minute — the network finds itself, there is no peer
+address to copy. Then a `block height=N` line each time you win one.
+
+**Where the coins are.** `zcd wallet balance --key miner.json`. A reward is
+spendable after `coinbase_maturity` blocks — 100 — so for roughly the first
+hundred blocks only miners can transact. That ramp is mainnet's, and it is part
+of what a public testnet rehearses: **mine to play**.
+
+**If you start it early, it waits.** A node started before a network's first
+block refuses to mine, says how long is left every ten minutes, and begins on
+its own. Nothing to schedule and nothing to restart.
+
+**Your operating system will warn you**, because there is no code-signing
+certificate and there will not be one — buying one means publishing a verified
+legal identity. On Windows: *More info* → *Run anyway*. On macOS: right-click
+the binary → *Open*, or `xattr -d com.apple.quarantine <file>`. Running from a
+terminal, which is what the commands above do, avoids the dialog on both.
+[How to verify what you downloaded](docs/INSTALL.md) — after you have it
+running, not before.
+
+---
+
 ## The 30-second version
 
 - **Certificates, not transactions.** A certificate declares its reads `[slot, value]` and writes `[slot, value]`. Validity = re-execute against the declared reads, compare the writes. Pure function of bytes. Embarrassingly parallel.
@@ -21,17 +74,32 @@ Read the [whitepaper](docs/whitepaper.md) for the argument, the [architecture sp
 
 ## Status
 
-**Pre-genesis. Under construction. Consensus rules are not final until the vector freeze (M5).**
+**Pre-genesis. The public testnet has been live since 2026-08-30. Mainnet
+genesis is 2026-09-15 00:00 UTC.** Consensus parameters and golden vectors
+freeze before that; until they do, a change is a release, and after they do, a
+change is a fork.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M0 — The fold on paper** | pure state machine + golden vectors + griefing suite + differential re-implementation | ✅ implemented, ✅ awaiting the 72 h fuzz run and external review |
+| **M0 — The fold on paper** | pure state machine, golden vectors, griefing suite, differential re-implementation | ✅ implemented; 🟡 the 72 h fuzz run is **in flight since 2026-08-31**; ⬜ external review open |
 | **M1 — One node** | storage, mempool, RPC, wallet CLI, dev-PoW | ✅ implemented |
-| **M2 — A network** | p2p, hash-first relay, sync, reorg torture | ✅ implemented, ✅ multi-day chaos soak open |
-| **M3 — Real work** | RandomX behind the `pow` interface, LWMA difficulty, the canonical build container | ✅ implemented, ✅ container delivered, ✅ two adversarial passes over the binding, ✅ awaiting external review (the open flood bound is non-consensus and carried to M3.5) |
-| **M3.5 — A public testnet** | resettable public testnet with faucetless self-mining, bootstrap nodes, scrape-format metrics | ✅ the four deliverables ship ([docs/TESTNET.md](docs/TESTNET.md)); ⬜ the [§1](docs/decisions/testnet-measurements.md#1-irreversible-at-genesis--a-wrong-value-is-permanent) measurements it exists to produce are uncollected |
-| **M4 — Adversaries** | public attack-net + bounty, external review, reproducible-build attestations | ⬜ the attestation tooling ships ([docs/RELEASE.md](docs/RELEASE.md)); the attack-net, the bounty and the external review are open |
-| **M5 — Genesis** | parameter freeze, vector freeze, v1.0, announced launch | ⬜ open; the launch date is set and nothing else in this row is done |
+| **M2 — A network** | p2p, hash-first relay, sync, reorg torture | ✅ implemented; 🟡 the multi-day chaos soak is **in flight since 2026-08-31** and is the thinnest evidence here |
+| **M3 — Real work** | RandomX behind the `pow` interface, LWMA difficulty, the canonical build container | ✅ implemented; ✅ two adversarial passes over the binding ([I7](docs/adversarial/I7.md)); ⬜ external review of the binding open |
+| **M3.5 — A public testnet** | resettable testnet, faucetless self-mining, bootstrap seed, scrape-format metrics | 🟢 **live** — [how to join](docs/TESTNET.md); ⬜ the [§1 measurements](docs/decisions/testnet-measurements.md) it exists to produce are still being collected |
+| **M4 — Adversaries** | public attack-net, external review, reproducible-build attestations | ⬜ **open and wanted.** The attestation tooling ships ([attestations/](attestations/)); no external review has been done. If you can break it, [SECURITY.md](SECURITY.md) |
+| **M5 — Genesis** | parameter freeze, vector freeze, v1.0, announced launch | 🟡 date set; the freeze is what closes it, and the four genesis-irreversible numbers are re-verified at the freeze commit ([RELEASE.md](docs/RELEASE.md)) |
+
+**Two rows say "in flight" rather than "done", and that is deliberate.** Both
+runs had been done before and their logs were not kept. A green checkmark whose
+evidence nobody can open is worth less than a yellow one with a date on it, so
+they are running again and the row changes when there is a record to link.
+
+**Why the history is three commits.** It was squashed before publication, as
+[RELEASE.md §1](docs/RELEASE.md) requires: the public tree is built from the
+working tree with no history, because a commit log is a timezone, a routine and
+a set of machine names as much as it is a record of changes. What the code was
+before is therefore not reconstructable from this repository, and the
+[adversarial reviews](docs/adversarial/) are where the reasoning lives instead.
 
 **What exists today.** The whole state machine: certificates, the four native operations, stateless validity, the fold, the block rules that enforce the billing law, proof-of-work and difficulty, the reproducible genesis, and a reference wallet that builds certificates. It is covered by the golden vectors in [`spec/vectors/`](spec/vectors/), a griefing suite that plays the malicious block producer, and a second deliberately naive implementation of the fold that is fuzzed against the first.
 
