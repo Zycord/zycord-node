@@ -615,7 +615,16 @@ jobs:
             printf '```\n\n'
             printf 'See docs/INSTALL.md for which archive you want, and why there are two.\n'
           } > "$notes"
+          # --repo is not optional here. This job never checks the source out
+          # -- it only downloads artefacts -- so there is no git repository in
+          # the working directory for `gh` to infer the target from, and
+          # without the flag it exits with "not a git repository" after every
+          # build job has already succeeded. The job is guarded by
+          # `if: startsWith(github.ref, 'refs/tags/')`, so a workflow_dispatch
+          # run skips it and cannot surface this; v0.1.1 was the first tag it
+          # ever ran on, and it failed there.
           gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
             --notes-file "$notes" \
             release/*
