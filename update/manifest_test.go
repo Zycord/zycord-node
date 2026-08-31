@@ -70,7 +70,8 @@ func goodManifest() string {
     "zycord-cli": {
       "assets": {
         "linux-amd64": {"file": "zycord-0.2.0-linux-amd64.tar.gz", "sha256": "` + d + `", "size": 7340032},
-        "linux-amd64-randomx": {"file": "zycord-0.2.0-linux-amd64-randomx.tar.gz", "sha256": "` + d + `", "size": 9437184}
+        "linux-amd64-randomx": {"file": "zycord-0.2.0-linux-amd64-randomx.tar.gz", "sha256": "` + d + `", "size": 9437184},
+        "windows-arm64": {"file": "zycord-0.2.0-windows-arm64.zip", "sha256": "` + d + `", "size": 7340032}
       }
     }
   }
@@ -142,16 +143,88 @@ func TestASignatureFromAStrangerIsRefused(t *testing.T) {
 	}
 }
 
-// TestTheSpareKeyIsAccepted is the property the whole rotation design rests on.
-func TestTheSpareKeyIsAccepted(t *testing.T) {
+// TestTheSpareSignsRotationsAndNothingElse is the hardening that keeps a stolen
+// spare from being strictly worse than a stolen signing key.
+//
+// The spare is accepted by every binary that carries it, so if it could sign
+// ordinary releases too, stealing it would buy everything stealing `current`
+// buys AND the ability to retire `current`. Restricting it does not make a
+// stolen spare harmless — it can still sign the rotation that promotes it — but
+// it forces the attack to be a visible, permanent, publicly signed key change
+// rather than a quiet release nobody looks at twice.
+func TestTheSpareSignsRotationsAndNothingElse(t *testing.T) {
 	s := newSigner(t)
-	raw := []byte(goodManifest())
+
+	raw := []byte(goodManifest()) // an ordinary release, no supersedes
+	if _, err := update.ParseManifest(raw, s.sign(s.next, raw), s.set); err == nil {
+		t.Error("the held-back key signed an ordinary release; a stolen spare would be strictly " +
+			"worse than a stolen signing key")
+	}
+
+	// The rotation it exists for still works.
+	raw = []byte(withSupersedes("zu1"))
 	m, err := update.ParseManifest(raw, s.sign(s.next, raw), s.set)
 	if err != nil {
-		t.Fatalf("a manifest signed by the held-back key was refused: %v", err)
+		t.Fatalf("the spare could not sign a rotation, which is the only thing it is for: %v", err)
 	}
 	if m.SignedBy != s.nextID {
 		t.Errorf("SignedBy = %q, want %q", m.SignedBy, s.nextID)
+	}
+}
+
+// TestARotationIsAnOrdinaryUpdateForTheBinariesItProduces is the regression for
+// the deadlock that made the rotation design not work at all.
+//
+// After a rotation the rotation manifest is still the newest release. A
+// freshly-updated binary holds zu2 as `current` and zu3 as `next`, and reads a
+// manifest signed by zu2 that supersedes zu1. The first version of
+// validateSupersedes read `supersedes` as a live instruction aimed at the
+// reader, so it demanded the signer be THIS build's spare — zu2 is not — and
+// refused. Every updated node then errored on every check until an unrelated
+// release shipped, which is exactly the fleet-wide breakage the spare exists to
+// avoid, and it broke the property PR 16's whole argument rests on.
+//
+// `supersedes` is a record of a transition, not a command. A build that has
+// already moved past it ignores it.
+func TestARotationIsAnOrdinaryUpdateForTheBinariesItProduces(t *testing.T) {
+	pub1, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub2, priv2, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub3, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := func(curID, cur, nextID, next string) update.KeySet {
+		ks, err := update.ParseKeys([]byte(fmt.Sprintf(
+			`{"schema":1,"algorithm":"ed25519","keys":[{"id":%q,"role":"current","key":%q},{"id":%q,"role":"next","key":%q}]}`,
+			curID, cur, nextID, next)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ks
+	}
+	h := hex.EncodeToString
+	before := set("zu1", h(pub1), "zu2", h(pub2)) // what shipped
+	after := set("zu2", h(pub2), "zu3", h(pub3))  // what the rotation produces
+
+	raw := []byte(withSupersedes("zu1"))
+	sig := []byte(h(ed25519.Sign(priv2, raw)) + "\n")
+
+	if _, err := update.ParseManifest(raw, sig, before); err != nil {
+		t.Fatalf("the rotation manifest was refused by the binaries it is aimed at: %v", err)
+	}
+	m, err := update.ParseManifest(raw, sig, after)
+	if err != nil {
+		t.Fatalf("the rotation manifest was refused by the binaries it PRODUCED, so every "+
+			"updated node errors on every check until an unrelated release ships: %v", err)
+	}
+	if m.Version != "v0.2.0" {
+		t.Errorf("Version = %q", m.Version)
 	}
 }
 
@@ -207,7 +280,7 @@ func TestASignedButUnusableManifestIsRefused(t *testing.T) {
 	good := hex.EncodeToString(sum[:])
 	for _, tc := range []struct{ name, raw string }{
 		{"a schema this build cannot read",
-			`{"schema":2,"project":"zycord","version":"v0.2.0","products":{"zycord-cli":{"assets":{}}}}`},
+			`{"schema":2,"project":"zycord","version":"v0.2.0","products":{"zycord-cli":{"assets":{"linux-amd64":{"file":"a.tar.gz","sha256":"` + good + `","size":10}}}}}`},
 		{"a manifest for another project",
 			`{"schema":1,"project":"notzycord","version":"v0.2.0","products":{"zycord-cli":{"assets":{}}}}`},
 		{"a version that is not a release tag",
@@ -216,8 +289,8 @@ func TestASignedButUnusableManifestIsRefused(t *testing.T) {
 			`{"schema":1,"project":"zycord","version":"tomorrow","products":{"zycord-cli":{"assets":{}}}}`},
 		{"no products at all",
 			`{"schema":1,"project":"zycord","version":"v0.2.0","products":{}}`},
-		{"an unknown top-level field",
-			`{"schema":1,"project":"zycord","version":"v0.2.0","mirror":"http://elsewhere","products":{"zycord-cli":{"assets":{}}}}`},
+		{"a product publishing no assets",
+			`{"schema":1,"project":"zycord","version":"v0.2.0","products":{"zycord-cli":{"assets":{}}}}`},
 		{"an asset whose file name is a path",
 			`{"schema":1,"project":"zycord","version":"v0.2.0","products":{"zycord-cli":{"assets":{"linux-amd64":{"file":"../../etc/cron.d/x","sha256":"` + good + `","size":10}}}}}`},
 		{"an asset with no usable digest",
@@ -239,36 +312,78 @@ func TestASignedButUnusableManifestIsRefused(t *testing.T) {
 	}
 }
 
-// TestTheTierIsNeverCrossed is the property that protects a working miner.
+// TestTheTierIsNeverCrossed is the property that protects a working miner, and
+// the fixture is the whole test.
 //
-// A -randomx binary on a platform the release does not publish -randomx for
-// must get an error, never the plain archive. Taking the plain one would leave
-// a machine that mines with a binary that refuses to start on any real network.
+// The first version of this test asked for windows-arm64-randomx against a
+// manifest that published NOTHING for windows-arm64 — so a tier-crossing
+// fallback would have had nothing to fall back to, and the test named for this
+// package's central property could not observe its violation. Adding a
+// deliberate `strings.CutSuffix(key, "-randomx")` fallback to Manifest.Asset
+// left the whole suite green.
+//
+// The fixture now publishes windows-arm64 as a PLAIN archive and no -randomx
+// one, which is the real shape: no cross-toolchain and no native runner for that
+// target. A fallback would find the plain archive, so refusing to take it is now
+// a thing the test can see.
 func TestTheTierIsNeverCrossed(t *testing.T) {
 	s := newSigner(t)
-	raw := []byte(goodManifest()) // publishes linux-amd64 and linux-amd64-randomx only
+	raw := []byte(goodManifest())
 	m, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The real case: Windows arm64 has no cross-toolchain and no native runner,
-	// so it genuinely has no -randomx archive.
-	key := update.PlatformKey("windows", "arm64", update.TierRandomX)
-	if _, err := m.Asset(update.ProductCLI, key); !errors.Is(err, update.ErrNoAssetForTier) {
-		t.Errorf("asking for %s gave err = %v, want ErrNoAssetForTier", key, err)
+	plain := update.MustPlatformKey("windows", "arm64", update.TierPlain)
+	randomx := update.MustPlatformKey("windows", "arm64", update.TierRandomX)
+
+	// The bait: there IS something to fall back to.
+	if _, err := m.Asset(update.ProductCLI, plain); err != nil {
+		t.Fatalf("the fixture no longer publishes %s, so this test proves nothing again: %v", plain, err)
+	}
+	// And it must not be taken.
+	if _, err := m.Asset(update.ProductCLI, randomx); !errors.Is(err, update.ErrNoAssetForTier) {
+		t.Errorf("asking for %s gave err = %v, want ErrNoAssetForTier — a binary that mines "+
+			"was handed a binary that refuses to start on any real network", randomx, err)
 	}
 
-	// And the tier must be part of the key, so the plain archive is not even
-	// addressable by a randomx binary's lookup.
-	if update.PlatformKey("linux", "amd64", update.TierPlain) == update.PlatformKey("linux", "amd64", update.TierRandomX) {
+	if update.MustPlatformKey("linux", "amd64", update.TierPlain) == randomx {
 		t.Fatal("the two tiers produce the same asset key, so nothing separates them")
 	}
-	if _, err := m.Asset(update.ProductCLI, update.PlatformKey("linux", "amd64", update.TierRandomX)); err != nil {
+	if _, err := m.Asset(update.ProductCLI, update.MustPlatformKey("linux", "amd64", update.TierRandomX)); err != nil {
 		t.Errorf("the randomx archive that IS published was not found: %v", err)
 	}
-	if _, err := m.Asset(update.ProductWallet, update.PlatformKey("linux", "amd64", update.TierPlain)); !errors.Is(err, update.ErrNoAssetForTier) {
+	if _, err := m.Asset(update.ProductWallet, update.MustPlatformKey("linux", "amd64", update.TierPlain)); !errors.Is(err, update.ErrNoAssetForTier) {
 		t.Errorf("an unpublished product resolved: %v", err)
+	}
+}
+
+// TestAKeyAndTheFileItNamesMustAgreeAboutTheTier closes the mislabel hole.
+//
+// Making the tier part of the asset key only makes a crossing unrepresentable if
+// the key and the archive it names agree. Otherwise a manifest whose
+// linux-amd64-randomx entry points at the PLAIN archive parses, validates and
+// installs — the tier crossed through the exact mechanism meant to prevent it,
+// and no signature is violated because the maintainer signed the mislabel.
+func TestAKeyAndTheFileItNamesMustAgreeAboutTheTier(t *testing.T) {
+	s := newSigner(t)
+	for _, tc := range []struct{ name, from, to string }{
+		{"a randomx key naming the plain archive",
+			`"linux-amd64-randomx": {"file": "zycord-0.2.0-linux-amd64-randomx.tar.gz"`,
+			`"linux-amd64-randomx": {"file": "zycord-0.2.0-linux-amd64.tar.gz"`},
+		{"a plain key naming the randomx archive",
+			`"linux-amd64": {"file": "zycord-0.2.0-linux-amd64.tar.gz"`,
+			`"linux-amd64": {"file": "zycord-0.2.0-linux-amd64-randomx.tar.gz"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(strings.Replace(goodManifest(), tc.from, tc.to, 1))
+			if string(raw) == goodManifest() {
+				t.Fatal("the fixture did not change, so this case tests nothing")
+			}
+			if _, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set); err == nil {
+				t.Error("accepted a manifest whose key and file disagree about the tier")
+			}
+		})
 	}
 }
 
@@ -281,10 +396,10 @@ func TestTierForMapsTheEngineToTheTier(t *testing.T) {
 	if got := update.TierFor(false); got != update.TierPlain {
 		t.Errorf("TierFor(false) = %q, want %q", got, update.TierPlain)
 	}
-	if got := update.PlatformKey("linux", "amd64", update.TierPlain); got != "linux-amd64" {
+	if got := update.MustPlatformKey("linux", "amd64", update.TierPlain); got != "linux-amd64" {
 		t.Errorf("plain key = %q", got)
 	}
-	if got := update.PlatformKey("linux", "amd64", update.TierRandomX); got != "linux-amd64-randomx" {
+	if got := update.MustPlatformKey("linux", "amd64", update.TierRandomX); got != "linux-amd64-randomx" {
 		t.Errorf("randomx key = %q", got)
 	}
 }
@@ -372,5 +487,165 @@ func TestTheSignatureFileIsParsedStrictly(t *testing.T) {
 				t.Error("accepted a malformed signature file")
 			}
 		})
+	}
+}
+
+// TestForwardCompatibilityIsPossibleAtAll.
+//
+// The manifest is a wire format read by binaries older than the release that
+// wrote it, and every one of those is frozen at genesis. If unknown fields were
+// refused, any field a later release needs would be rejected by every binary
+// already shipped — and bumping `schema` to add one makes those binaries refuse
+// the manifest outright, so between them there would be no way to add anything,
+// ever. The document is signed, so ignoring what we do not understand is free.
+//
+// This is the opposite of the rule keys.json is parsed under, deliberately: that
+// file is ours and must carry keys and nothing else.
+func TestForwardCompatibilityIsPossibleAtAll(t *testing.T) {
+	s := newSigner(t)
+	raw := []byte(strings.Replace(goodManifest(),
+		`"urgency": "routine",`,
+		`"urgency": "routine",`+"\n  "+`"a_field_from_a_later_release": {"nested": [1,2,3]},`, 1))
+	m, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set)
+	if err != nil {
+		t.Fatalf("a manifest carrying a field this build does not know was refused, which "+
+			"freezes the format at genesis: %v", err)
+	}
+	if m.Version != "v0.2.0" {
+		t.Errorf("Version = %q", m.Version)
+	}
+}
+
+// TestTrailingContentIsRefusedAfterACloseBracket covers the hole json.Decoder's
+// More() leaves.
+//
+// More() reports whether another element follows in an array or object, so it
+// answers false whenever the next byte is `]` or `}` — and the original check
+// accepted `{...}] anything at all`. The `{` case passed for an unrelated
+// reason, which is why the first test of this could not see it.
+func TestTrailingContentIsRefusedAfterACloseBracket(t *testing.T) {
+	s := newSigner(t)
+	for _, suffix := range []string{
+		`] anything at all`,
+		`}`,
+		`{"schema":1,"evil":true}`,
+		` [1,2,3]`,
+		`garbage`,
+	} {
+		t.Run(suffix, func(t *testing.T) {
+			raw := []byte(goodManifest() + suffix)
+			if _, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set); err == nil {
+				t.Errorf("accepted a document with %q after it", suffix)
+			}
+		})
+	}
+	// And trailing whitespace, which is not trailing content.
+	raw := []byte(goodManifest() + "\n\n  \t\n")
+	if _, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set); err != nil {
+		t.Errorf("trailing whitespace was treated as content: %v", err)
+	}
+}
+
+// TestAnAssetKeyMustLookLikeOne.
+//
+// Without a shape check a typo'd key is indistinguishable from "we publish
+// nothing for your platform": `"linux-amd64 "` silently offers nothing to every
+// linux-amd64 node, and the failure surfaces as silence rather than as the
+// maintainer error it is.
+func TestAnAssetKeyMustLookLikeOne(t *testing.T) {
+	sum := sha256.Sum256([]byte("x"))
+	good := hex.EncodeToString(sum[:])
+	for _, key := range []string{
+		"linux-amd64 ", " linux-amd64", "linux amd64", "Linux-amd64",
+		"linux", "linux-amd64-randomx-extra", "-linux-amd64", "linux-amd64-",
+		"linux--amd64", "", "linux/amd64", "linux-amd64\n",
+	} {
+		t.Run(key, func(t *testing.T) {
+			s := newSigner(t)
+			raw := []byte(fmt.Sprintf(
+				`{"schema":1,"project":"zycord","version":"v0.2.0","products":{"zycord-cli":{"assets":{%q:{"file":"a.tar.gz","sha256":%q,"size":10}}}}}`,
+				key, good))
+			if _, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set); err == nil {
+				t.Errorf("accepted asset key %q", key)
+			}
+		})
+	}
+}
+
+// TestAnAssetFileMustBeAPlainName.
+//
+// The deny-list this replaced tested only the two path separators and accepted
+// every other way a name becomes something else. Each case names the shape it
+// stands for, and every one is asserted rather than exempted — an exemption list
+// in a test is how a check that stopped running keeps looking like it runs.
+func TestAnAssetFileMustBeAPlainName(t *testing.T) {
+	sum := sha256.Sum256([]byte("x"))
+	good := hex.EncodeToString(sum[:])
+	for _, tc := range []struct{ file, why string }{
+		{"../../etc/cron.d/x", "a POSIX path"},
+		{"C:evil", "a Windows drive-relative path"},
+		{"a.tar.gz:stream", "an NTFS alternate data stream"},
+		{"CON", "a Windows reserved device name"},
+		{"nul.tar.gz", "a reserved device name with an extension"},
+		{"-rf", "a name that becomes a flag"},
+		{"%2e%2e%2fetc", "an encoded traversal something downstream may decode"},
+		{"...", "a name that is only dots"},
+		{"..a", "a name containing .."},
+		{".hidden", "a leading dot"},
+		{"", "no name at all"},
+		{"a b.tar.gz", "an embedded space"},
+		{"sub/dir.tar.gz", "a subdirectory"},
+	} {
+		t.Run(tc.why, func(t *testing.T) {
+			s := newSigner(t)
+			raw := []byte(fmt.Sprintf(
+				`{"schema":1,"project":"zycord","version":"v0.2.0","products":{"zycord-cli":{"assets":{"linux-amd64":{"file":%q,"sha256":%q,"size":10}}}}}`,
+				tc.file, good))
+			if _, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set); err == nil {
+				t.Errorf("accepted asset file %q (%s)", tc.file, tc.why)
+			}
+		})
+	}
+
+	// And the shape a real archive has must still pass.
+	for _, file := range []string{
+		"zycord-0.2.0-linux-amd64.tar.gz",
+		"zycord-0.2.0-windows-amd64.zip",
+		"zycord-wallet-0.2.0-darwin-arm64.zip",
+	} {
+		t.Run("accepts "+file, func(t *testing.T) {
+			s := newSigner(t)
+			raw := []byte(fmt.Sprintf(
+				`{"schema":1,"project":"zycord","version":"v0.2.0","products":{"zycord-cli":{"assets":{"linux-amd64":{"file":%q,"sha256":%q,"size":10}}}}}`,
+				file, good))
+			if _, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set); err != nil {
+				t.Errorf("refused a real archive name %q: %v", file, err)
+			}
+		})
+	}
+}
+
+// TestTheNoteCannotReverseItself is the Trojan-Source case a C0/C1 filter leaves
+// open: U+202E reverses everything after it, so a signed note can be made to
+// read as the opposite of what a reader would copy.
+func TestTheNoteCannotReverseItself(t *testing.T) {
+	s := newSigner(t)
+	const rlo = "\\u202e"  // RIGHT-TO-LEFT OVERRIDE
+	const zwsp = "\\u200b" // ZERO WIDTH SPACE
+	raw := []byte(strings.Replace(goodManifest(), `"Nothing alarming."`,
+		`"Safe update.`+rlo+`gs.live/tag`+zwsp+`elif"`, 1))
+	if !strings.Contains(string(raw), "u202e") {
+		t.Fatal("the fixture lost its escapes, so this test proves nothing")
+	}
+	m, err := update.ParseManifest(raw, s.sign(s.current, raw), s.set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range m.Note {
+		if (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) ||
+			r == 0x200b || r == 0x200c || r == 0x200d || r == 0xfeff ||
+			r == 0x200e || r == 0x200f || r == 0x061c {
+			t.Errorf("the note kept %U, which can make it read as something else", r)
+		}
 	}
 }

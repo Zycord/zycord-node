@@ -13,10 +13,10 @@ import (
 // cope with six shapes rather than one:
 //
 //	v0.1.1                     a release, exactly
-//	v0.1.1-9-gc861966          nine commits past a release
-//	v0.1.1-9-gc861966-dirty    ...with uncommitted changes
+//	v0.1.1-9-gab12cd3          nine commits past a release
+//	v0.1.1-9-gab12cd3-dirty    ...with uncommitted changes
 //	v1.0.0-rc1-2-gdeadbee      a pre-release, two commits past it
-//	c861966                    --always, when no tag is reachable
+//	ab12cd3                    --always, when no tag is reachable
 //	dev                        the unstamped default
 //
 // The ambiguity worth naming: `git describe` joins the commit count with a
@@ -189,46 +189,91 @@ func comparePre(a, b string) int {
 	return cmpInt(len(af), len(bf))
 }
 
-// compareAlnumIdentifier orders two alphanumeric pre-release identifiers,
-// comparing a trailing run of digits numerically when the alphabetic part is
-// the same.
+// compareAlnumIdentifier orders two alphanumeric pre-release identifiers by
+// splitting each into alternating runs of letters and digits and comparing them
+// run by run.
 //
-// **This deviates from semver, deliberately, and the deviation is the safe
-// direction.** Semver compares a single alphanumeric identifier by ASCII, so
-// `rc10` sorts BELOW `rc2` — it wants `rc.10` and `rc.2` if you meant numbers.
-// Nobody tags that way. Everybody tags `-rc1`, `-rc2`, `-rc10`.
+// **Two rules, and the second is a deliberate deviation from semver.**
 //
-// The cost of following the letter of the specification here is not a
-// mis-sorted list. Compare is what the downgrade refusal is built on, so a node
-// running rc10 offered rc2 would read `+1`, call it newer, and install the
-// older binary — the exact attack the refusal exists to stop, arriving through
-// the ordering rather than past it. So `rc2 < rc10`, and a dotted identifier
-// still compares by the semver rule above.
+// Semver compares a single alphanumeric identifier by ASCII, so `rc10` sorts
+// BELOW `rc2` — it wants `rc.10` and `rc.2` if you meant numbers. Nobody tags
+// that way; everybody tags `-rc1`, `-rc2`, `-rc10`. And Compare is what the
+// downgrade refusal is built on, so following the letter here would let a node
+// running rc10 read rc2 as newer and install it: the exact rollback the refusal
+// exists to stop, arriving through the ordering rather than past it.
+//
+// **The run-by-run shape is what makes it a TOTAL order, and that matters more
+// than the deviation.** The first version of this function special-cased a
+// trailing digit run and fell back to a byte comparison otherwise, which mixed
+// two incompatible orderings over one domain and was intransitive:
+//
+//	rc9 < rc10 < rc10a < rc9
+//
+// All three parse as releases, so nothing upstream excluded them, and an
+// install-if-newer loop over that set never terminates. Here each run is
+// compared under one total order — digit runs by value, letter runs by bytes,
+// a digit run below a letter run, following semver's own rule that numeric
+// identifiers have the lower precedence — and a lexicographic extension of a
+// total order is a total order. Transitivity is a property of the shape rather
+// than of the cases anybody thought to test, which is the only way to hold it.
+//
+// TestCompareIsATotalOrder brute-forces it over the shapes that produced the
+// cycle.
 func compareAlnumIdentifier(a, b string) int {
-	aAlpha, aNum, aOK := splitTrailingDigits(a)
-	bAlpha, bNum, bOK := splitTrailingDigits(b)
-	if aOK && bOK && aAlpha == bAlpha {
-		return cmpInt(aNum, bNum)
+	ar, br := splitRuns(a), splitRuns(b)
+	for i := 0; i < len(ar) && i < len(br); i++ {
+		if c := compareRun(ar[i], br[i]); c != 0 {
+			return c
+		}
 	}
-	return strings.Compare(a, b)
+	return cmpInt(len(ar), len(br))
 }
 
-// splitTrailingDigits divides "rc10" into "rc" and 10. It reports false when
-// there is no trailing digit run, or no alphabetic part before it, or the digits
-// do not fit an int.
-func splitTrailingDigits(s string) (string, int, bool) {
-	i := len(s)
-	for i > 0 && s[i-1] >= '0' && s[i-1] <= '9' {
-		i--
+// splitRuns divides an identifier into maximal runs of digits and non-digits:
+// "rc10a" becomes ["rc", "10", "a"].
+func splitRuns(s string) []string {
+	var out []string
+	for i := 0; i < len(s); {
+		j := i
+		digit := isDigit(s[i])
+		for j < len(s) && isDigit(s[j]) == digit {
+			j++
+		}
+		out = append(out, s[i:j])
+		i = j
 	}
-	if i == 0 || i == len(s) {
-		return s, 0, false
+	return out
+}
+
+// compareRun is the total order on runs that everything above rests on.
+func compareRun(a, b string) int {
+	an, bn := isDigit(a[0]), isDigit(b[0])
+	switch {
+	case an && bn:
+		// By value, and by length first so an arbitrarily long run cannot
+		// overflow: with no leading zeroes, more digits is a larger number.
+		if c := cmpInt(len(trimZeroes(a)), len(trimZeroes(b))); c != 0 {
+			return c
+		}
+		return strings.Compare(trimZeroes(a), trimZeroes(b))
+	case an:
+		return -1 // a numeric run has lower precedence than a letter run
+	case bn:
+		return 1
+	default:
+		return strings.Compare(a, b)
 	}
-	n, err := strconv.Atoi(s[i:])
-	if err != nil {
-		return s, 0, false
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// trimZeroes drops leading zeroes so "007" and "7" compare equal by length.
+func trimZeroes(s string) string {
+	i := 0
+	for i < len(s)-1 && s[i] == '0' {
+		i++
 	}
-	return s[:i], n, true
+	return s[i:]
 }
 
 func cmpInt(a, b int) int {

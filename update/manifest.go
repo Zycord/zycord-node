@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -96,10 +97,16 @@ type Manifest struct {
 var (
 	// ErrBadSignature is a manifest no held key verifies. It is never
 	// "no update available": it is a compromise or a broken release.
-	ErrBadSignature = errors.New("update: the manifest is not signed by any key this build carries")
-	// ErrUnknownKey is the stranded-binary case, separated from ErrBadSignature
-	// because the operator's next step is completely different.
-	ErrUnknownKey = errors.New("update: the manifest names a signing key this build does not carry")
+	// ErrBadSignature is a manifest no held key verifies.
+	//
+	// It deliberately covers two cases this build CANNOT tell apart: a forgery,
+	// and a legitimate release signed by a key introduced after this binary was
+	// published. A schema 1 manifest carries no signer id, so there is nothing
+	// to distinguish them by — and a separate "unknown key" error would have
+	// been a promise to make a distinction that no field supports. Saying so is
+	// the honest version; the message names both possibilities.
+	ErrBadSignature = errors.New("update: the manifest is not signed by any key this build carries - " +
+		"either it is not ours, or it is a release signed by a key introduced after this binary was published")
 	// ErrNoAssetForTier is a release that publishes nothing for this platform
 	// and tier.
 	ErrNoAssetForTier = errors.New("update: this release publishes no archive for this platform and tier")
@@ -119,8 +126,12 @@ func ParseManifest(raw, sig []byte, ks KeySet) (*Manifest, error) {
 	signer := ""
 	for _, k := range ks.Keys {
 		pub, err := hex.DecodeString(k.Key)
-		if err != nil {
-			continue // ParseKeys already refused these; belt and braces
+		// ParseKeys refuses both of these, but KeySet is exported with exported
+		// fields and can be built by hand or by json.Unmarshal. ed25519.Verify
+		// PANICS on a key that is not 32 bytes, so an unchecked length here is a
+		// process crash reachable from an ordinary struct literal.
+		if err != nil || len(pub) != ed25519.PublicKeySize {
+			continue
 		}
 		if ed25519.Verify(ed25519.PublicKey(pub), raw, signature) {
 			signer = k.ID
@@ -134,12 +145,27 @@ func ParseManifest(raw, sig []byte, ks KeySet) (*Manifest, error) {
 	// Only now does a decoder see these bytes.
 	var m Manifest
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
+	// Unknown fields are IGNORED here, and that is the opposite of the rule
+	// keys.json is parsed under. The asymmetry is deliberate and it is about
+	// what each file is for.
+	//
+	// keys.json is ours and must carry keys and nothing else, so an unexpected
+	// field there is a mistake to catch. The manifest is a wire format that has
+	// to be read by binaries older than the release that wrote it — and every
+	// one of those is frozen at genesis. Refusing unknown fields would mean any
+	// field a later release needs is rejected by every binary already shipped,
+	// while bumping `schema` to add one makes those binaries refuse the manifest
+	// outright. Between them there would be no way to add anything, ever. The
+	// document is signed, so ignoring what we do not understand costs nothing.
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("update: the manifest is signed but does not parse: %w", err)
 	}
-	if dec.More() {
-		return nil, errors.New("update: the manifest has trailing content after the document")
+	// dec.More() is NOT this check: it reports whether another element follows
+	// in an array or object, so it answers false whenever the next byte is `]`
+	// or `}` and accepts `{...}] anything at all`. What is wanted is that the
+	// document is the whole file.
+	if rest := bytes.TrimSpace(raw[dec.InputOffset():]); len(rest) != 0 {
+		return nil, fmt.Errorf("update: the manifest has %d bytes of trailing content after the document", len(rest))
 	}
 	m.SignedBy = signer
 
@@ -208,42 +234,123 @@ func (m *Manifest) validate(ks KeySet) error {
 		return errors.New("update: the manifest publishes no products")
 	}
 	for name, p := range m.Products {
+		if len(p.Assets) == 0 {
+			return fmt.Errorf("update: product %q publishes no assets", name)
+		}
 		for key, a := range p.Assets {
+			if err := validatePlatformKey(key); err != nil {
+				return fmt.Errorf("update: %s: %w", name, err)
+			}
 			if err := a.validate(); err != nil {
-				return fmt.Errorf("update: %s/%s: %w", name, key, err)
+				// %q, not %s: the key is decoded from the document and may hold
+				// anything a JSON string can, escapes included. It is signed,
+				// which says where it came from, not that it is safe to print.
+				return fmt.Errorf("update: %s/%q: %w", name, key, err)
+			}
+			// The tier is part of the asset KEY, and this is what stops that
+			// from being a convention nobody enforces. Without it a manifest
+			// whose linux-amd64-randomx entry names the PLAIN archive parses,
+			// validates and installs - the tier crossed by a mislabel, through
+			// the exact mechanism that was supposed to make crossing it
+			// unrepresentable. A key and the file it names must agree.
+			if got, want := FileNamesRandomX(a.File), KeyNamesRandomX(key); got != want {
+				return fmt.Errorf("update: %s/%q names file %q; the key and the file disagree about the tier",
+					name, key, a.File)
 			}
 		}
 	}
 	return m.validateSupersedes(ks)
 }
 
-// validateSupersedes enforces the one rule in this package that cannot be
-// turned around.
+// validateSupersedes decides what a key-rotation claim means to THIS build.
 //
-// **Only the key held as `next` may revoke the key held as `current`, and only
-// by superseding it.** A general in-band revocation list would be a weapon: an
-// attacker holding the stolen current key could sign a manifest revoking the
-// GOOD key and strand every node permanently. Under this rule a stolen current
-// key can revoke nothing at all, because it is nobody's spare — so the worst it
-// buys is what it already had, the ability to sign a release.
+// The rule that cannot be turned around: **only the key held as `next` may
+// retire the key held as `current`.** A general in-band revocation would be a
+// weapon — an attacker holding the stolen current key could sign a manifest
+// retiring the GOOD key and strand every node permanently, turning a key
+// compromise into an unrecoverable one. Under this rule a stolen current key can
+// revoke nothing, because it is nobody's spare.
 //
-// TestAStolenCurrentKeyCannotRevokeTheSpare is named for the attack.
+// **And `supersedes` is a record of a transition, not an instruction aimed at
+// the reader.** The first version of this function read it as a live command and
+// deadlocked the rotation it existed to enable: after the rotation the manifest
+// is still the newest release, but to a freshly-updated binary — which now holds
+// zu2 as `current` and zu3 as `next` — a manifest signed by zu2 superseding zu1
+// is signed by something that is not its spare, so it was refused. Every updated
+// node then errored on every check until an unrelated release shipped, which is
+// exactly the fleet-wide breakage the spare exists to avoid.
+//
+// So the claim is judged against what this build actually holds:
+//
+//   - It names our current key. That is a live promotion, and only our spare may
+//     make it.
+//   - It names our spare. Nobody may retire our spare; refuse, loudly.
+//   - It names anything else — including a key retired before this build existed.
+//     A record of somebody else's transition. Ignore it.
 func (m *Manifest) validateSupersedes(ks KeySet) error {
-	if m.Supersedes == "" {
+	current, hasCurrent := ks.KeyByRole(RoleCurrent)
+	next, hasNext := ks.KeyByRole(RoleNext)
+
+	// The spare signs rotations and nothing else.
+	//
+	// Without this, a stolen spare is strictly worse than a stolen current key:
+	// it could sign ordinary releases AND retire the signing key. Restricting it
+	// does not make a stolen spare harmless — it can still sign the rotation that
+	// promotes it — but it forces the attack to be a visible, permanent, publicly
+	// signed key change rather than a quiet release nobody looks at twice.
+	if hasNext && hasCurrent && m.SignedBy == next.ID && m.Supersedes != current.ID {
+		return fmt.Errorf("update: the manifest is signed by the held-back key %q but does not retire %q; "+
+			"the spare signs key rotations and nothing else", next.ID, current.ID)
+	}
+
+	switch {
+	case m.Supersedes == "":
+		return nil
+
+	case hasCurrent && m.Supersedes == current.ID:
+		if !hasNext {
+			return fmt.Errorf("update: the manifest retires key %q, but this build holds no spare to promote", current.ID)
+		}
+		if m.SignedBy != next.ID {
+			return fmt.Errorf("update: the manifest retires key %q but is signed by %q; "+
+				"only the held-back key %q may retire the signing key", m.Supersedes, m.SignedBy, next.ID)
+		}
+		return nil
+
+	case hasNext && m.Supersedes == next.ID:
+		return fmt.Errorf("update: the manifest retires key %q, which is this build's spare; "+
+			"nothing may retire the spare, because that is the key a compromise is recovered with", m.Supersedes)
+
+	default:
+		// A key this build does not hold in either role. Most often: the record
+		// of a rotation that happened before this binary was published, or the
+		// one that produced it. Not addressed to us.
 		return nil
 	}
-	next, hasNext := ks.KeyByRole(RoleNext)
-	current, hasCurrent := ks.KeyByRole(RoleCurrent)
-	if !hasNext || !hasCurrent {
-		return errors.New("update: the manifest supersedes a key, but this build holds no spare to promote")
+}
+
+// validatePlatformKey refuses a key that is not <os>-<arch>[-randomx] in shape.
+//
+// Without this a typo'd key is indistinguishable from "we publish nothing for
+// your platform": a manifest with "linux-amd64 " (trailing space) silently
+// offers nothing to every linux-amd64 node, and the failure surfaces as silence
+// rather than as the maintainer error it is.
+func validatePlatformKey(key string) error {
+	if key == "" {
+		return errors.New("an asset key is empty")
 	}
-	if m.SignedBy != next.ID {
-		return fmt.Errorf("update: the manifest supersedes key %q but is signed by %q, which is not this build's spare; "+
-			"only the held-back key may retire the signing key", m.Supersedes, m.SignedBy)
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		ok := c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-'
+		if !ok {
+			return fmt.Errorf("asset key %q is not <os>-<arch>[-randomx] in shape", key)
+		}
 	}
-	if m.Supersedes != current.ID {
-		return fmt.Errorf("update: the manifest supersedes key %q, which is not this build's signing key %q",
-			m.Supersedes, current.ID)
+	if n := strings.Count(key, "-"); n < 1 || n > 2 {
+		return fmt.Errorf("asset key %q is not <os>-<arch>[-randomx] in shape", key)
+	}
+	if strings.HasPrefix(key, "-") || strings.HasSuffix(key, "-") || strings.Contains(key, "--") {
+		return fmt.Errorf("asset key %q is not <os>-<arch>[-randomx] in shape", key)
 	}
 	return nil
 }
@@ -252,11 +359,18 @@ func (a Asset) validate() error {
 	if a.File == "" {
 		return errors.New("the asset names no file")
 	}
-	// The filename is used to build a URL and to name a file on disk. It is
-	// signed, so this is not defence against a stranger — it is defence against
-	// a maintainer's typo becoming a path.
-	if strings.ContainsAny(a.File, `/\`) || a.File == "." || a.File == ".." {
-		return fmt.Errorf("the asset file %q is a path rather than a name", a.File)
+	// The filename is used to build a URL and to name a file on disk, so it is
+	// checked against an ALLOW-LIST rather than a list of separators to reject.
+	// The deny-list this replaced tested only the two path separators, and
+	// accepted every other way a name becomes something else: `C:evil` and
+	// `a.tar.gz:stream` (NTFS drive-relative paths and alternate data streams),
+	// `-rf` (a name that becomes a flag), `%2e%2e%2fetc` (decoded by something
+	// downstream), `...`, `.hidden`, and names carrying NUL or a newline.
+	//
+	// It is signed, so this is not defence against a stranger; it is defence
+	// against a maintainer typo becoming a path on somebody else's disk.
+	if err := validAssetFileName(a.File); err != nil {
+		return err
 	}
 	raw, err := hex.DecodeString(a.SHA256)
 	if err != nil || len(raw) != sha256.Size {
@@ -274,6 +388,53 @@ func (a Asset) validate() error {
 	}
 	return nil
 }
+
+// validAssetFileName allows exactly what a release archive is named: lower-case
+// letters, digits, dot, dash and underscore, not starting with a dot or a dash.
+func validAssetFileName(f string) error {
+	if f == "" {
+		return errors.New("the asset names no file")
+	}
+	if len(f) > 128 {
+		return fmt.Errorf("the asset file name is %d characters", len(f))
+	}
+	for i := 0; i < len(f); i++ {
+		c := f[i]
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '.' || c == '-' || c == '_'
+		if !ok {
+			return fmt.Errorf("the asset file %q is not a plain file name", f)
+		}
+	}
+	if f[0] == '.' || f[0] == '-' {
+		return fmt.Errorf("the asset file %q starts with %q", f, string(f[0]))
+	}
+	if strings.Contains(f, "..") {
+		return fmt.Errorf("the asset file %q contains %q", f, "..")
+	}
+	// Windows reserved device names, which are not files: opening CON writes to
+	// the console, NUL discards. Reserved with any extension and case, so the
+	// check is on the stem. Defence in depth - a release archive is never named
+	// this - but it costs one lookup and the failure mode is a download that
+	// silently goes nowhere.
+	stem := f
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	if reservedDeviceNames[strings.ToUpper(stem)] {
+		return fmt.Errorf("the asset file %q is a reserved device name", f)
+	}
+	return nil
+}
+
+var reservedDeviceNames = func() map[string]bool {
+	m := map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true}
+	for i := 1; i <= 9; i++ {
+		m["COM"+strconv.Itoa(i)] = true
+		m["LPT"+strconv.Itoa(i)] = true
+	}
+	return m
+}()
 
 // maxArchive is the absolute ceiling on a downloadable archive, independent of
 // what a manifest asks for. The manifest's own Size is the operative bound; this
@@ -328,6 +489,15 @@ func sanitiseNote(s string) string {
 			// C0, DEL and C1. Dropped rather than escaped: there is nothing an
 			// operator needs from them and no rendering of them that is safer
 			// than their absence.
+		case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x061c, r == 0x200f, r == 0x200e:
+			// Bidirectional overrides and isolates. Under this function's own
+			// model - signed says where it came from, not that it is safe to
+			// print - Trojan-Source text is the hole a C0/C1 filter leaves
+			// open: U+202E reverses everything after it, so a note can be made
+			// to read as the opposite of what a reader would copy.
+		case r == 0x200b, r == 0x200c, r == 0x200d, r == 0xfeff:
+			// Zero-width characters, which hide differences between two strings
+			// that a reader is being asked to compare.
 		default:
 			b.WriteRune(r)
 		}

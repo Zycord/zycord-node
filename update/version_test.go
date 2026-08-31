@@ -21,8 +21,8 @@ func TestParseVersionReadsWhatTheBuildActuallyStamps(t *testing.T) {
 		{in: "v0.1.1", major: 0, minor: 1, patch: 1, release: true},
 		{in: "0.1.1", major: 0, minor: 1, patch: 1, release: true},
 		{in: "v1.2.3", major: 1, minor: 2, patch: 3, release: true},
-		{in: "v0.1.1-9-gc861966", major: 0, minor: 1, patch: 1, ahead: 9, commit: "gc861966"},
-		{in: "v0.1.1-9-gc861966-dirty", major: 0, minor: 1, patch: 1, ahead: 9, commit: "gc861966", dirty: true},
+		{in: "v0.1.1-9-gab12cd3", major: 0, minor: 1, patch: 1, ahead: 9, commit: "gab12cd3"},
+		{in: "v0.1.1-9-gab12cd3-dirty", major: 0, minor: 1, patch: 1, ahead: 9, commit: "gab12cd3", dirty: true},
 		{in: "v0.1.1-dirty", major: 0, minor: 1, patch: 1, dirty: true},
 		{in: "v1.0.0-rc1", major: 1, minor: 0, patch: 0, pre: "rc1", release: true},
 		// The shape the parser exists for: `rc1` is the pre-release and
@@ -138,7 +138,7 @@ func TestCompareOrdersByTheTripleAndNotTheString(t *testing.T) {
 		{"v1.0.0-1", "v1.0.0-alpha", -1}, // numeric has lower precedence
 		// Commits ahead and dirtiness are not ordering information: two builds
 		// from one tag are the same release for "is something newer published".
-		{"v0.1.1", "v0.1.1-9-gc861966", 0},
+		{"v0.1.1", "v0.1.1-9-gab12cd3", 0},
 		{"v0.1.1-dirty", "v0.1.1", 0},
 	} {
 		t.Run(tc.a+" vs "+tc.b, func(t *testing.T) {
@@ -172,9 +172,9 @@ func TestOnlyAnExactTagIsARelease(t *testing.T) {
 	}{
 		{"v0.1.1", true},
 		{"v1.0.0-rc1", true}, // a pre-release tag is still exactly a tag
-		{"v0.1.1-9-gc861966", false},
+		{"v0.1.1-9-gab12cd3", false},
 		{"v0.1.1-dirty", false},
-		{"v0.1.1-9-gc861966-dirty", false},
+		{"v0.1.1-9-gab12cd3-dirty", false},
 	} {
 		t.Run(tc.in, func(t *testing.T) {
 			v, err := update.ParseVersion(tc.in)
@@ -183,6 +183,88 @@ func TestOnlyAnExactTagIsARelease(t *testing.T) {
 			}
 			if v.Release != tc.release {
 				t.Errorf("Release = %v, want %v", v.Release, tc.release)
+			}
+		})
+	}
+}
+
+// TestCompareIsATotalOrder brute-forces the property that cannot be held by
+// picking cases.
+//
+// The first version of compareAlnumIdentifier mixed numeric-tail ordering with
+// byte ordering over one domain and produced a strict 3-cycle —
+// rc9 < rc10 < rc10a < rc9 — which the hand-written table missed because it
+// asserted only antisymmetry. All three parse as releases, so nothing upstream
+// excluded them, and an install-if-newer loop over that set never terminates.
+//
+// Transitivity has to be a property of the shape rather than of the cases
+// anybody thought of, so this checks every triple.
+func TestCompareIsATotalOrder(t *testing.T) {
+	raw := []string{
+		"v1.0.0-rc1", "v1.0.0-rc2", "v1.0.0-rc9", "v1.0.0-rc10", "v1.0.0-rc10a",
+		"v1.0.0-rc10b", "v1.0.0-rc1a", "v1.0.0-alpha", "v1.0.0-alpha1", "v1.0.0-alpha.1",
+		"v1.0.0-alpha.beta", "v1.0.0-beta", "v1.0.0-beta.2", "v1.0.0-beta.11",
+		"v1.0.0-1", "v1.0.0-2", "v1.0.0-11", "v1.0.0-007", "v1.0.0-7",
+		"v1.0.0", "v1.0.1", "v1.1.0", "v2.0.0", "v0.9.0", "v0.10.0",
+	}
+	vs := make([]update.Version, len(raw))
+	for i, r := range raw {
+		v, err := update.ParseVersion(r)
+		if err != nil {
+			t.Fatalf("ParseVersion(%q): %v", r, err)
+		}
+		vs[i] = v
+	}
+
+	// Antisymmetry, and a comparison that never disagrees with itself.
+	for i := range vs {
+		for j := range vs {
+			if a, b := vs[i].Compare(vs[j]), vs[j].Compare(vs[i]); a != -b {
+				t.Fatalf("not antisymmetric: %s vs %s = %d, reverse = %d", raw[i], raw[j], a, b)
+			}
+		}
+	}
+
+	// Transitivity. This is the one that failed.
+	for i := range vs {
+		for j := range vs {
+			for k := range vs {
+				ij, jk, ik := vs[i].Compare(vs[j]), vs[j].Compare(vs[k]), vs[i].Compare(vs[k])
+				if ij <= 0 && jk <= 0 && ik > 0 {
+					t.Fatalf("not transitive: %s <= %s <= %s, yet %s > %s",
+						raw[i], raw[j], raw[k], raw[i], raw[k])
+				}
+			}
+		}
+	}
+}
+
+// TestTheRespinConventionOrdersTheWayPeopleTag is the deviation from semver,
+// asserted rather than left implicit.
+func TestTheRespinConventionOrdersTheWayPeopleTag(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{
+		{"v1.0.0-rc2", "v1.0.0-rc10", -1},       // the deviation: semver says +1
+		{"v1.0.0-rc9", "v1.0.0-rc10", -1},       //
+		{"v1.0.0-rc10", "v1.0.0-rc10a", -1},     // a respin of rc10 comes after it
+		{"v1.0.0-rc1a", "v1.0.0-rc2", -1},       //
+		{"v1.0.0-beta.2", "v1.0.0-beta.11", -1}, // dotted still follows semver
+		{"v1.0.0-007", "v1.0.0-7", 0},           // leading zeroes are not value
+		{"v1.0.0-1", "v1.0.0-alpha", -1},        // numeric has lower precedence
+	} {
+		t.Run(tc.a+" vs "+tc.b, func(t *testing.T) {
+			a, err := update.ParseVersion(tc.a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := update.ParseVersion(tc.b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := a.Compare(b); got != tc.want {
+				t.Errorf("Compare(%s, %s) = %d, want %d", tc.a, tc.b, got, tc.want)
 			}
 		})
 	}
