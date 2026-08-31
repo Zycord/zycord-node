@@ -299,6 +299,7 @@ jobs:
           name: zycord-cli-randomx-${{ matrix.label }}
           path: |
             dist/randomx/*.tar.gz
+            dist/randomx/*.zip
             dist/randomx/SHA256SUMS.randomx
           if-no-files-found: error
 
@@ -556,7 +557,11 @@ jobs:
           set -eu
           mkdir -p release
           cp staging/zycord-cli/* release/
+          # tar.gz AND zip: dist-randomx archives Windows with zip, and an
+          # upload glob that listed only tar.gz is what shipped a 249-byte
+          # artefact holding a checksum file and no binary.
           cp staging/zycord-cli-randomx-*/*.tar.gz release/
+          cp staging/zycord-cli-randomx-*/*.zip release/ 2>/dev/null || true
           cp staging/zycord-wallet-*/zycord-wallet-* release/
           cat staging/zycord-cli-randomx-*/SHA256SUMS.randomx | sort -k2 > release/SHA256SUMS.randomx
           cat staging/zycord-wallet-*/SHA256SUMS.desktop     | sort -k2 > release/SHA256SUMS.desktop
