@@ -141,7 +141,7 @@ and does not trip either warning.
 ## Windows — Scoop
 
 ```powershell
-scoop bucket add zycord https://github.com/<publisher>/scoop-zycord
+scoop bucket add zycord https://github.com/thesimstoshi/scoop-zycord
 scoop install zycord
 ```
 
@@ -181,9 +181,9 @@ and `zcd ui` in a browser is the way round it.
 ## macOS — Homebrew
 
 ```sh
-brew tap <publisher>/zycord https://github.com/<publisher>/homebrew-zycord
-brew install <publisher>/zycord/zycord         # zcd + zycordd
-brew install <publisher>/zycord/zycord-wallet  # the desktop application
+brew tap thesimstoshi/zycord https://github.com/thesimstoshi/homebrew-zycord
+brew install thesimstoshi/zycord/zycord         # zcd + zycordd
+brew install thesimstoshi/zycord/zycord-wallet  # the desktop application
 ```
 
 `brew tap` names a tap as `user/repo`; a bare word is not a tap name and the
@@ -324,7 +324,7 @@ checksum and the signature, and only then installs**. Fetch it, read it, then ru
 it:
 
 ```sh
-curl -fsSLO https://github.com/<publisher>/zycord/releases/download/v<version>/install.sh
+curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/install.sh
 less install.sh
 sh install.sh --version v<version>
 ```
@@ -349,7 +349,7 @@ and what the token in the printed URL is, are in
 ### The checksum
 
 ```sh
-curl -fsSLO https://github.com/<publisher>/zycord/releases/download/v<version>/SHA256SUMS
+curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS     # shasum -a 256 --check --ignore-missing on macOS
 ```
 
@@ -374,7 +374,7 @@ has to remember, which is a step nobody performs and a promise the documents
 keep making anyway. What is published instead is produced by the build:
 
 ```sh
-gh attestation verify zycord-<version>-<os>-<arch>.tar.gz --repo <publisher>/zycord
+gh attestation verify zycord-<version>-<os>-<arch>.tar.gz --repo thesimstoshi/zycord
 ```
 
 That is a signed statement, made by GitHub's own infrastructure at build time,

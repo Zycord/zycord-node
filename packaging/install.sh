@@ -18,13 +18,19 @@
 
 set -eu
 
-# PUBLISHER is a placeholder, substituted when this script is published as a
-# release asset. It is a placeholder rather than a real name because
-# docs/RELEASE.md §3 and §4 treat every string in the tree as an identity
-# surface, and a packaging file is exactly the kind of place a handle survives
-# an audit that only read the Go source. The guard below refuses to run an
-# unstamped copy rather than fetching from a host that does not exist.
-REPO_URL="${ZYCORD_REPO_URL:-https://github.com/PUBLISHER/zycord}"
+# The account this project publishes from, written out rather than left as a
+# placeholder to be substituted at release time.
+#
+# It was a placeholder, and the guard that used to sit below refused to run an
+# unstamped copy. Two things retired that: the repository is published, so the
+# account is not a secret this file could keep -- a reader downloaded the script
+# from it -- and the substitution never actually happened, because `make dist`
+# does not stage this file and the workflow does not upload it, so the copy the
+# install docs tell people to fetch has never existed. A guard against a step
+# nobody performs only breaks the clone somebody does have.
+#
+# --repo is still here and still works, which is what a fork or a mirror uses.
+REPO_URL="${ZYCORD_REPO_URL:-https://github.com/thesimstoshi/zycord}"
 
 # `gh attestation verify` wants owner/name, not a URL, and deriving it here
 # means the --repo flag keeps working for a fork or a mirror without a second
@@ -67,11 +73,6 @@ fi
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 
-case "$REPO_URL" in
-    *PUBLISHER*) die "this copy was not stamped by the release process; pass --repo <url> or set ZYCORD_REPO_URL" ;;
-esac
-# After the guard, so an unstamped copy dies on the URL rather than on a slug
-# derived from a placeholder.
 REPO_SLUG=$(printf '%s' "$REPO_URL" | sed -e 's|^[a-z]*://||' -e 's|^[^/]*/||' -e 's|/*$||')
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required and was not found"; }
 

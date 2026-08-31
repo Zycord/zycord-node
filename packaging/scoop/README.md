@@ -14,7 +14,7 @@ The `autoupdate` block points at the release's own `SHA256SUMS`, so subsequent
 versions are picked up by `scoop update` without anyone editing a hash by hand —
 which is the step where a wrong hash gets pasted.
 
-Every URL says `PUBLISHER`, substituted at publication ([RELEASE.md](../../docs/RELEASE.md) §3): a handle in a package URL is published to everyone who installs, and §3's identity audit is easy to run over Go source and easy to forget over a manifest.
+Every URL says `thesimstoshi`, substituted at publication ([RELEASE.md](../../docs/RELEASE.md) §3): a handle in a package URL is published to everyone who installs, and §3's identity audit is easy to run over Go source and easy to forget over a manifest.
 
 The version placeholder is `0.0.0` rather than a real number on purpose: a
 manifest committed here with a live version and a stale hash would install
