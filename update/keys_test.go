@@ -77,7 +77,11 @@ func TestTheSpareIsNotTheKeyItIsSpareFor(t *testing.T) {
 	}
 	next, ok := ks.KeyByRole(update.RoleNext)
 	if !ok {
-		t.Skip("this set holds no spare, which is allowed")
+		t.Fatal("the embedded set ships no spare, so this build has no rotation path at all. " +
+			"ParseKeys allows a set with no spare because it parses arbitrary sets; what SHIPS " +
+			"may not be one. A key set cannot be delivered over the channel the keys protect, so " +
+			"a binary published without a spare can never be rotated - which is the exact " +
+			"failure this package was landed early to prevent")
 	}
 	if cur.Key == next.Key {
 		t.Error("the next key equals the current key, so the rotation path protects nothing")
@@ -158,8 +162,14 @@ func TestVerifiersIsACopy(t *testing.T) {
 		t.Fatal("no verifiers")
 	}
 	original := hex.EncodeToString(first[0])
+	// Reach THROUGH the returned slice into the bytes it points at. Reassigning
+	// first[i] instead would be survived by a header copy by construction, which
+	// is how the first version of this test passed against a Verifiers() that
+	// copied headers only.
 	for i := range first {
-		first[i] = make(ed25519.PublicKey, ed25519.PublicKeySize)
+		for j := range first[i] {
+			first[i][j] ^= 0xff
+		}
 	}
 	second := update.Verifiers()
 	if got := hex.EncodeToString(second[0]); got != original {
@@ -263,5 +273,37 @@ func TestAMalformedKeySetIsRefusedWithAReason(t *testing.T) {
 				t.Errorf("accepted %s", tc.name)
 			}
 		})
+	}
+}
+
+// TestKeysIsACopy is TestVerifiersIsACopy's argument for the other accessor,
+// and it is the sharper of the two.
+//
+// A KeySet returned by value still shares the backing array of its Keys slice.
+// Without a deep copy a caller could rewrite the key bytes that ParseManifest
+// verifies signatures against, from anywhere in the program, with no error and
+// no symptom until a forged manifest verified or a real one did not.
+func TestKeysIsACopy(t *testing.T) {
+	first, err := update.Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Keys) == 0 {
+		t.Fatal("no keys")
+	}
+	original := first.Keys[0].Key
+	first.Keys[0].Key = "0000000000000000000000000000000000000000000000000000000000000000"
+	first.Keys[0].Role = update.RoleNext
+
+	second, err := update.Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Keys[0].Key != original {
+		t.Errorf("mutating the returned set changed the package's own keys: now %q, was %q",
+			second.Keys[0].Key, original)
+	}
+	if second.Keys[0].Role != update.RoleCurrent {
+		t.Errorf("mutating the returned set changed the package's own roles: now %q", second.Keys[0].Role)
 	}
 }

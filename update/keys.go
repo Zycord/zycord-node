@@ -180,8 +180,23 @@ func ParseKeys(raw []byte) (KeySet, error) {
 	return ks, nil
 }
 
-// Keys returns the embedded key set, or the error that stopped it parsing.
-func Keys() (KeySet, error) { return embedded, embeddedErr }
+// Keys returns a copy of the embedded key set, or the error that stopped it
+// parsing.
+//
+// The copy is deep, and it has to be. A KeySet returned by value still shares
+// the backing array of its Keys slice, so a caller holding one could rewrite the
+// very key bytes ParseManifest verifies signatures against — from anywhere in
+// the program, with no error, and with no symptom until a forged manifest
+// verified or a real one did not.
+func Keys() (KeySet, error) {
+	if embeddedErr != nil {
+		return KeySet{}, embeddedErr
+	}
+	out := embedded
+	out.Keys = make([]Key, len(embedded.Keys))
+	copy(out.Keys, embedded.Keys)
+	return out, nil
+}
 
 // Verifiers returns the public keys a manifest signature may verify against,
 // `current` first.
@@ -190,8 +205,14 @@ func Keys() (KeySet, error) { return embedded, embeddedErr }
 // rotation an ordinary update: a manifest signed by the incoming key is
 // already acceptable to every binary that shipped with it held back.
 func Verifiers() []ed25519.PublicKey {
+	// Deep, for the reason Keys gives. An ed25519.PublicKey is a []byte, so
+	// copying the outer slice copies HEADERS: the elements still point at the
+	// package's own key bytes, and `vs[0][0] ^= 0xff` reaches straight through
+	// a copy that looks like one.
 	out := make([]ed25519.PublicKey, len(verifiers))
-	copy(out, verifiers)
+	for i, v := range verifiers {
+		out[i] = append(ed25519.PublicKey(nil), v...)
+	}
 	return out
 }
 

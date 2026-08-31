@@ -543,10 +543,22 @@ check-imports:
 # policy in the sense node/checkpoints uses the phrase. The direction of that
 # rule is what this checks: cmd/ and the wallet may reach the updater, the
 # protocol may not reach it back.
-	@bad=$$($(GO) list -deps ./update/... \
-	  | grep -E '^(github\.com|golang\.org|gopkg\.in)' | sort -u || true); \
+#
+# Both stanzas capture `go list` into a file and check its STATUS before
+# grepping. The `$$(... || true)` shape the rules above use fails open: if
+# `go list` errors — a broken import, a missing module, a toolchain that will
+# not start — the substitution is empty, the grep matches nothing, and the
+# target prints "ok" having checked nothing at all. This repository has already
+# paid for one guard that passed everything it could not read.
+	@deps=$$(mktemp); \
+	if ! $(GO) list -deps ./update/... > $$deps 2>&1; then \
+	  echo "update/: go list failed, so nothing was checked:"; cat $$deps; rm -f $$deps; exit 1; fi; \
+	bad=$$(grep -E '^(github\.com|golang\.org|gopkg\.in)' $$deps | sort -u); rm -f $$deps; \
 	if [ -n "$$bad" ]; then echo "update/ has third-party dependencies:"; echo "$$bad"; exit 1; fi
-	@bad=$$($(GO) list -deps ./core/... ./node/... | grep -E '^zycord/update' || true); \
+	@deps=$$(mktemp); \
+	if ! $(GO) list -deps ./core/... ./node/... > $$deps 2>&1; then \
+	  echo "core//node/: go list failed, so nothing was checked:"; cat $$deps; rm -f $$deps; exit 1; fi; \
+	bad=$$(grep -E '^zycord/update($$|/)' $$deps); rm -f $$deps; \
 	if [ -n "$$bad" ]; then echo "core/ or node/ depends on update/:"; echo "$$bad"; exit 1; fi
 # The second implementation of the epoch state root, enforced as an import rule.
 #
@@ -619,7 +631,7 @@ check-imports:
 # target. So the one thing this repository says about its own dependencies —
 # "no cgo except RandomX" — was, until this rule, enforced by nobody. That is
 # the shape of guard this project keeps catching itself building.
-	@bad=$$(grep -rl '^import "C"' --include='*.go' core/ node/ wallet/ 2>/dev/null \
+	@bad=$$(grep -rl '^import "C"' --include='*.go' core/ node/ wallet/ update/ 2>/dev/null \
 	  | grep -v '^core/pow/randomx/' || true); \
 	if [ -n "$$bad" ]; then \
 	  echo "cgo outside core/pow/randomx:"; echo "$$bad"; \
