@@ -530,6 +530,24 @@ check-imports:
 	@bad=$$($(GO) list -deps ./node/... \
 	  | grep -E '^(github\.com|golang\.org|gopkg\.in)' | sort -u || true); \
 	if [ -n "$$bad" ]; then echo "node/ has third-party dependencies:"; echo "$$bad"; exit 1; fi
+# The updater, held to the same two rules as core/ and node/ and for the same
+# two reasons.
+#
+# Third-party-free, because this is the package that decides whether to execute
+# code it just downloaded: the argument for trusting it is that there is very
+# little of it to read, and a dependency here is code in that path that nobody
+# reviewed. It also compiles into the desktop wallet, which is a separate
+# module, so every import added here is a new hash in a second go.sum.
+#
+# And unreachable from core/ and node/, because an update key is client release
+# policy in the sense node/checkpoints uses the phrase. The direction of that
+# rule is what this checks: cmd/ and the wallet may reach the updater, the
+# protocol may not reach it back.
+	@bad=$$($(GO) list -deps ./update/... \
+	  | grep -E '^(github\.com|golang\.org|gopkg\.in)' | sort -u || true); \
+	if [ -n "$$bad" ]; then echo "update/ has third-party dependencies:"; echo "$$bad"; exit 1; fi
+	@bad=$$($(GO) list -deps ./core/... ./node/... | grep -E '^zycord/update' || true); \
+	if [ -n "$$bad" ]; then echo "core/ or node/ depends on update/:"; echo "$$bad"; exit 1; fi
 # The second implementation of the epoch state root, enforced as an import rule.
 #
 # Every check the tree had for the state root's merkleisation was that one
