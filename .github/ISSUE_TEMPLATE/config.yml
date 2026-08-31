@@ -1,0 +1,16 @@
+# Issues are for findings and measurements. Everything conversational belongs in
+# Discussions, which is where the developer reads.
+#
+# blank_issues_enabled stays true on purpose: a template that does not fit is a
+# reason to write freely, not a reason to stay quiet, and a defect reported in
+# the wrong shape is still a defect reported.
+#
+# There are deliberately no `contact_links`. They take an absolute URL, an
+# absolute forge URL carries an account name in its first path segment, and
+# sim/wiring's TestNoAbsoluteGitHubURLIsPublished refuses one for the account
+# this repository is published under -- by default rather than by exception,
+# which is the property that makes the guard worth having. Adding the account to
+# its allow-list to buy two convenience links would licence the name everywhere
+# in the tree, so the templates carry the routing in their own text instead:
+# attack-finding.md points at SECURITY.md in its first line.
+blank_issues_enabled: true
