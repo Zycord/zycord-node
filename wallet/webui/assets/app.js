@@ -460,6 +460,9 @@
     }
     showApp();
     renderReceive();
+    // Deliberately not awaited: the check talks to a release host, and a slow
+    // or unreachable one must not delay a window somebody is looking at.
+    refreshUpdate();
     return true;
   }
 
@@ -478,6 +481,76 @@
       if ($(p + "-network")) $(p + "-network").value = cfg.network || "zycord";
       if ($(p + "-confirm")) $(p + "-confirm").value = cfg.confirm_rpc || "";
     });
+  /* Updates. Desktop only, and quiet by construction: nothing is contacted
+   * until the person has said it may be, and "not yet asked" is not consent.
+   *
+   * The check runs after the window is up rather than before it, so a slow or
+   * unreachable release host delays nothing a person is looking at. */
+  async function refreshUpdate() {
+    if (!Transport.canUpdate()) return;
+    var bar = $("update-bar");
+    var report;
+    try {
+      report = await Transport.updateStatus();
+    } catch (err) {
+      return; /* never a dialog: a wallet that cannot reach a release host is still a wallet */
+    }
+    if (!report) return;
+
+    if (!report.asked) {
+      text($("update-text"), "Check for new versions of the wallet? Releases are signed. " +
+        "Nothing is downloaded until you say so.");
+      show($("update-yes"), true);
+      $("update-yes").textContent = "Yes, check";
+      show($("update-open"), false);
+      show($("update-no"), true);
+      $("update-no").textContent = "No";
+      bar.classList.remove("security");
+      show(bar, true);
+      return;
+    }
+    if (!report.available) { show(bar, false); return; }
+
+    var line = (report.security ? "Security release " : "Version ") + report.available +
+      " is available (you have " + report.current + ").";
+    if (report.note) line += " " + report.note;
+    if (!report.installable && report.reason) line += " " + report.reason;
+    text($("update-text"), line);
+    bar.classList.toggle("security", !!report.security);
+    show($("update-yes"), report.installable);
+    $("update-yes").textContent = "Install";
+    show($("update-open"), !report.installable);
+    show($("update-no"), true);
+    $("update-no").textContent = "Not now";
+    show(bar, true);
+  }
+
+  async function onUpdateYes() {
+    var report = await Transport.updateStatus();
+    if (report && !report.asked) {
+      await Transport.setUpdateCheck(true);
+      await refreshUpdate();
+      return;
+    }
+    text($("update-text"), "Installing…");
+    show($("update-yes"), false);
+    show($("update-no"), false);
+    try {
+      var done = await Transport.installUpdate();
+      text($("update-text"), (done && done.reason) || "Installed. Reopen the wallet to use it.");
+    } catch (err) {
+      text($("update-text"), "Update failed: " + (err && err.message ? err.message : err) +
+        " Nothing was changed.");
+      show($("update-open"), true);
+    }
+  }
+
+  async function onUpdateNo() {
+    var report = await Transport.updateStatus();
+    if (report && !report.asked) await Transport.setUpdateCheck(false);
+    show($("update-bar"), false);
+  }
+
     var browsable = Transport.canBrowse();
     show($("setup-browse"), browsable);
     show($("settings-browse"), browsable);
@@ -604,6 +677,9 @@
       });
     });
     $("setup-browse").addEventListener("click", function () { browseForKey("setup"); });
+    $("update-yes").addEventListener("click", onUpdateYes);
+    $("update-no").addEventListener("click", onUpdateNo);
+    $("update-open").addEventListener("click", function () { Transport.openReleasePage(); });
     $("settings-browse").addEventListener("click", function () { browseForKey("settings"); });
 
     var sweep = $("send-sweep");
