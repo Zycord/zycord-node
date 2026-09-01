@@ -28,6 +28,15 @@ var ErrMemberMissing = errors.New("update: the archive does not contain an expec
 // Extract writes the members of the archive at src whose BASE NAME appears in
 // want into dir, and returns where each landed.
 //
+// `name` is the archive's DECLARED name — the one the signed manifest gives it —
+// and is what decides the format. Deliberately not derived from src: the
+// downloaded file is at a temporary path this package chose, and the first
+// version of this function read the extension off that path. The temp name is
+// `.<file>.part-<random>`, so every real download arrived as "not an archive
+// shape this build unpacks" — a failure no unit test could see, because they all
+// passed a path that happened to end in .tar.gz. The format now comes from the
+// document that was verified, which is where it should have come from anyway.
+//
 // **The archive's own paths are never used as paths, and that is the whole
 // defence.** The usual fix for zip-slip cleans each member name and checks the
 // result stays under the destination — which works, and which puts the archive
@@ -39,7 +48,7 @@ var ErrMemberMissing = errors.New("update: the archive does not contain an expec
 //
 // Everything below that is depth, because a sloppier matcher would reopen the
 // hole this shape closes.
-func Extract(src, dir string, want []string) (map[string]string, error) {
+func Extract(src, name, dir string, want []string) (map[string]string, error) {
 	wanted := make(map[string]bool, len(want))
 	for _, w := range want {
 		if w == "" || strings.ContainsAny(w, `/\`) {
@@ -53,12 +62,12 @@ func Extract(src, dir string, want []string) (map[string]string, error) {
 		err error
 	)
 	switch {
-	case strings.HasSuffix(src, ".zip"):
-		out, err = extractZip(src, dir, wanted)
-	case strings.HasSuffix(src, ".tar.gz"), strings.HasSuffix(src, ".tgz"):
-		out, err = extractTarGz(src, dir, wanted)
+	case strings.HasSuffix(name, ".zip"):
+		out, err = extractZip(src, name, dir, wanted)
+	case strings.HasSuffix(name, ".tar.gz"), strings.HasSuffix(name, ".tgz"):
+		out, err = extractTarGz(src, name, dir, wanted)
 	default:
-		return nil, fmt.Errorf("update: %s is not an archive shape this build unpacks", filepath.Base(src))
+		return nil, fmt.Errorf("update: %s is not an archive shape this build unpacks", name)
 	}
 	if err != nil {
 		return nil, err
@@ -71,7 +80,7 @@ func Extract(src, dir string, want []string) (map[string]string, error) {
 	return out, nil
 }
 
-func extractTarGz(src, dir string, wanted map[string]bool) (map[string]string, error) {
+func extractTarGz(src, name, dir string, wanted map[string]bool) (map[string]string, error) {
 	f, err := os.Open(src)
 	if err != nil {
 		return nil, err
@@ -79,7 +88,7 @@ func extractTarGz(src, dir string, wanted map[string]bool) (map[string]string, e
 	defer f.Close()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, fmt.Errorf("update: %s is not gzip: %w", filepath.Base(src), err)
+		return nil, fmt.Errorf("update: %s is not gzip: %w", name, err)
 	}
 	defer gz.Close()
 
@@ -93,10 +102,10 @@ func extractTarGz(src, dir string, wanted map[string]bool) (map[string]string, e
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("update: %s: %w", filepath.Base(src), err)
+			return nil, fmt.Errorf("update: %s: %w", name, err)
 		}
 		if members++; members > maxMembers {
-			return nil, fmt.Errorf("update: %s holds more than %d members", filepath.Base(src), maxMembers)
+			return nil, fmt.Errorf("update: %s holds more than %d members", name, maxMembers)
 		}
 		// Regular files only. A symlink named `zcd` pointing at /etc/shadow, a
 		// hard link, a device node and a directory are all things this loop
@@ -105,37 +114,37 @@ func extractTarGz(src, dir string, wanted map[string]bool) (map[string]string, e
 		if h.Typeflag != tar.TypeReg {
 			continue
 		}
-		name := filepath.Base(filepath.FromSlash(h.Name))
-		if !wanted[name] {
+		member := filepath.Base(filepath.FromSlash(h.Name))
+		if !wanted[member] {
 			continue
 		}
-		if _, seen := out[name]; seen {
-			return nil, fmt.Errorf("update: %s contains %q twice", filepath.Base(src), name)
+		if _, seen := out[member]; seen {
+			return nil, fmt.Errorf("update: %s contains %q twice", name, member)
 		}
-		written, dst, err := writeMember(dir, name, tr, h.Size)
+		written, dst, err := writeMember(dir, member, tr, h.Size)
 		if err != nil {
 			return nil, err
 		}
 		if total += written; total > maxTotalMembers {
 			os.Remove(dst)
-			return nil, fmt.Errorf("update: %s expands past %d bytes", filepath.Base(src), int64(maxTotalMembers))
+			return nil, fmt.Errorf("update: %s expands past %d bytes", name, int64(maxTotalMembers))
 		}
-		out[name] = dst
+		out[member] = dst
 	}
 	return out, nil
 }
 
-func extractZip(src, dir string, wanted map[string]bool) (map[string]string, error) {
+func extractZip(src, name, dir string, wanted map[string]bool) (map[string]string, error) {
 	// The file is already on disk because it had to be hashed, so the reader can
 	// take it directly rather than buffering the whole archive in memory.
 	zr, err := zip.OpenReader(src)
 	if err != nil {
-		return nil, fmt.Errorf("update: %s is not a zip: %w", filepath.Base(src), err)
+		return nil, fmt.Errorf("update: %s is not a zip: %w", name, err)
 	}
 	defer zr.Close()
 
 	if len(zr.File) > maxMembers {
-		return nil, fmt.Errorf("update: %s holds more than %d members", filepath.Base(src), maxMembers)
+		return nil, fmt.Errorf("update: %s holds more than %d members", name, maxMembers)
 	}
 	out := map[string]string{}
 	var total int64
@@ -143,12 +152,12 @@ func extractZip(src, dir string, wanted map[string]bool) (map[string]string, err
 		if !fh.Mode().IsRegular() {
 			continue
 		}
-		name := filepath.Base(filepath.FromSlash(fh.Name))
-		if !wanted[name] {
+		member := filepath.Base(filepath.FromSlash(fh.Name))
+		if !wanted[member] {
 			continue
 		}
-		if _, seen := out[name]; seen {
-			return nil, fmt.Errorf("update: %s contains %q twice", filepath.Base(src), name)
+		if _, seen := out[member]; seen {
+			return nil, fmt.Errorf("update: %s contains %q twice", name, member)
 		}
 		rc, err := fh.Open()
 		if err != nil {
@@ -159,18 +168,18 @@ func extractZip(src, dir string, wanted map[string]bool) (map[string]string, err
 		// that lies large is refused before anything is written.
 		if fh.UncompressedSize64 > maxMemberBytes {
 			rc.Close()
-			return nil, fmt.Errorf("update: %s declares %q as %d bytes", filepath.Base(src), name, fh.UncompressedSize64)
+			return nil, fmt.Errorf("update: %s declares %q as %d bytes", name, member, fh.UncompressedSize64)
 		}
-		written, dst, err := writeMember(dir, name, rc, int64(fh.UncompressedSize64))
+		written, dst, err := writeMember(dir, member, rc, int64(fh.UncompressedSize64))
 		rc.Close()
 		if err != nil {
 			return nil, err
 		}
 		if total += written; total > maxTotalMembers {
 			os.Remove(dst)
-			return nil, fmt.Errorf("update: %s expands past %d bytes", filepath.Base(src), int64(maxTotalMembers))
+			return nil, fmt.Errorf("update: %s expands past %d bytes", name, int64(maxTotalMembers))
 		}
-		out[name] = dst
+		out[member] = dst
 	}
 	return out, nil
 }

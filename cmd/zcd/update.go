@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
+
+	"golang.org/x/term"
 
 	"zycord/core/pow/randomx"
 	"zycord/update"
@@ -81,12 +88,162 @@ install cannot be replaced in place, 12 no manifest published, 1 failed.
 	if *rollback {
 		return updateRollback(stdout, stderr)
 	}
-	_ = check
-	_ = yes
-	_ = dir
-	_ = stdin
-	fmt.Fprintln(stderr, "zcd update: checking is not wired up in this build yet")
-	return exitFailed
+	return runUpdate(args, *check, *yes, *dir, *repo, stdin, stdout, stderr)
+}
+
+// runUpdate is the check, and the install when one is asked for.
+func runUpdate(_ []string, check, yes bool, dir, repo string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// Not a terminal means not a conversation. A scripted or cron invocation
+	// gets a report, never an install it did not ask for in words.
+	if !term.IsTerminal(int(os.Stdout.Fd())) && !yes {
+		check = true
+	}
+
+	var prefs update.Prefs
+	if dir != "" {
+		var note string
+		prefs, note = update.LoadPrefs(dir)
+		if note != "" {
+			fmt.Fprintln(stderr, note)
+		}
+		if prefs.Mode == update.ModeNever {
+			fmt.Fprintf(stdout, "update checks are off for %s (mode: never)\n", dir)
+			return exitUpToDate
+		}
+	}
+
+	f := &update.Fetcher{Base: repo}
+	ks, err := update.Keys()
+	if err != nil {
+		fmt.Fprintln(stderr, "zcd update:", err)
+		return exitFailed
+	}
+	c := &update.Checker{
+		Fetcher: f, Keys: ks, Current: version,
+		RandomX: randomx.Available(), Product: update.ProductCLI,
+		Revoked: prefs.RevokedKeys,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	res, err := c.Check(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, "zcd update:", err)
+		return exitFailed
+	}
+
+	if dir != "" {
+		prefs.LastCheck = time.Now().UTC()
+		if res.Promotes != "" {
+			prefs = prefs.Revoke(res.Promotes)
+		}
+		if err := update.SavePrefs(dir, prefs); err != nil {
+			fmt.Fprintln(stderr, "zcd update: could not record the check:", err)
+		}
+	}
+
+	switch res.Outcome {
+	case update.OutcomeNoManifest:
+		fmt.Fprintln(stdout, "no update manifest is published for this release yet; nothing to do")
+		return exitNoManifest
+	case update.OutcomeUpToDate:
+		fmt.Fprintf(stdout, "zcd %s - up to date\n", version)
+		printSourceLine(stdout, res)
+		return exitUpToDate
+	case update.OutcomeOlder:
+		fmt.Fprintf(stdout, "zcd %s - the published release is %s, which is OLDER than this binary.\n",
+			version, res.Manifest.Version)
+		fmt.Fprintln(stdout, "Nothing was changed. This is either a replayed manifest or a botched release,")
+		fmt.Fprintln(stdout, "and it is reported rather than ignored because both are worth knowing about.")
+		return exitAvailable
+	case update.OutcomeNotARelease:
+		fmt.Fprintf(stdout, "zcd %s is not built from a release tag, so it is never replaced automatically.\n", version)
+		if res.Manifest != nil {
+			fmt.Fprintf(stdout, "The published release is %s.\n", res.Manifest.Version)
+		}
+		return exitAvailable
+	case update.OutcomeNoAsset:
+		fmt.Fprintf(stderr, "zcd update: %s publishes no %s archive.\n", res.Manifest.Version, res.Platform)
+		fmt.Fprintln(stderr, "Taking a different one would cross the two release tiers; see docs/INSTALL.md.")
+		return exitCannotPatch
+	}
+
+	// Available.
+	fmt.Fprintf(stdout, "zcd %s - %s is available\n", version, res.Manifest.Version)
+	fmt.Fprintf(stdout, "  published   %s\n", res.Manifest.PublishedAt.Format("2006-01-02"))
+	if res.Manifest.Urgency == update.UrgencySecurity {
+		fmt.Fprintln(stdout, "  URGENCY     security release")
+	}
+	if res.Manifest.Note != "" {
+		fmt.Fprintf(stdout, "  note        %s\n", res.Manifest.Note)
+	}
+	fmt.Fprintf(stdout, "  archive     %s (%s)\n", res.Asset.File, humanBytes(res.Asset.Size))
+	fmt.Fprintf(stdout, "  signed by   %s\n", res.Manifest.SignedBy)
+
+	if res.Refusal != nil {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, res.Refusal.Error())
+		return exitCannotPatch
+	}
+	if check {
+		fmt.Fprintln(stdout)
+		fmt.Fprintln(stdout, "Run `zcd update --yes` to install it.")
+		return exitAvailable
+	}
+	if !yes {
+		fmt.Fprintf(stderr, "\nInstall %s now? [y/N]: ", res.Manifest.Version)
+		line, _ := readLineFrom(stdin)
+		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
+			fmt.Fprintln(stdout, "Nothing was changed.")
+			if dir != "" {
+				prefs.DeclinedVersion = res.Manifest.Version
+				_ = update.SavePrefs(dir, prefs)
+			}
+			return exitAvailable
+		}
+	}
+
+	fmt.Fprintf(stdout, "==> fetching %s\n", res.Asset.File)
+	// The critical section: from the first backup rename to the last replace.
+	// Two syscalls wide, and the only window in this command where an interrupt
+	// costs anything real.
+	signal.Ignore(os.Interrupt, syscall.SIGTERM)
+	in, backups, err := res.Install(ctx, f)
+	signal.Reset(os.Interrupt, syscall.SIGTERM)
+	if err != nil {
+		fmt.Fprintln(stderr, "zcd update:", err)
+		return exitFailed
+	}
+	for dst := range in.Binaries {
+		fmt.Fprintf(stdout, "==> replaced %s\n", dst)
+	}
+	fmt.Fprintf(stdout, "installed %s; the previous binary is kept at %s\n",
+		res.Manifest.Version, backups[in.Target.Resolved])
+	return exitUpToDate
+}
+
+func printSourceLine(w io.Writer, res *update.Result) {
+	if res.Manifest == nil {
+		return
+	}
+	fmt.Fprintf(w, "  manifest    %s, signed by %s\n", res.Manifest.Version, res.Manifest.SignedBy)
+	fmt.Fprintf(w, "  tier        %s\n", localPlatformKey())
+}
+
+// readLineFrom reads one line, tolerating a closed stdin as a decline.
+func readLineFrom(r io.Reader) (string, error) {
+	br := bufio.NewReader(r)
+	return br.ReadString('\n')
+}
+
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
+	}
+	return fmt.Sprintf("%d B", n)
 }
 
 // updatePrintSource answers "where would this talk to, and with what key",

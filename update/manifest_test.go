@@ -56,6 +56,17 @@ func (s signer) sign(priv ed25519.PrivateKey, raw []byte) []byte {
 
 // goodManifest is a complete, well-formed document. Tests mutate the JSON text
 // rather than a struct, because the text is what gets signed.
+//
+// It publishes EVERY platform CI runs on, deliberately. An earlier version
+// listed only the two the author's machine needed, which quietly encoded the
+// host platform into the fixture: on a Windows runner the check found no asset
+// for windows-amd64 and returned OutcomeNoAsset, and a test asserting
+// OutcomeAvailable failed on a platform where the code was behaving correctly.
+//
+// windows-arm64 is published PLAIN with no -randomx counterpart, and that is not
+// an omission: it is that platform's real shape (no cross-toolchain, no native
+// runner), and it is the bait TestTheTierIsNeverCrossed needs in order to be
+// able to observe a tier-crossing fallback at all.
 func goodManifest() string {
 	sum := sha256.Sum256([]byte("archive bytes"))
 	d := hex.EncodeToString(sum[:])
@@ -70,7 +81,12 @@ func goodManifest() string {
     "zycord-cli": {
       "assets": {
         "linux-amd64": {"file": "zycord-0.2.0-linux-amd64.tar.gz", "sha256": "` + d + `", "size": 7340032},
+        "linux-arm64": {"file": "zycord-0.2.0-linux-arm64.tar.gz", "sha256": "` + d + `", "size": 7077888},
+        "darwin-amd64": {"file": "zycord-0.2.0-darwin-amd64.tar.gz", "sha256": "` + d + `", "size": 7208960},
+        "darwin-arm64": {"file": "zycord-0.2.0-darwin-arm64.tar.gz", "sha256": "` + d + `", "size": 6946816},
+        "windows-amd64": {"file": "zycord-0.2.0-windows-amd64.zip", "sha256": "` + d + `", "size": 7602176},
         "linux-amd64-randomx": {"file": "zycord-0.2.0-linux-amd64-randomx.tar.gz", "sha256": "` + d + `", "size": 9437184},
+        "darwin-arm64-randomx": {"file": "zycord-0.2.0-darwin-arm64-randomx.tar.gz", "sha256": "` + d + `", "size": 9043968},
         "windows-arm64": {"file": "zycord-0.2.0-windows-arm64.zip", "sha256": "` + d + `", "size": 7340032}
       }
     }
