@@ -115,13 +115,20 @@ curl -fsSL --proto '=https' --tlsv1.2 -O "${BASE}/SHA256SUMS"
 
 # Build provenance, where the tooling for it exists.
 #
-# There is no signature to check any more, and that is a deliberate change
+# There is no signature over what this script downloads, and that is a deliberate
+# change
 # rather than something lost. A release is built by GitHub Actions and goes
 # straight to whoever downloads it; nothing passes through a machine that could
 # hold a signing key, so a key in this path would either live in CI -- where it
 # belongs to whoever can push a workflow file -- or describe a step nobody
 # performs. What replaces it is an attestation the build itself produces,
 # keyless, naming the workflow and the commit the bytes came out of.
+#
+# (The release does carry one signature: a detached signature over
+# update-manifest.json, which the built-in updater checks because a
+# standard-library client can verify ed25519 and cannot verify an attestation.
+# It covers the manifest, not this tarball, and its key lives in CI -- see
+# docs/UPDATES.md. Nothing here depends on it.)
 #
 # `gh` is not a dependency of this script and is not going to become one: it is
 # a large Go program and this installs on machines that have curl and a shell.

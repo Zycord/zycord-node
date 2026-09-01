@@ -269,8 +269,30 @@ is optional.
 So the three claims a reader can make are now: `SHA256SUMS.binaries` for *this
 is what the source compiles to*, checked by rebuilding; the checksum lists for
 *the file arrived intact*; and the attestation for *these bytes came out of
-that workflow*. The key remains what signs announcements — it just has no part
-in a download.
+that workflow*. The project key remains what signs announcements — it just has
+no part in a download.
+
+**One carve-out, and it concedes the argument above rather than arguing around
+it.** The release also carries `update-manifest.json` and a detached ed25519
+signature over it, made in the publish job with a key held in an Actions secret.
+That key belongs to whoever can push a workflow file — the objection in the
+paragraph above stands, in full, and [UPDATES.md](UPDATES.md) says so in those
+words rather than implying otherwise.
+
+What changed is not the objection but the reader. All three claims above are made
+to a *person*: they need a shell, `gh`, a Go toolchain, and the patience to run
+them. The updater is a program deciding whether to execute what it just
+downloaded, and a program that reaches for a Sigstore verifier pulls an x.509
+chain, a transparency-log inclusion proof and a Fulcio root into the one package
+whose whole argument is that there is very little of it to read. An ed25519
+signature is thirty lines of standard library.
+
+So it is a fourth claim, weaker than the other three, made to a different reader,
+and worth exactly what a CI-held key is worth: it separates this project's
+release page from a mirror, a fork under the same asset names, and a broken TLS
+chain. It does not separate it from whoever holds the pipeline. A release nobody
+can verify by hand would be the failure this section exists to prevent, and this
+is not that — the three commands above are unchanged and still the answer.
 
 Windows has no `-randomx` leg, and the reason is the pipeline rather than the
 code: a local `make build-randomx` on Windows with a MinGW-w64 toolchain does
@@ -379,6 +401,9 @@ There is nothing else to trust, and deliberately nothing else to publish **in th
 - [ ] **The release notes name the two tiers separately and say they are disjoint.** The attested archives are byte-identical and devnet-only; the `-randomx` archives join mainnet and the public testnet and are attested by nothing. Listing both under one "reproducible builds" heading is the blur §5 exists to prevent, and here it would be worse than a blur — it would tell a miner that the binary they are about to run is one somebody rebuilt and compared.
 - [ ] Scoop manifest and Homebrew formulae updated with the tag and the real hashes (`packaging/`), and installed once on a machine that has never seen this project. The test that matters is on a clean host. **Read `zcd version` on that host and check the notes it was installed with agree with it** — both package managers install the pure-Go tier, so both must say so before a user starts a node with it (§5).
 - [ ] **`packaging/` names the publishing account and nothing else.** It used to carry a `PUBLISHER` placeholder substituted here, on the argument that a handle in a package URL is published to everyone who installs. Two things retired that: the account is the one this repository is served from, so a reader who has the file already had the name, and the substitution never actually ran — `make dist` does not stage `install.sh` and the workflow does not upload it, so the copy the install docs told people to fetch has never existed. What the item checks now is that the account named is the publishing one and that **no other identity has appeared** — a personal handle, a real name, a second account. `sim/wiring`'s forge guard keeps a closed allow-list, so anything else fails the sweep rather than this checkbox, and this box is the human half: read `packaging/` and confirm nothing has been added that the sweep has no pattern for.
+- [ ] **The update signing secret is configured, and the publish job proved it.** `ZYCORD_UPDATE_SIGNING_KEY` holds the 64-hex seed of the key `update/keys.json` names `current`. A tag build with it unset fails the job on purpose rather than publishing a release nobody can update to — and `zcd update manifest --sign` refuses a key that is not in the embedded set, because a release signed by a key no binary carries updates nobody and does it in silence. Both `update-manifest.json` and `update-manifest.json.sig` are among the published assets, and the workflow's own verify step ran the real reader over them before publication.
+- [ ] **The key set is unchanged, or the rotation was announced first.** If `update/keys.json` moved, the GPG-signed announcement naming the new set went out before the release, and it quotes `sha256sum update/keys.json` — a value any reader can recompute. A rotation is a hard cut for anyone who has not updated since the release that introduced the incoming key; that is the design and it is written down in [UPDATES.md](UPDATES.md), but it is not something to discover at a tag.
+- [ ] **No flag was removed or renamed that a released binary accepts.** The updater restarts a node with its own argument list, so a flag that disappears turns `--update auto` into a node that installs the release, restarts, and dies at flag parsing — already running the new binary, so a restart does not help. The pre-flight refuses such a release rather than installing it, which turns a fleet-wide brick into a logged refusal; that is a backstop, not a licence. Deprecate a flag by accepting and ignoring it for one release.
 - [ ] `attestations/` has at least one independent signature for the previous release, and the call for this one has gone out.
 - [ ] Identity audit clean (§3), voice pass done (§4) — code comments *and* `docs/adversarial/`.
 - [ ] Publishing at M3 with the full package, not before (§7).

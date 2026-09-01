@@ -252,6 +252,60 @@ The node generates a fresh Ed25519 peer key on every start and never writes it t
 
 If you are running a node in a way that matters to you, the thing that deanonymises you is not the key. It is the address. **A bootstrap node you run on infrastructure traceable to you is a deanonymisation vector that no amount of key hygiene fixes.**
 
+## Updates
+
+The first time you start a node on a terminal it asks one question, once:
+
+```
+zycordd v0.1.1 — check for updates? Releases are signed, and nothing is
+downloaded or replaced until you say so. Details: `zcd update --print-source`.
+
+  [a] automatic   install a newer release on start, before the node opens its
+                  data directory
+  [n] notify      say when one is available, change nothing
+  [x] never       do not contact the release host
+
+Choose [a/n/x] (default n):
+```
+
+Enter takes `notify`. The answer is written to `<dir>/update.json` and you are
+not asked again. Change it any time:
+
+```sh
+zycordd --update notify --dir ./data     # or auto, or never
+```
+
+**Started without a terminal — systemd, Docker, cron, a pool — the node never
+asks and never blocks.** With no recorded choice it prints one line saying checks
+are off and how to turn them on, and starts. Nothing is contacted. If you want a
+service to check, say so explicitly in the unit:
+
+```
+ExecStart=/usr/local/bin/zycordd --dir /var/lib/zycord --update notify
+```
+
+`auto` is honoured there too, and on a root-owned binary it will correctly refuse
+to replace itself and print the sequence to run instead — a node runs
+unprivileged on purpose.
+
+Nothing is ever replaced while the node is running. In `auto`, the check,
+download and replacement all happen **before the data directory is opened**,
+which is the only point in the process's life where nothing is holding the chain
+lock. A running node only ever prints a notice.
+
+Checking by hand, and from cron:
+
+```sh
+zcd update --check      # report only; exit 10 if something is available
+zcd update              # ask, then install
+zcd update --rollback   # go back to the previous binary
+```
+
+`zcd update --print-source` prints the release host and the keys your binary
+trusts, and contacts nothing to do it. The full trust model — including exactly
+what the signature is worth, and what a check discloses — is in
+[UPDATES.md](UPDATES.md).
+
 ## Data directory
 
 ```
