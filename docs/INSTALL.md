@@ -141,9 +141,24 @@ Rather than fight SmartScreen and Gatekeeper, go through the door they leave
 open. A package manager installs from a URL and a hash, requires no signature,
 and does not trip either warning.
 
+**Neither channel is live yet, and the two sections below say so where somebody
+about to paste a command will read it.** The manifests are written and in
+`packaging/`; the tap and bucket repositories that serve them are not published,
+because each has to name a release's real hashes. Saying this here rather than
+letting the commands fail is the difference between a route that is not ready and
+a project that looks broken.
+
 ---
 
 ## Windows — Scoop
+
+**The bucket is not published yet, so these two commands fail today.** The
+manifest is in `packaging/scoop/` and is reviewable now; what does not exist is
+the repository that serves it, because a bucket has to name a release's real
+hashes and there was none to name when it was written. Until it exists, take the
+release zip — [Windows without Scoop](#windows-without-scoop), two sections down
+— which is a working route rather than a worse one: Scoop's advantage is that it
+avoids the mark of the web, not that the bytes are different.
 
 ```powershell
 scoop bucket add zycord https://github.com/thesimstoshi/scoop-zycord
@@ -186,6 +201,12 @@ Windows 11 and on current Windows 10. If it is missing, the window will not open
 and `zcd ui` in a browser is the way round it.
 
 ## macOS — Homebrew
+
+**The tap is not published yet, so `brew tap` fails today.** The formulae are in
+`packaging/homebrew/` and are reviewable now; what does not exist is the
+repository that serves them. Until it does, take the release archive — [macOS
+from the release zip](#macos-from-the-release-zip), below — and expect
+Gatekeeper, which that section is about.
 
 ```sh
 brew tap thesimstoshi/zycord https://github.com/thesimstoshi/homebrew-zycord
