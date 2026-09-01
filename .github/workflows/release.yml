@@ -600,6 +600,49 @@ jobs:
       #
       # So the bytes go from this runner to whoever downloads them with nobody
       # in between, which is the property the pipeline exists for.
+      # The update manifest, written and signed here.
+      #
+      # This job never checks the source out -- it only downloads artefacts,
+      # which is why `gh release create` below needs --repo -- so the generator
+      # comes from the release itself: unpack the linux/amd64 archive that was
+      # just staged and use ITS zcd. That is self-consistent, because the code
+      # that writes the manifest is the code that ships and the code that reads
+      # it, and it adds no build step to the one job holding a write token.
+      #
+      # About the key: it is a CI key, and docs/UPDATES.md says plainly what
+      # that is worth. A key here belongs to whoever can push a workflow file,
+      # so this signature does NOT defend against a compromise of the pipeline
+      # or the account. It defends against a mirror, a CDN, a fork publishing
+      # under the same asset names, and a broken TLS chain -- the same root as
+      # the build-provenance attestation above. It exists because a
+      # standard-library client can verify an ed25519 signature and cannot
+      # verify a Sigstore attestation.
+      - name: Write and sign the update manifest
+        env:
+          ZYCORD_UPDATE_SIGNING_KEY: ${{ secrets.ZYCORD_UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          # A tag build that cannot sign must FAIL here rather than publish a
+          # release that updates nobody and does it silently.
+          if [ -z "${ZYCORD_UPDATE_SIGNING_KEY}" ]; then
+            echo "the update signing key is not configured; refusing to publish a release nobody can update to" >&2
+            exit 1
+          fi
+          mkdir -p tools
+          tar xzf release/zycord-*-linux-amd64.tar.gz --strip-components=1 -C tools --wildcards '*/zcd'
+          ./tools/zcd update manifest \
+            --dir release \
+            --version "${GITHUB_REF_NAME}" \
+            --sign
+
+      # The release-smoke of this feature. Every other gate in this workflow
+      # hashes something, and a hash cannot tell you a signature verifies.
+      - name: Verify the manifest the way a node will
+        run: |
+          set -eu
+          ./tools/zcd update verify --dir release
+          rm -rf tools
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}

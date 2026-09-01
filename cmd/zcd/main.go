@@ -55,6 +55,11 @@ func main() {
 		err = cmdEmission(os.Args[2:])
 	case "vectors":
 		err = cmdVectors(os.Args[2:])
+	case "update":
+		// os.Exit rather than returning an error, because this command's exit
+		// codes are its interface and the tail below collapses every failure to
+		// 1. cmd/zycordd/main.go's `os.Exit(runRepair(...))` is the same choice.
+		os.Exit(cmdUpdate(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "version":
 		cmdVersion(os.Stdout)
 	case "help", "-h", "--help":
@@ -86,6 +91,7 @@ func usage() {
   zcd emission --height N [--testnet | --devnet]
                                             print the coinbase at a height
   zcd vectors  [--dir spec/vectors]         check this build against the vectors
+  zcd update   [--check] [--yes]            check for a newer release, and install it
   zcd version
 
 There is no coin yet. Genesis has not happened. Anyone selling you ZCD today
