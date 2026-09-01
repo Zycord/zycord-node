@@ -166,7 +166,21 @@ func (c *Checker) isRevoked(id string) bool {
 // checked against the signed manifest, the archive is unpacked into a scratch
 // directory, and the guards run again — the state of the disk can have changed
 // since Check, and the second look costs one syscall.
-func (r *Result) Install(ctx context.Context, f *Fetcher) (*Install, map[string]string, error) {
+// validate, when non-nil, is called on the extracted replacement for the
+// RUNNING binary before anything is replaced. Returning an error aborts the
+// install with nothing changed.
+//
+// This exists because of a failure an end-to-end run produced and no unit test
+// would have: the restart passes os.Args VERBATIM, so a release that removes or
+// renames a flag makes the new binary reject the command line the old one was
+// started with. The node then exits at flag parsing — and it is already running
+// the new binary, so restarting it does not help either. That is a fleet-wide
+// brick delivered by the update mechanism itself.
+//
+// A caller that can cheaply prove the replacement accepts its own arguments
+// should do so here, while the old binary is still in place and refusing costs
+// nothing.
+func (r *Result) Install(ctx context.Context, f *Fetcher, validate func(newExe string) error) (*Install, map[string]string, error) {
 	if r.Outcome != OutcomeAvailable {
 		return nil, nil, fmt.Errorf("update: there is nothing to install")
 	}
@@ -213,6 +227,13 @@ func (r *Result) Install(ctx context.Context, f *Fetcher) (*Install, map[string]
 	in, err := PlanInstall(t, extracted, r.Manifest.Version, r.Current.Raw)
 	if err != nil {
 		return nil, nil, err
+	}
+	if validate != nil {
+		if err := validate(in.Binaries[t.Resolved]); err != nil {
+			return nil, nil, fmt.Errorf("update: %s was downloaded and verified, but it does not accept "+
+				"this process's own command line, so installing it would leave a binary that cannot "+
+				"start: %w", r.Manifest.Version, err)
+		}
 	}
 	backups, err := in.Apply()
 	if err != nil {

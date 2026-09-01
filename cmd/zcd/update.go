@@ -208,7 +208,7 @@ func runUpdate(_ []string, check, yes bool, dir, repo string, stdin io.Reader, s
 	// Two syscalls wide, and the only window in this command where an interrupt
 	// costs anything real.
 	signal.Ignore(os.Interrupt, syscall.SIGTERM)
-	in, backups, err := res.Install(ctx, f)
+	in, backups, err := res.Install(ctx, f, nil)
 	signal.Reset(os.Interrupt, syscall.SIGTERM)
 	if err != nil {
 		fmt.Fprintln(stderr, "zcd update:", err)
