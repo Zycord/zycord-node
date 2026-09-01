@@ -67,6 +67,17 @@
     </div>
   </header>
 
+  <!-- Updates. Desktop only, and hidden until there is something to say: a
+       banner that is always there is a banner nobody reads. -->
+  <div id="update-bar" class="update-bar hidden">
+    <span id="update-text"></span>
+    <span class="update-actions">
+      <button id="update-yes" class="primary small hidden">Install</button>
+      <button id="update-open" class="ghost small hidden">Open release page</button>
+      <button id="update-no" class="ghost small hidden">Not now</button>
+    </span>
+  </div>
+
   <nav>
     <button class="tab active" data-panel="panel-balance">Balance</button>
     <button class="tab" data-panel="panel-send">Send</button>

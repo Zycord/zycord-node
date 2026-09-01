@@ -112,6 +112,15 @@ func main() {
 	seed := fs.Int64("seed", 1, "dial-jitter seed, so a run is reproducible")
 	mineThreads := fs.Int("mine-threads", 0,
 		"nonce-search goroutines when mining (0 = one per core)")
+	// Two flags because they answer different questions. --update sets a
+	// DURABLE policy for this data directory; --no-update-check suppresses ONE
+	// run. A CI job or an air-gapped rehearsal wants the second without editing
+	// the first.
+	updateMode := fs.String("update", "",
+		"update policy for this data directory: auto, notify or never. "+
+			"Persisted to <dir>/update.json; omit it to use the saved choice.")
+	noUpdateCheck := fs.Bool("no-update-check", false,
+		"do not contact the release host on this run, whatever <dir>/update.json says")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
@@ -136,6 +145,21 @@ func main() {
 	// operator-facing diagnostics (today: a torn-tail recovery, or an
 	// automatic compaction that failed and will retry) on the process's own
 	// log, the same way net.Logger is wired a few lines down for p2p.
+	// The update pre-flight, and the only place in this process where replacing
+	// its own executable is safe.
+	//
+	// It sits here for three reasons, each of which is a different failure if it
+	// moved. After --dir is validated, because the policy lives in <dir>. After
+	// loadParams, so a bad --params still fails first and `zycordd --params
+	// nonsense.json --dir /new` still does not create /new as a side effect. And
+	// before chain.OpenWith, so nothing is open: no store, no directory lock, no
+	// listener, no goroutine, no block in flight.
+	//
+	// It may not return. On an applied update it re-execs this process into the
+	// new binary, which on Unix preserves the PID so a supervisor sees no
+	// restart at all.
+	upd := preflightUpdate(*dir, *updateMode, *noUpdateCheck)
+
 	c, err := chain.OpenWith(*dir, p, storage.Options{Logger: log.Default()})
 	if err != nil {
 		fatal(err)
@@ -333,6 +357,17 @@ func main() {
 	go func() {
 		defer status.Done()
 		heartbeat(c, net, pool, stop)
+	}()
+	// The update notice, on the same group and for the same reason: it is joined
+	// before anything it could still be reading is closed. It reads nothing the
+	// heartbeat reads and holds no chain state at all - it only talks to the
+	// release host - so joining it here is stricter than it needs to be, which
+	// is the right direction. Reusing the group also adds no defer, so the
+	// teardown order this file asserts elsewhere is unchanged.
+	status.Add(1)
+	go func() {
+		defer status.Done()
+		updateNotice(upd, stop)
 	}()
 	defer status.Wait()
 

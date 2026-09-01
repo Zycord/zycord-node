@@ -43,6 +43,8 @@ Before genesis: we will fix, publish the fix, and credit the reporter under what
 
 After genesis: coordinated disclosure with an embargo long enough for node operators to upgrade, because there is no admin key, no pause button, and no way to protect users except by getting patched binaries into their hands first.
 
+That last clause used to describe a hope rather than a mechanism: the embargo ended with an announcement, and whether it reached anybody was somebody else's problem. Nodes can now check for a signed release on start and install one, and a release marked as a security release is reported on every check rather than once a day. It is opt-in, and it is off by default anywhere there is no terminal to ask — so it narrows the gap rather than closing it, and an announcement is still what an embargo ends with. What the signature on that release is worth, in the plain version, is in [docs/UPDATES.md](docs/UPDATES.md).
+
 ## Bounties
 
 There is no bounty pool today, and no way to fund one from the protocol. There is no premine and no foundation; the treasury cell of [whitepaper §14.1](docs/whitepaper.md) does not exist in the code yet, accrues nothing until genesis, and cannot be spent from before Era 2 — genesis contains no key for it. A community-funded pool is planned for the public attack-net at M4 and will be announced in this repository. Anyone who tells you otherwise is not us.

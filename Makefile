@@ -1197,6 +1197,31 @@ repro-desktop: require-windows-target require-clean-tree
 	echo "  $$($(SHA256) "$$tmp/wallet.a" | cut -d' ' -f1)  $$($(GO) env GOOS)/$$($(GO) env GOARCH), $$($(GO) version | cut -d' ' -f3)"; \
 	echo "  the .zip around it is not reproducible and is not claimed to be"
 
+# The update manifest, for testing the release path locally.
+#
+# NOT the release path itself: the workflow writes and signs the manifest in the
+# publish job, from the archives it just staged, with no manual step. These
+# targets exist so that path can be exercised against a local `make dist` before
+# a tag is cut -- and so the failure they catch is caught here rather than by
+# every node in the world quietly doing nothing.
+MANIFEST_DIR ?= $(DIST)
+
+.PHONY: release-manifest
+release-manifest: build
+	@test -d "$(MANIFEST_DIR)" || { echo "release-manifest: $(MANIFEST_DIR) is not a directory"; exit 1; }
+	@case "$(VERSION)" in \
+	  dev|*-dirty|*-g*) \
+	    echo "release-manifest needs the tag it is describing:"; \
+	    echo "  make release-manifest MANIFEST_DIR=<dir> VERSION=vX.Y.Z"; \
+	    echo "A manifest naming '$(VERSION)' names no release, and zcd refuses to write one."; \
+	    exit 1 ;; \
+	esac
+	$(BIN)/zcd update manifest --dir "$(MANIFEST_DIR)" --version "$(VERSION)"
+
+.PHONY: release-manifest-verify
+release-manifest-verify: build
+	$(BIN)/zcd update verify --dir "$(MANIFEST_DIR)"
+
 .PHONY: dist-clean
 dist-clean:
 	rm -rf $(DIST)
