@@ -987,10 +987,10 @@ func TestEveryGoroutineMainLaunchesIsJoinedBeforeTheChainCloses(t *testing.T) {
 
 	// Every known launch site, so a refactor that hides one behind a helper
 	// does not leave this test passing over the rest alone.
-	if len(launches) != 4 {
-		t.Errorf("main launches %d goroutines; this test was written against four - the RPC "+
-			"serve loop, the heartbeat, the prefetch loop and the mine loop. A different "+
-			"count means one is no longer visible here and is no longer checked",
-			len(launches))
+	if len(launches) != 5 {
+		t.Errorf("main launches %d goroutines; this test was written against five - the RPC "+
+			"serve loop, the heartbeat, the update notice, the prefetch loop and the mine "+
+			"loop. A different count means one is no longer visible here and is no longer "+
+			"checked", len(launches))
 	}
 }
