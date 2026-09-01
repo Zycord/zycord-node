@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"zycord/wallet/webui"
@@ -44,9 +45,29 @@ func TestSettingsSurviveACrashMidWrite(t *testing.T) {
 	if got := loadSettings(path); got.RPC != "http://127.0.0.1:9999" {
 		t.Errorf("RPC = %q, want the second write", got.RPC)
 	}
+	assertOwnerOnly(t, path)
+}
+
+// assertOwnerOnly checks the file is readable only by its owner, where that is a
+// thing a mode bit can say.
+//
+// On Windows it is not. Go's Chmod there controls only the read-only bit, so the
+// mode reads back -rw-rw-rw- however the file was created, and the file's actual
+// protection is the ACL it inherits from its directory — a different mechanism
+// that no mode comparison can check.
+//
+// This is the THIRD place in this stack that had to learn it, after
+// update/prefs_test.go and the GOOS-as-an-environment-variable bug before that.
+// It is one helper now so the next test that wants this asks for it by name
+// instead of writing the comparison again and finding out from a CI runner.
+func assertOwnerOnly(t *testing.T, path string) {
+	t.Helper()
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if perm := fi.Mode().Perm(); perm != 0o600 {
 		t.Errorf("mode = %v, want 0600", perm)
