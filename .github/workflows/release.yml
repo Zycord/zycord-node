@@ -630,8 +630,23 @@ jobs:
             echo "the update signing key is not configured; refusing to publish a release nobody can update to" >&2
             exit 1
           fi
+          # The archive is named EXACTLY, from the tag, and not matched with a
+          # glob. `release/zycord-*-linux-amd64.tar.gz` looks specific and is
+          # not: `*` also matches `wallet-<version>`, so it expanded to the CLI
+          # archive AND the desktop wallet's, tar took the second as a member
+          # name to extract from the first, and the publish job died with
+          # "Not found in archive" after every build had already succeeded.
+          # A name built from ${GITHUB_REF_NAME} cannot match two things.
+          ver="${GITHUB_REF_NAME#v}"
+          cli="release/zycord-${ver}-linux-amd64.tar.gz"
+          test -f "$cli" || {
+            echo "the linux/amd64 CLI archive is not staged as $cli; the generator cannot be unpacked" >&2
+            ls -1 release/ >&2
+            exit 1
+          }
           mkdir -p tools
-          tar xzf release/zycord-*-linux-amd64.tar.gz --strip-components=1 -C tools --wildcards '*/zcd'
+          tar xzf "$cli" --strip-components=1 -C tools --wildcards '*/zcd'
+          test -x tools/zcd || { echo "no zcd was unpacked from $cli" >&2; exit 1; }
           ./tools/zcd update manifest \
             --dir release \
             --version "${GITHUB_REF_NAME}" \
@@ -642,6 +657,10 @@ jobs:
       - name: Verify the manifest the way a node will
         run: |
           set -eu
+          # tools/zcd is still here from the step above, which is the point:
+          # the binary that WROTE the manifest is the one that reads it back,
+          # so this proves the round trip rather than two builds agreeing.
+          test -x tools/zcd || { echo "tools/zcd is missing; the signing step did not run" >&2; exit 1; }
           ./tools/zcd update verify --dir release
           rm -rf tools
 
