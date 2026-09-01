@@ -93,7 +93,7 @@ func TestExtractTakesOnlyWhatItAskedFor(t *testing.T) {
 			}
 
 			out := t.TempDir()
-			got, err := update.Extract(archive, out, []string{"zcd", "zycordd"})
+			got, err := update.Extract(archive, filepath.Base(archive), out, []string{"zcd", "zycordd"})
 			if err != nil {
 				t.Fatalf("Extract: %v", err)
 			}
@@ -146,7 +146,7 @@ func TestTheArchiveNeverChoosesAPath(t *testing.T) {
 				archive = writeTarGz(t, src, ms)
 			}
 			out := t.TempDir()
-			_, err := update.Extract(archive, out, []string{"zcd"})
+			_, err := update.Extract(archive, filepath.Base(archive), out, []string{"zcd"})
 			// `../../zcd` and `ok/zcd` both have base name zcd, so this is a
 			// duplicate rather than a traversal - which is the point: the path
 			// never entered the decision.
@@ -174,7 +174,7 @@ func TestOnlyRegularFilesAreEverCreated(t *testing.T) {
 		{name: "pkg/zycordd", typ: tar.TypeDir},
 	})
 	out := t.TempDir()
-	_, err := update.Extract(archive, out, []string{"zcd"})
+	_, err := update.Extract(archive, filepath.Base(archive), out, []string{"zcd"})
 	if !errors.Is(err, update.ErrMemberMissing) {
 		t.Errorf("err = %v, want ErrMemberMissing - a symlink is not the file we asked for", err)
 	}
@@ -189,7 +189,7 @@ func TestAnArchiveMissingWhatWeCameForIsAnError(t *testing.T) {
 	src := t.TempDir()
 	archive := writeTarGz(t, src, []member{{name: "pkg/zcd", body: "ZCD"}})
 	out := t.TempDir()
-	if _, err := update.Extract(archive, out, []string{"zcd", "zycordd"}); !errors.Is(err, update.ErrMemberMissing) {
+	if _, err := update.Extract(archive, filepath.Base(archive), out, []string{"zcd", "zycordd"}); !errors.Is(err, update.ErrMemberMissing) {
 		t.Errorf("err = %v, want ErrMemberMissing", err)
 	}
 }
@@ -201,7 +201,7 @@ func TestAnUnknownArchiveShapeIsRefused(t *testing.T) {
 	if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := update.Extract(p, t.TempDir(), []string{"zcd"}); err == nil {
+	if _, err := update.Extract(p, filepath.Base(p), t.TempDir(), []string{"zcd"}); err == nil {
 		t.Error("accepted an archive shape this build does not unpack")
 	}
 }
@@ -212,7 +212,7 @@ func TestWhatWeAskForMustBeAName(t *testing.T) {
 	src := t.TempDir()
 	archive := writeTarGz(t, src, []member{{name: "pkg/zcd", body: "ZCD"}})
 	for _, want := range []string{"../zcd", "a/b", `a\b`, ""} {
-		if _, err := update.Extract(archive, t.TempDir(), []string{want}); err == nil {
+		if _, err := update.Extract(archive, filepath.Base(archive), t.TempDir(), []string{want}); err == nil {
 			t.Errorf("accepted %q as a file to look for", want)
 		}
 	}
@@ -228,10 +228,47 @@ func TestAGzipBombIsBounded(t *testing.T) {
 		{name: "pkg/zcd", body: strings.Repeat("\x00", 1<<20)},
 	})
 	out := t.TempDir()
-	if _, err := update.Extract(archive, out, []string{"zcd"}); err != nil {
+	if _, err := update.Extract(archive, filepath.Base(archive), out, []string{"zcd"}); err != nil {
 		t.Fatalf("a 1 MiB member was refused, which is well under the cap: %v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(out, "zcd")); err != nil || len(b) != 1<<20 {
 		t.Errorf("member is %d bytes, err %v", len(b), err)
+	}
+}
+
+// TestTheFormatComesFromTheDeclaredNameNotTheDownloadedPath is the regression
+// for a bug no unit test could see and an end-to-end run found immediately.
+//
+// FetchAsset writes to a temp file named `.<file>.part-<random>`, and Extract
+// used to read the format off THAT path — so every real download arrived as
+// "not an archive shape this build unpacks", while every test passed a path that
+// happened to end in .tar.gz. The format now comes from the name the signed
+// manifest gives, which is where it should have come from anyway.
+func TestTheFormatComesFromTheDeclaredNameNotTheDownloadedPath(t *testing.T) {
+	src := t.TempDir()
+	archive := writeTarGz(t, src, []member{{name: "pkg/zcd", body: "ZCD"}})
+
+	// Rename it the way a download names its partial file: no archive suffix.
+	downloaded := filepath.Join(src, ".zycord-0.2.0-linux-amd64.tar.gz.part-1691400865")
+	if err := os.Rename(archive, downloaded); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasSuffix(downloaded, ".tar.gz") {
+		t.Fatal("the fixture still ends in .tar.gz, so this test proves nothing")
+	}
+
+	out := t.TempDir()
+	got, err := update.Extract(downloaded, "zycord-0.2.0-linux-amd64.tar.gz", out, []string{"zcd"})
+	if err != nil {
+		t.Fatalf("a real download path was refused: %v", err)
+	}
+	if b, err := os.ReadFile(got["zcd"]); err != nil || string(b) != "ZCD" {
+		t.Errorf("extracted %q, err %v", b, err)
+	}
+
+	// And a declared name that is not an archive shape is still refused, so the
+	// check did not simply disappear.
+	if _, err := update.Extract(downloaded, "zycord-0.2.0-linux-amd64.rar", out, []string{"zcd"}); err == nil {
+		t.Error("accepted an archive shape this build does not unpack")
 	}
 }
