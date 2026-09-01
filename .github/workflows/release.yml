@@ -197,6 +197,7 @@ jobs:
           path: |
             dist/SHA256SUMS.binaries
             dist/zycord-release-key.asc
+            dist/install.sh
           if-no-files-found: error
 
   # The tier a user can actually join a network with.
