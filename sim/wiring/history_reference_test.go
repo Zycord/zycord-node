@@ -138,6 +138,7 @@ var swept = []string{
 	"cmd/",
 	"wallet/",
 	"desktop/",
+	"update/",
 
 	".github/",
 	".gitattributes",
