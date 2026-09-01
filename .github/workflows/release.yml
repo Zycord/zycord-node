@@ -181,10 +181,20 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: zycord-cli
+          # The archives are built and NOT collected, on purpose.
+          #
+          # The pure-Go tier is devnet-only: it refuses mainnet and the public
+          # testnet, because it carries no RandomX engine. Publishing it put a
+          # download on the release page that cannot do the one thing somebody
+          # came for, next to one that can, distinguished by a suffix. That is a
+          # trap rather than a choice.
+          #
+          # What the tier is actually for survives untouched: SHA256SUMS.binaries
+          # is the list a reader compares their own `make build` against, and the
+          # rebuild-and-compare check in docs/INSTALL.md never downloaded the
+          # archive to begin with — it builds one. So the evidence is published
+          # and the trap is not.
           path: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/SHA256SUMS
             dist/SHA256SUMS.binaries
             dist/zycord-release-key.asc
           if-no-files-found: error
@@ -637,8 +647,13 @@ jobs:
           # name to extract from the first, and the publish job died with
           # "Not found in archive" after every build had already succeeded.
           # A name built from ${GITHUB_REF_NAME} cannot match two things.
+          # The generator comes out of the -randomx archive, which is now the
+          # only linux/amd64 CLI archive published. It is built on this same
+          # runner image, so it runs here; and it is the tier a user actually
+          # receives, so the binary that writes the manifest is one of the
+          # binaries the manifest describes.
           ver="${GITHUB_REF_NAME#v}"
-          cli="release/zycord-${ver}-linux-amd64.tar.gz"
+          cli="release/zycord-${ver}-linux-amd64-randomx.tar.gz"
           test -f "$cli" || {
             echo "the linux/amd64 CLI archive is not staged as $cli; the generator cannot be unpacked" >&2
             ls -1 release/ >&2
