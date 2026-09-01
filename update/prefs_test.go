@@ -3,6 +3,7 @@ package update_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,8 +49,14 @@ func TestPrefsRoundTrip(t *testing.T) {
 // executes new code, which is not something another account on the box should be
 // able to edit.
 func TestPrefsAreWrittenSoOnlyThisUserCanChangeThem(t *testing.T) {
-	if os.Getenv("GOOS") == "windows" {
-		t.Skip("mode bits do not mean this on Windows")
+	// runtime.GOOS, not os.Getenv("GOOS"): GOOS is a build constant, and there
+	// is no environment variable of that name at run time. Reading it as one
+	// made this skip never fire, so the assertion below ran on Windows - where
+	// Go's Chmod controls only the read-only bit and the mode is -rw-rw-rw- -
+	// and failed there while passing everywhere the author could see.
+	if runtime.GOOS == "windows" {
+		t.Skip("Go's Chmod on Windows controls only the read-only bit, so 0600 is not " +
+			"expressible; the file's protection there is the directory ACL it inherits")
 	}
 	dir := t.TempDir()
 	if err := update.SavePrefs(dir, update.Prefs{Mode: update.ModeAuto}); err != nil {
