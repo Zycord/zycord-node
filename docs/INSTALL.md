@@ -393,6 +393,17 @@ The project key still exists and is still used, for signed announcements and
 anything else where a human statement needs an author. It simply no longer
 appears in the download path.
 
+**There is one signature in the release, and it is not for you.** Releases also
+carry `update-manifest.json` and a detached signature over it, which is what the
+built-in updater checks — because a standard-library client can verify an ed25519
+signature and cannot verify a Sigstore attestation. That key lives in CI, so it
+belongs to whoever can push a workflow file, and it defends against a mirror or a
+broken TLS chain rather than against a compromise of the pipeline. Its trust root
+is the same as the attestation's, and it makes no claim the attestation does not
+already make to a reader who has `gh`. Verifying by hand, the commands above are
+still the whole answer; [UPDATES.md](UPDATES.md) is where the other path is
+spelled out.
+
 ### The build itself — the check that actually replaces a certificate
 
 A hash tells you the file was not altered in transit. It says nothing about what
