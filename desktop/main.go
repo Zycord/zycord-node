@@ -26,10 +26,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"time"
 
 	"zycord/core/params"
 	"zycord/spec"
+	"zycord/update"
 	"zycord/wallet/webui"
 
 	"github.com/wailsapp/wails/v2"
@@ -183,6 +185,168 @@ func (b *Bridge) Configure(req webui.ConfigureRequest) (*webui.WalletState, erro
 	return state, nil
 }
 
+// UpdateReport is what the window is told about updates.
+type UpdateReport struct {
+	// Asked records whether the person has answered the one-time question.
+	Asked bool `json:"asked"`
+	// Enabled is their answer.
+	Enabled bool `json:"enabled"`
+	// Current is this build's version.
+	Current string `json:"current"`
+	// Available is the newer version, empty when there is none.
+	Available string `json:"available"`
+	// Note and Security come from the signed manifest.
+	Note     string `json:"note"`
+	Security bool   `json:"security"`
+	// Installable is false when this wallet must not replace itself in place;
+	// Reason says why, and ReleaseURL is where to get the new one by hand.
+	Installable bool   `json:"installable"`
+	Reason      string `json:"reason"`
+	ReleaseURL  string `json:"release_url"`
+	// Error is a check that did not complete. Never fatal.
+	Error string `json:"error"`
+}
+
+// SetUpdateCheck records the answer to the one-time question.
+func (b *Bridge) SetUpdateCheck(on bool) error {
+	st := loadSettings(b.settingsPath)
+	st.UpdateCheck = "off"
+	if on {
+		st.UpdateCheck = "on"
+	}
+	return saveRawSettings(b.settingsPath, st)
+}
+
+// UpdateStatus checks for a newer wallet, if the person has said it may.
+//
+// It contacts nothing until UpdateCheck says "on". Not-yet-asked is reported as
+// not-asked rather than treated as consent.
+func (b *Bridge) UpdateStatus() (*UpdateReport, error) {
+	st := loadSettings(b.settingsPath)
+	rep := &UpdateReport{
+		Asked:      st.UpdateCheck != "",
+		Enabled:    st.UpdateCheck == "on",
+		Current:    version,
+		ReleaseURL: update.RepoURL() + "/releases/latest",
+	}
+	if !rep.Enabled {
+		return rep, nil
+	}
+	ks, err := update.Keys()
+	if err != nil {
+		rep.Error = err.Error()
+		return rep, nil
+	}
+	c := &update.Checker{
+		Keys: ks, Current: version,
+		// The wallet carries no proof-of-work engine, so it is always the plain
+		// tier and there is no tier to cross here.
+		RandomX: false, Product: update.ProductWallet,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	res, err := c.Check(ctx)
+	if err != nil {
+		// Never fatal, and never a dialog. A wallet that cannot reach a release
+		// host is still a wallet, and saying so quietly is the whole of what is
+		// owed.
+		rep.Error = err.Error()
+		return rep, nil
+	}
+	if !res.Available() {
+		return rep, nil
+	}
+	rep.Available = res.Manifest.Version
+	rep.Note = res.Manifest.Note
+	rep.Security = res.Manifest.Urgency == update.UrgencySecurity
+	rep.Installable, rep.Reason = walletCanReplaceItself(res)
+	return rep, nil
+}
+
+// walletCanReplaceItself answers whether this build may rewrite its own
+// executable, and why not when it may not.
+func walletCanReplaceItself(res *update.Result) (bool, string) {
+	if goruntime.GOOS == "darwin" {
+		// The macOS build ships as a .app bundle, and replacing one file inside
+		// a bundle is wrong independently of everything else here: the bundle is
+		// the unit the operating system tracks, quarantines and refuses. There
+		// is no code-signing certificate to re-establish either, and that is a
+		// release decision (docs/INSTALL.md) rather than something to work
+		// around from inside the application.
+		return false, "On macOS the wallet is an application bundle, so it is replaced by " +
+			"downloading the new one rather than from inside this window."
+	}
+	if res.Refusal != nil {
+		return false, res.Refusal.Error()
+	}
+	return true, ""
+}
+
+// InstallUpdate locks the wallet and then replaces this binary.
+//
+// **Locking first is not politeness.** While unlocked this process holds a
+// decrypted seed in memory, and installing means downloading, unpacking and
+// replacing an executable - work that has no business happening with key
+// material resident. api.Lock is the same path the idle timer already uses, so
+// this is a state the wallet returns to on its own anyway.
+//
+// It does not restart afterwards. Re-execing a window is a different problem
+// from re-execing a daemon, and asking somebody to reopen an application they
+// are looking at is a sentence rather than a mechanism.
+func (b *Bridge) InstallUpdate() (*UpdateReport, error) {
+	rep, err := b.UpdateStatus()
+	if err != nil {
+		return nil, err
+	}
+	if rep.Available == "" {
+		return rep, fmt.Errorf("there is nothing to install")
+	}
+	if !rep.Installable {
+		return rep, fmt.Errorf("%s", rep.Reason)
+	}
+	b.API.Lock()
+
+	ks, err := update.Keys()
+	if err != nil {
+		return rep, err
+	}
+	c := &update.Checker{Keys: ks, Current: version, RandomX: false, Product: update.ProductWallet}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	res, err := c.Check(ctx)
+	if err != nil {
+		return rep, err
+	}
+	if _, _, err := res.Install(ctx, nil, nil); err != nil {
+		return rep, err
+	}
+	rep.Reason = "Installed " + res.Manifest.Version + ". Close this window and open it again to use it."
+	return rep, nil
+}
+
+// OpenReleasePage opens the release page in the platform's browser, for the
+// installs this window must not replace itself.
+func (b *Bridge) OpenReleasePage() error {
+	if b.ctx == nil {
+		return fmt.Errorf("the window is not ready yet")
+	}
+	wruntime.BrowserOpenURL(b.ctx, update.RepoURL()+"/releases/latest")
+	return nil
+}
+
+// saveRawSettings persists a settings value the frontend did not send as a
+// ConfigureRequest.
+func saveRawSettings(path string, st settings) error {
+	raw, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return writeSettingsAtomic(path, append(raw, '\n'))
+}
+
 // settings is the small amount of state a desktop application is expected to
 // remember between launches. It holds no secret: a key file path is not a
 // key, and the passphrase is never written anywhere.
@@ -191,6 +355,12 @@ type settings struct {
 	RPC        string `json:"rpc"`
 	ConfirmRPC string `json:"confirm_rpc"`
 	Network    string `json:"network"`
+
+	// UpdateCheck is "on", "off", or "" for not yet asked. Three states rather
+	// than a bool, because "nobody has been asked" and "somebody said no" are
+	// different things: the first shows a one-time banner and the second must
+	// not.
+	UpdateCheck string `json:"update_check,omitempty"`
 }
 
 // params resolves the saved network name. An unrecognised one falls back to
@@ -233,7 +403,7 @@ func loadSettings(path string) settings {
 	if got.Network != "" {
 		out.Network = got.Network
 	}
-	out.KeyPath, out.ConfirmRPC = got.KeyPath, got.ConfirmRPC
+	out.KeyPath, out.ConfirmRPC, out.UpdateCheck = got.KeyPath, got.ConfirmRPC, got.UpdateCheck
 	return out
 }
 
@@ -250,5 +420,43 @@ func saveSettings(path string, req webui.ConfigureRequest) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(raw, '\n'), 0o600)
+	// Written the way the rest of this tree writes a file it would mind losing:
+	// a temp file in the SAME directory, fsynced and closed under its temporary
+	// name, then renamed over the target. A bare os.WriteFile can be torn by a
+	// crash between the write and the flush, and what it tears is the file that
+	// decides which node this wallet talks to and — now — whether it checks for
+	// updates. wallet/atomicfile.go makes the same argument at more length for
+	// key files; this mirrors the sequence rather than sharing it, which is what
+	// that file says about its own relationship to node/storage.
+	return writeSettingsAtomic(path, append(raw, '\n'))
+}
+
+// writeSettingsAtomic replaces path durably.
+func writeSettingsAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	defer os.Remove(name) // a no-op once the rename below has succeeded
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	// Before the rename: the other order publishes a name whose content is not
+	// yet on the disk.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }

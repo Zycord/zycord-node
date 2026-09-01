@@ -262,6 +262,26 @@
     chooseKeyFile: function () {
       return viaBridge("ChooseKeyFile");
     },
+
+    /* Desktop only: updates. The browser build is served by `zcd ui` from a
+     * binary the person already has on their own machine and updates with
+     * `zcd update`; a page has no business replacing it, and there is no HTTP
+     * fallback here on purpose rather than by omission. */
+    canUpdate: function () {
+      return !!(bridge && typeof bridge.UpdateStatus === "function");
+    },
+    updateStatus: function () {
+      return viaBridge("UpdateStatus");
+    },
+    setUpdateCheck: function (on) {
+      return viaBridge("SetUpdateCheck", on);
+    },
+    installUpdate: function () {
+      return viaBridge("InstallUpdate");
+    },
+    openReleasePage: function () {
+      return viaBridge("OpenReleasePage");
+    },
   };
 
   window.Transport = Transport;

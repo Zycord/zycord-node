@@ -283,3 +283,33 @@ button.danger { background: var(--error); border-color: var(--error); color: #ff
 
 .review-actions { display: flex; gap: 10px; margin-top: 16px; }
 .review-actions button { flex: 1; margin-top: 0; }
+
+/* The update banner. Hidden until there is something to say - a banner that is
+   always present is a banner nobody reads - and styled as a notice rather than
+   an alert, because the routine case is "a newer version exists", not "your
+   money is at risk". A security release turns it amber, which is the only time
+   this bar is allowed to be loud. */
+.update-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+/* A security release is the only time this bar is allowed to be loud, and it
+   reuses the warn tokens so it follows the light/dark scheme with everything
+   else rather than hard-coding a colour that is wrong in one of them. */
+.update-bar.security {
+  background: var(--warn-bg);
+  border-bottom-color: var(--warn-line);
+  color: var(--warn-text);
+}
+.update-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
