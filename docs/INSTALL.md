@@ -92,17 +92,22 @@ What that means for you, in one line each:
   will refuse — deliberately, at start-up, with the reason printed — rather than
   accepting one BLAKE3 pass as proof of work for every header it ever sees.
 
-**Windows gets no `-randomx` archive, and it is a release-pipeline limit rather
-than a code one.** A local `make build-randomx` on Windows with a MinGW-w64
-toolchain does work — measured, `zcd version` on the result names `randomx-v1` —
-but nothing in the release builds it: cgo cannot be cross-compiled from the
-Linux runner without a mingw toolchain in the image, and the `windows-latest`
-runner ships neither GNU make nor `zip` on `PATH`, which is the same wall
-[RELEASE.md](RELEASE.md) §5 records for the desktop wallet. Rather than hold the
-release for it, Windows ships the pure-Go archive with this note. So on Windows:
-`--devnet` runs, `zcd` works for keys and wallets against somebody else's node,
-and mining means building the engine yourself. That is stated here rather than
-discovered at start-up.
+**Windows x86-64 gets a `-randomx` archive. Windows arm64 does not.** The
+x86-64 engine is cross-compiled from the Linux runner with a MinGW-w64
+toolchain, and it is the one leg of the release that is not built natively:
+`windows-latest` ships neither GNU make nor `zip` on `PATH`, so being the target
+would cost two tools to buy one compiler. Because a cross-compiled archive
+cannot be started by the job that built it, a separate `randomx-smoke-windows`
+job downloads that exact archive on a Windows runner, unzips it and starts
+`zycordd.exe` — the platform nobody can test locally is not the platform nobody
+tested at all.
+
+Windows arm64 has no cross-toolchain in the runner image and no native runner to
+build one on, so it ships the pure-Go archive alone. On that platform `--devnet`
+runs, `zcd` works for keys and wallets against somebody else's node, and mining
+means building the engine yourself with `make build-randomx` and a MinGW-w64
+toolchain — measured to work, `zcd version` on the result names `randomx-v1`.
+That is stated here rather than discovered at start-up.
 
 This is the honest version and it is not a footnote. On Linux and macOS the
 desktop wallet links against the platform's webview through cgo, and `-trimpath`
@@ -136,9 +141,24 @@ Rather than fight SmartScreen and Gatekeeper, go through the door they leave
 open. A package manager installs from a URL and a hash, requires no signature,
 and does not trip either warning.
 
+**Neither channel is live yet, and the two sections below say so where somebody
+about to paste a command will read it.** The manifests are written and in
+`packaging/`; the tap and bucket repositories that serve them are not published,
+because each has to name a release's real hashes. Saying this here rather than
+letting the commands fail is the difference between a route that is not ready and
+a project that looks broken.
+
 ---
 
 ## Windows — Scoop
+
+**The bucket is not published yet, so these two commands fail today.** The
+manifest is in `packaging/scoop/` and is reviewable now; what does not exist is
+the repository that serves it, because a bucket has to name a release's real
+hashes and there was none to name when it was written. Until it exists, take the
+release zip — [Windows without Scoop](#windows-without-scoop), two sections down
+— which is a working route rather than a worse one: Scoop's advantage is that it
+avoids the mark of the web, not that the bytes are different.
 
 ```powershell
 scoop bucket add zycord https://github.com/thesimstoshi/scoop-zycord
@@ -160,11 +180,13 @@ It pins the release URL and the SHA-256 from `SHA256SUMS`, so Scoop verifies the
 download before it installs it.
 
 **What Scoop installs runs `--devnet` and refuses mainnet and the public
-testnet**, and on Windows there is no second archive that does not — see the
-two-tiers table above and the Windows paragraph under it. `zcd version` prints
-which engine the binary carries; on Windows it will say `dev-blake3 only`. The
-manifest's notes say this at install time so it is read before a node is
-started rather than after one refuses.
+testnet.** Scoop carries the pure-Go archive on both architectures, because that
+is the tier a package manager can point at and a stranger can reproduce. On
+x86-64 the archive that mines is on the release page beside it — take
+`*-windows-amd64-randomx.zip` and unzip it yourself; Scoop does not install it.
+`zcd version` prints which engine the binary carries, and what Scoop gave you
+will say `dev-blake3 only`. The manifest's notes say this at install time so it
+is read before a node is started rather than after one refuses.
 
 ### Windows without Scoop
 
@@ -179,6 +201,12 @@ Windows 11 and on current Windows 10. If it is missing, the window will not open
 and `zcd ui` in a browser is the way round it.
 
 ## macOS — Homebrew
+
+**The tap is not published yet, so `brew tap` fails today.** The formulae are in
+`packaging/homebrew/` and are reviewable now; what does not exist is the
+repository that serves them. Until it does, take the release archive — [macOS
+from the release zip](#macos-from-the-release-zip), below — and expect
+Gatekeeper, which that section is about.
 
 ```sh
 brew tap thesimstoshi/zycord https://github.com/thesimstoshi/homebrew-zycord
