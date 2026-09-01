@@ -1,3 +1,5 @@
+//go:build windows
+
 package update
 
 // syncDir is a no-op on Windows.
