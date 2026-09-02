@@ -309,6 +309,48 @@ The desktop wallet on Linux ships as an **AppImage**, because
 distro-specific package for each of them is a maintenance surface this project
 does not have. See [`packaging/appimage/`](../packaging/appimage/).
 
+### Debian and Ubuntu — the `.deb`
+
+For a server, this is the one that does more than move files.
+
+```sh
+curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/zycord_<version>_amd64.deb
+curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/SHA256SUMS.deb
+sha256sum --check --ignore-missing SHA256SUMS.deb
+sudo dpkg -i zycord_<version>_amd64.deb
+```
+
+It installs the RandomX binaries, a systemd unit, an unprivileged `zycord`
+account and `/var/lib/zycord`. **It does not enable or start anything.** A node
+needs to be told which network it is on, and a mining node needs a payout
+address; a package that started one with neither would leave a service that runs,
+looks healthy, and does nothing.
+
+```sh
+sudoedit /etc/zycord/zycordd.conf     # pick a network, and a payout to mine
+sudo systemctl enable --now zycordd
+journalctl -u zycordd -f
+```
+
+`apt purge` **leaves `/var/lib/zycord` in place**, against Debian convention and
+on purpose. What is in there is a chain somebody spent time and bandwidth
+synchronising; purge is a command people run while tidying up, sometimes on the
+wrong host, and silently deleting a synced chain is a loss with no undo. The
+removal says so instead.
+
+The updater knows about this install and will refuse to replace it, because
+rewriting a file `dpkg` owns leaves the package database describing bytes that
+are no longer there — the next upgrade would overwrite the update. Take the new
+`.deb` instead.
+
+The package is byte-reproducible for a given input: it records no build time and
+no builder, which a naive `dpkg-deb --build` does record. That is about what the
+artefact discloses rather than about verifying the binaries inside it — those are
+cgo and carry the same caveat as every `-randomx` build.
+
+Only `amd64` and `arm64`. There is no Debian package for the platforms with no
+RandomX build.
+
 ## Anyone with a Go toolchain
 
 **The Go version is `go1.26.2`, and it is part of the source.** Two Go releases

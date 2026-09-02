@@ -2,6 +2,7 @@ package update_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -226,5 +227,49 @@ func TestTheMostSpecificRefusalWins(t *testing.T) {
 	if !strings.Contains(r.Advice, "brew upgrade") {
 		t.Errorf("advice = %q; an unwritable Homebrew install should still be told to use brew, "+
 			"not that it lacks permission", r.Advice)
+	}
+}
+
+// TestABinaryOwnedByThePackageManagerIsRefused.
+//
+// The ownership guard already stops the common case: a node runs unprivileged
+// and the package's binary is root-owned, so it cannot be written. An operator
+// running the node as root has no such protection, and replacing a file dpkg
+// owns leaves the package database describing bytes that are no longer there —
+// the next upgrade overwrites the update, and `dpkg -V` reports a modified file
+// from then on.
+//
+// This asks dpkg about a path it certainly owns on a Debian-family machine, and
+// skips where there is no dpkg to ask, because the guard's own answer there is
+// "no package to conflict with" and that is correct rather than untested.
+func TestABinaryOwnedByThePackageManagerIsRefused(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("dpkg is a Debian-family thing")
+	}
+	if _, err := exec.LookPath("dpkg-query"); err != nil {
+		t.Skip("no dpkg-query on this machine, which is the case the guard returns nil for")
+	}
+	// A path dpkg owns on every Debian-family install.
+	owned := "/bin/sh"
+	if _, err := os.Stat(owned); err != nil {
+		t.Skip("no /bin/sh to ask about")
+	}
+	resolved, err := filepath.EvalSymlinks(owned)
+	if err != nil {
+		t.Skip(err)
+	}
+	if out, err := exec.Command("dpkg-query", "-S", resolved).Output(); err != nil || len(out) == 0 {
+		t.Skipf("dpkg does not own %s on this machine", resolved)
+	}
+
+	r := update.Guard(update.Target{
+		Path: resolved, Resolved: resolved,
+		Dir: filepath.Dir(resolved), Name: filepath.Base(resolved),
+	}, "v0.1.2")
+	if r == nil {
+		t.Fatal("a binary owned by an installed package was accepted for in-place replacement")
+	}
+	if !strings.Contains(r.Reason, "package") {
+		t.Errorf("reason = %q, want it to name the package manager", r.Reason)
 	}
 }
