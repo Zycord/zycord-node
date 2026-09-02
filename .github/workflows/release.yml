@@ -319,6 +319,17 @@ jobs:
           make dist-deb DEB_ARCH=${{ matrix.label == 'linux-arm64' && 'arm64' || 'amd64' }}
           make dist-deb-check DEB_ARCH=${{ matrix.label == 'linux-arm64' && 'arm64' || 'amd64' }}
 
+      # The Debian packages, in their own artefact and not folded into the one
+      # above -- see the comment there.
+      - uses: actions/upload-artifact@v4
+        if: matrix.goos == '' && startsWith(matrix.os, 'ubuntu')
+        with:
+          name: zycord-deb-${{ matrix.label }}
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS.deb
+          if-no-files-found: error
+
       - name: the archived node starts against the tagged mainnet parameters
         if: matrix.goos == ''
         run: make release-smoke ZYCORDD="$(ls dist/randomx/*-randomx/zycordd | head -1)"
@@ -326,9 +337,15 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: zycord-cli-randomx-${{ matrix.label }}
+          # Every path here MUST stay under dist/randomx/.
+          #
+          # upload-artifact roots the artefact at the common ancestor of its
+          # paths, so adding one file from dist/ moved every archive down a
+          # level inside the artefact -- and `randomx-smoke-windows`, which
+          # looks in the artefact root without recursing, stopped finding the
+          # zip it exists to start. The .deb was added here once and did exactly
+          # that; it has its own artefact below.
           path: |
-            dist/*.deb
-            dist/SHA256SUMS.deb
             dist/randomx/*.tar.gz
             dist/randomx/*.zip
             dist/randomx/SHA256SUMS.randomx
@@ -593,8 +610,8 @@ jobs:
           # artefact holding a checksum file and no binary.
           cp staging/zycord-cli-randomx-*/*.tar.gz release/
           cp staging/zycord-cli-randomx-*/*.zip release/ 2>/dev/null || true
-          cp staging/zycord-cli-randomx-*/*.deb release/ 2>/dev/null || true
-          cat staging/zycord-cli-randomx-*/SHA256SUMS.deb 2>/dev/null | sort -k2 > release/SHA256SUMS.deb || true
+          cp staging/zycord-deb-*/*.deb release/ 2>/dev/null || true
+          cat staging/zycord-deb-*/SHA256SUMS.deb 2>/dev/null | sort -k2 > release/SHA256SUMS.deb || true
           [ -s release/SHA256SUMS.deb ] || rm -f release/SHA256SUMS.deb
           cp staging/zycord-wallet-*/zycord-wallet-* release/
           cat staging/zycord-cli-randomx-*/SHA256SUMS.randomx | sort -k2 > release/SHA256SUMS.randomx
