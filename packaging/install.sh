@@ -102,7 +102,16 @@ case "$(uname -m)" in
     *) die "$(uname -m) is not a platform this script installs; build from source" ;;
 esac
 
-NAME="zycord-${VERSION#v}-${OS}-${ARCH}"
+# The -randomx tier, which is the one that joins a network.
+#
+# This script used to install the pure-Go archive and then explain, in its own
+# closing message, that what it had just installed refuses to start on mainnet
+# and on the public testnet. That is a strange thing for an installer to do: the
+# person ran it to get a node, and got a binary that will not be one, with the
+# bad news arriving after the install rather than instead of it. The pure-Go
+# tier is no longer published as an archive at all - what it is FOR is
+# SHA256SUMS.binaries and the rebuild check, which needs no download.
+NAME="zycord-${VERSION#v}-${OS}-${ARCH}-randomx"
 BASE="${REPO_URL%/}/releases/download/${VERSION}"
 
 WORK="$(mktemp -d)"
@@ -111,7 +120,7 @@ cd "$WORK"
 
 echo "==> fetching ${NAME}"
 curl -fsSL --proto '=https' --tlsv1.2 -O "${BASE}/${NAME}.tar.gz"
-curl -fsSL --proto '=https' --tlsv1.2 -O "${BASE}/SHA256SUMS"
+curl -fsSL --proto '=https' --tlsv1.2 -O "${BASE}/SHA256SUMS.randomx"
 
 # Build provenance, where the tooling for it exists.
 #
@@ -147,7 +156,7 @@ else
 fi
 
 echo "==> verifying checksums"
-$SHA256_CHECK SHA256SUMS || die "the checksum did not match; do not install this file"
+$SHA256_CHECK SHA256SUMS.randomx || die "the checksum did not match; do not install this file"
 
 echo "==> unpacking"
 tar xzf "${NAME}.tar.gz"
@@ -165,29 +174,29 @@ echo
 "${PREFIX}/zcd" version
 cat <<NEXT
 
-What you just installed is from the ATTESTED tier, and that tier is DEVNET-ONLY.
+What you just installed carries the RandomX engine, so it joins mainnet and the
+public testnet. That is the whole reason this script fetches this archive.
 
-These binaries are pure Go, CGO_ENABLED=0, and byte-identical to anyone else's
-build of this tag — which is the whole point of them, and which is also why they
-carry no RandomX engine. Mainnet and the public testnet both declare
-pow_engine: randomx-v1, and a node that cannot verify a network's engine refuses
-to start on it rather than accepting one BLAKE3 pass as proof of work. So:
+  zycordd --testnet --dir ./data --mine --payout <your 0x02 address>
+  zycordd --dir ./data                  mainnet, once genesis has happened
 
-  zycordd --devnet --dir ./devnet     works, and is how to find out how it works
-  zycordd --dir ./data                REFUSES: this binary holds no randomx-v1
-  zycordd --testnet --dir ./data      REFUSES, for the same reason
+What it is NOT is byte-identical across machines. RandomX is C++, so this is a
+cgo build and a system toolchain ends up in the output; it is checksummed by
+SHA256SUMS.randomx, which says the file arrived intact, and it has no line in
+SHA256SUMS.binaries, which is the list for something else.
 
-To join a network, take the archive with -randomx in its name from the same
-release page and install it the same way:
+That list is still published, and it is how you check this project rather than
+this file. Clone the repository at this tag, run \`make build\`, and compare your
+own hashes against SHA256SUMS.binaries. Those pure-Go binaries are devnet-only
+and are not published as a download for that reason — there is no point offering
+somebody an archive that refuses the network they came for. What they are for is
+the comparison, and the comparison needs a build rather than a download. It
+covers every line of consensus code the binary you just installed runs; only the
+work function differs, and that is a vendored copy of a published implementation
+pinned in core/pow/randomx/PINNED.
 
-  ${NAME}-randomx.tar.gz
-
-That one is cgo, so it is NOT byte-identical across machines: it is checksummed
-by SHA256SUMS.randomx and it has no line in SHA256SUMS.binaries. The two tiers
-are disjoint sets — the archive you can reproduce is not the one you can mine
-with, and the one you can mine with is not one anybody can attest. That is
-stated rather than hidden; docs/INSTALL.md, "Two tiers of assurance", is the
-longer version, and \`zcd version\` above printed which one you are holding.
+docs/INSTALL.md, "Two tiers of assurance", is the longer version, and
+\`zcd version\` above printed which engine you are holding.
 
 What is worth doing next, with what you have:
 

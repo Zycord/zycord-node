@@ -20,27 +20,30 @@ class Zycord < Formula
   depends_on "go" => :build
 
   def install
-    # The same flags the Makefile uses, so a Homebrew build and a release
-    # build of one tag produce the same bytes. -trimpath and -buildid= are
-    # what make that true; CGO_ENABLED=0 is what keeps it true across
-    # machines with different C toolchains.
+    # RandomX, which means cgo, which means this build is NOT byte-identical
+    # across machines. That is a deliberate reversal of what this formula used
+    # to do, and the comment it replaces argued the other way, so here is why.
     #
-    # CGO_ENABLED=0 also means NO RANDOMX ENGINE, and that is not a side
-    # effect worth leaving unstated. Mainnet and the public testnet both
-    # declare pow_engine randomx-v1, so what this formula installs runs
-    # --devnet and refuses both of them. The caveats below say so, because a
-    # package manager that installs a binary which refuses to start is a
-    # package manager whose users find out at the worst possible moment.
-    # The two tiers are disjoint by construction: the reproducible
-    # build is the devnet-only one, and the mainnet-capable one is cgo and
-    # therefore attested by nobody. Changing this line would trade the
-    # formula's entire argument — "compiled with your toolchain, comparable
-    # with everyone else's" — for one of the two, so it is left alone and the
-    # other route is named instead.
+    # The old build was pure Go: reproducible, comparable with everyone else's,
+    # and — because CGO_ENABLED=0 compiles no RandomX engine — unable to start
+    # on mainnet or on the public testnet. A package manager exists to install
+    # a working thing. Installing a node that refuses every real network, and
+    # explaining that in the caveats afterwards, is not a trade between two
+    # goods; it is a package that does not do the job, with a footnote.
+    #
+    # The property that was traded away is not lost, only moved to where it was
+    # always exercised. "Compiled with your toolchain, comparable with everyone
+    # else's" is checked by cloning the tag, running `make build`, and comparing
+    # against SHA256SUMS.binaries — which the release still publishes. Nobody
+    # ever verified the project by reading a Homebrew cellar. They verify by
+    # building, and that path is untouched.
+    #
+    # So: this formula installs the tier that mines, and the tier that proves
+    # the source is still one `make build` away for anyone who wants it.
     ldflags = "-s -w -buildid= -X main.version=#{version}"
-    ENV["CGO_ENABLED"] = "0"
-    system "go", "build", "-trimpath", "-ldflags", ldflags, "-o", bin/"zcd", "./cmd/zcd"
-    system "go", "build", "-trimpath", "-ldflags", ldflags, "-o", bin/"zycordd", "./cmd/zycordd"
+    ENV["CGO_ENABLED"] = "1"
+    system "go", "build", "-trimpath", "-tags", "randomx", "-ldflags", ldflags, "-o", bin/"zcd", "./cmd/zcd"
+    system "go", "build", "-trimpath", "-tags", "randomx", "-ldflags", ldflags, "-o", bin/"zycordd", "./cmd/zycordd"
 
     doc.install "README.md", "docs/INSTALL.md", "docs/RUNNING.md", "docs/WALLET.md"
   end
@@ -50,27 +53,24 @@ class Zycord < Formula
       There is no coin yet. Genesis has not happened.
       Anyone selling you ZCD today is scamming you.
 
-      WHAT THIS FORMULA INSTALLS IS DEVNET-ONLY.
+      This formula builds the RandomX engine, so these binaries join mainnet
+      and the public testnet.
 
-      It builds pure Go, CGO_ENABLED=0, so the binaries are byte-identical to
-      anyone else's build of this tag -- and carry no RandomX engine. Mainnet
-      and the public testnet both declare pow_engine randomx-v1, and a node
-      that cannot verify a network's engine refuses to start on it rather
-      than falling back to something weaker. So:
-
-        zycordd --devnet --dir ./devnet    works
-        zycordd --dir ./data               refuses: no randomx-v1 in this build
-        zycordd --testnet --dir ./data     refuses, for the same reason
+        zycordd --testnet --dir ./data --mine --payout <your 0x02 address>
+        zycordd --dir ./data                mainnet, once genesis has happened
 
       `zcd version` prints which engine this binary carries; `zcd params`
       prints which one the network requires. They have to agree.
 
-      To join a network, take the archive with -randomx in its name from the
-      releases page, or build it here with `make build-randomx`. That binary
-      is cgo, so it is NOT byte-identical across machines and has no line in
-      SHA256SUMS.binaries. The two tiers are disjoint sets: the one you can
-      reproduce is not the one you can mine with. docs/INSTALL.md, "Two tiers
-      of assurance", is the longer version.
+      Because RandomX is C++, this is a cgo build and is NOT byte-identical
+      across machines -- it has no line in SHA256SUMS.binaries. That list is
+      still published, and it is how you check the project rather than this
+      package: clone the tag, run `make build`, and compare your own hashes
+      against it. Those pure-Go binaries are devnet-only, which is why they are
+      not offered as a download; what they are for is the comparison, and the
+      comparison needs a build. It covers every line of consensus code these
+      binaries run. docs/INSTALL.md, "Two tiers of assurance", is the longer
+      version.
 
       This formula built from source, so nothing here is signed and nothing
       needed to be. To check that this tree is the protocol:
@@ -89,12 +89,18 @@ class Zycord < Formula
     assert_match "genesis id", shell_output("#{bin}/zcd genesis")
     assert_match "zcd", shell_output("#{bin}/zcd version")
 
-    # The caveats above tell the user this install is devnet-only. Assert the
-    # binary says the same thing, rather than leaving two pieces of prose to
-    # drift apart from the build flags that make them true: `zcd version`
-    # prints the engine THIS BINARY carries, and CGO_ENABLED=0 means it is the
-    # development one. If this line ever fails, the formula started
-    # shipping a cgo build and the caveats are now wrong.
-    assert_match "dev-blake3", shell_output("#{bin}/zcd version")
+    # The caveats above tell the user this install joins mainnet and the public
+    # testnet. Assert the binary says the same thing, rather than leaving two
+    # pieces of prose to drift apart from the build flags that make them true:
+    # `zcd version` prints the engine THIS BINARY carries, and the randomx build
+    # tag is what puts it there.
+    #
+    # This assertion used to read "dev-blake3", with a comment saying that if it
+    # ever failed, the formula had started shipping a cgo build and the caveats
+    # were wrong. That is exactly what happened, and the guard is why the caveats
+    # were rewritten in the same change rather than left behind. It now guards
+    # the opposite direction: if this fails, the formula quietly stopped building
+    # RandomX and is installing a node that refuses every real network.
+    assert_match "randomx-v1", shell_output("#{bin}/zcd version")
   end
 end

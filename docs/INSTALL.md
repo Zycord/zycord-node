@@ -47,24 +47,38 @@ do not have to trust the person who built the binary you downloaded. You can
 build it yourself and compare hashes — and if they match, the question of who
 built it stops mattering.
 
-### Two tiers of assurance, stated rather than implied
+### Two tiers, and only one of them is a download
 
-| artefact | reproducible? | joins mainnet? | why |
+| artefact | published as a download? | reproducible? | joins mainnet? |
 |---|---|---|---|
-| `zcd`, `zycordd` — plain archive | **yes**, byte-identical | **no** | pure Go, `CGO_ENABLED=0`, `-trimpath`, no build id — and therefore no RandomX engine |
-| `zcd`, `zycordd` — `-randomx` archive | **no** | **yes** | cgo: RandomX is C++, so a system C toolchain ends up in the output |
-| Zycord Wallet, Linux and macOS | **no** | n/a | cgo: a system C toolchain and a platform SDK end up in the output |
-| Zycord Wallet, Windows | **yes**, byte-identical binary | n/a | no cgo: Wails reaches WebView2 through pure Go |
+| `zcd`, `zycordd` — `-randomx` | **yes**, this is the download | no — cgo, RandomX is C++ | **yes** |
+| `zcd`, `zycordd` — pure Go | **no**, you build it | **yes**, byte-identical | no |
+| Zycord Wallet, Linux and macOS | yes | no — cgo | n/a |
+| Zycord Wallet, Windows | yes | yes, the binary | n/a |
 
-**The first two rows are disjoint sets, and that is the most important sentence
-on this page.** Mainnet and the public testnet both declare
-`pow_engine: randomx-v1`. RandomX is compiled only under a build tag that needs
-a C compiler, and a node that cannot verify a network's engine refuses to start
-on it rather than falling back to something weaker — so the archive you can
-rebuild byte for byte is **not** the archive you can mine with, and the archive
-you can mine with is **not** one anybody can attest. There is no third archive
-that is both, and pretending otherwise would be the blur the rest of this
-section exists to prevent.
+Mainnet and the public testnet both declare `pow_engine: randomx-v1`. RandomX is
+compiled only under a build tag that needs a C compiler, and a node that cannot
+verify a network's engine refuses to start on it rather than falling back to
+something weaker. So the binary you can rebuild byte for byte is **not** the
+binary you can mine with. There is no third one that is both.
+
+**What changed, and why the pure-Go archive is no longer offered.** It used to be
+published beside the other, distinguished by the absence of a suffix, and it is
+the one that refuses every real network. Somebody arriving to run a node had two
+downloads for their platform and one of them was a dead end — not a choice
+between two goods, a trap wearing the same name. So it is not published.
+
+**Nothing about verification changed, because verification never used it.** The
+check that replaces a code-signing certificate here is: clone the tag, run `make
+build`, hash your own binaries, compare against `SHA256SUMS.binaries` from the
+release. That list is still published. It always described binaries you build,
+not binaries you fetch — you cannot verify a build by downloading its output.
+What is gone is an archive nobody needed for that, and what remains is the whole
+of the argument.
+
+If you want to run the pure-Go build — to poke at `--devnet` without a C
+toolchain in the picture — `make build` produces it in a few seconds. That is a
+developer's errand, and a developer has a Go toolchain.
 
 What that means for you, in one line each:
 
@@ -76,7 +90,7 @@ What that means for you, in one line each:
   the attested tier is built from.
 - **You want to check that this project's source is what it says it is.** Take
   the plain archive, rebuild it with `make build`, and compare against
-  `SHA256SUMS.binaries`. That binary runs `--devnet` and refuses mainnet; what
+  `SHA256SUMS.binaries`. That build runs `--devnet` and refuses mainnet; what
   it is for is the check, and the check covers every line of consensus code the
   `-randomx` binary runs too. Only the work function differs, and it is the one
   part of the tree that is a vendored copy of somebody else's published,
@@ -176,7 +190,7 @@ MOTW-tagged files launched from Explorer; a file that was never tagged, launched
 through a shim from a terminal, does not reach that path at all.
 
 The manifest is in [`packaging/scoop/zycord.json`](../packaging/scoop/zycord.json).
-It pins the release URL and the SHA-256 from `SHA256SUMS`, so Scoop verifies the
+It pins the release URL and the SHA-256 from `SHA256SUMS.randomx`, so Scoop verifies the
 download before it installs it.
 
 **What Scoop installs runs `--devnet` and refuses mainnet and the public
@@ -377,8 +391,8 @@ and what the token in the printed URL is, are in
 ### The checksum
 
 ```sh
-curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/SHA256SUMS
-sha256sum --check --ignore-missing SHA256SUMS     # shasum -a 256 --check --ignore-missing on macOS
+curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/SHA256SUMS.randomx
+sha256sum --check --ignore-missing SHA256SUMS.randomx   # shasum -a 256 --check --ignore-missing on macOS
 ```
 
 `--ignore-missing` is not optional and it is not a way of being lenient.
@@ -402,7 +416,7 @@ has to remember, which is a step nobody performs and a promise the documents
 keep making anyway. What is published instead is produced by the build:
 
 ```sh
-gh attestation verify zycord-<version>-<os>-<arch>.tar.gz --repo thesimstoshi/zycord
+gh attestation verify zycord-<version>-<os>-<arch>-randomx.tar.gz --repo thesimstoshi/zycord
 ```
 
 That is a signed statement, made by GitHub's own infrastructure at build time,

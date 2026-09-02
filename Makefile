@@ -851,6 +851,21 @@ dist: dist-clean
 	@# a source that needs no keyserver -- the default one serves a copy with no
 	@# user ID and no self-signature, which `gpg --import` refuses outright.
 	@cp packaging/zycord-release-key.asc $(DIST)/zycord-release-key.asc
+	@# The installer, staged beside the archives it installs.
+	@#
+	@# docs/INSTALL.md has told readers to fetch this from the release page for
+	@# as long as that section has existed, and nothing ever put it there: the
+	@# workflow uploads what this target stages, and this target did not stage
+	@# it. So the documented way to get the installer was a curl that 404s,
+	@# which is a worse failure than having no installer at all -- it reads as
+	@# a broken project rather than a missing feature.
+	@#
+	@# It is copied verbatim rather than substituted. The publishing account is
+	@# written into the script itself now (RELEASE.md retired the PUBLISHER
+	@# placeholder), so there is nothing left to fill in at staging time, and a
+	@# copy that differs from the tracked file is a copy nobody can review by
+	@# reading the repository.
+	@cp packaging/install.sh $(DIST)/install.sh
 	@echo
 	@cat $(DIST)/SHA256SUMS
 	@echo
