@@ -303,6 +303,22 @@ jobs:
       # `randomx-smoke-windows` below, on Windows, against this very archive.
       # Skipping it quietly here would make the one platform nobody can test
       # locally into the one platform nobody tested at all.
+      # The Debian package, on the two legs that are native Linux. It carries
+      # this same -randomx build plus a systemd unit, an unprivileged account
+      # and a data directory, for the operators this project is trying to reach:
+      # somebody putting a node on a VPS.
+      #
+      # dist-deb-check is not decoration. A .deb is an ar archive of tarballs,
+      # and tarballs store owner NAMES and modification times: an uncontrolled
+      # build writes the builder's account and the exact minute it ran into a
+      # published artefact, which is an identity and a timezone (RELEASE.md
+      # section 2). The check unpacks what was just built and fails on either.
+      - name: the Debian package
+        if: matrix.goos == '' && startsWith(matrix.os, 'ubuntu')
+        run: |
+          make dist-deb DEB_ARCH=${{ matrix.label == 'linux-arm64' && 'arm64' || 'amd64' }}
+          make dist-deb-check DEB_ARCH=${{ matrix.label == 'linux-arm64' && 'arm64' || 'amd64' }}
+
       - name: the archived node starts against the tagged mainnet parameters
         if: matrix.goos == ''
         run: make release-smoke ZYCORDD="$(ls dist/randomx/*-randomx/zycordd | head -1)"
@@ -311,6 +327,8 @@ jobs:
         with:
           name: zycord-cli-randomx-${{ matrix.label }}
           path: |
+            dist/*.deb
+            dist/SHA256SUMS.deb
             dist/randomx/*.tar.gz
             dist/randomx/*.zip
             dist/randomx/SHA256SUMS.randomx
@@ -575,6 +593,9 @@ jobs:
           # artefact holding a checksum file and no binary.
           cp staging/zycord-cli-randomx-*/*.tar.gz release/
           cp staging/zycord-cli-randomx-*/*.zip release/ 2>/dev/null || true
+          cp staging/zycord-cli-randomx-*/*.deb release/ 2>/dev/null || true
+          cat staging/zycord-cli-randomx-*/SHA256SUMS.deb 2>/dev/null | sort -k2 > release/SHA256SUMS.deb || true
+          [ -s release/SHA256SUMS.deb ] || rm -f release/SHA256SUMS.deb
           cp staging/zycord-wallet-*/zycord-wallet-* release/
           cat staging/zycord-cli-randomx-*/SHA256SUMS.randomx | sort -k2 > release/SHA256SUMS.randomx
           cat staging/zycord-wallet-*/SHA256SUMS.desktop     | sort -k2 > release/SHA256SUMS.desktop
@@ -597,7 +618,7 @@ jobs:
       - name: Attest what this workflow built
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: 'release/*.tar.gz,release/*.zip'
+          subject-path: 'release/*.tar.gz,release/*.zip,release/*.deb'
 
       # Published, not drafted, and the draft went with the signatures it was
       # waiting for.

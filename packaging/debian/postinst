@@ -1,0 +1,54 @@
+#!/bin/sh
+# Create the account and the data directory the unit expects, and stop.
+#
+# It does not enable or start anything. A node needs to be told which network it
+# is on, and a mining node needs a payout address; a package that started one
+# with neither would leave a service that runs, looks healthy, and does nothing.
+set -e
+
+case "$1" in
+configure)
+    if ! getent passwd zycord >/dev/null; then
+        # A system account with no login and no home to write to. The node holds
+        # no key material -- signing happens in zcd, and nothing in zycordd
+        # accepts a seed or a passphrase -- so there is nothing here that wants
+        # a shell or a home directory.
+        adduser --system --group --no-create-home \
+                --home /var/lib/zycord --shell /usr/sbin/nologin \
+                --quiet zycord || true
+    fi
+
+    mkdir -p /var/lib/zycord
+    chown zycord:zycord /var/lib/zycord
+    # 0750: the chain is public data, but the directory also holds peers.json
+    # and the update policy, and neither is anybody else's business on a shared
+    # machine.
+    chmod 0750 /var/lib/zycord
+
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    if [ -z "$2" ]; then
+        # First install, not an upgrade. Say the one thing the operator has to
+        # do next, once, where they will see it.
+        cat <<'NEXT'
+
+zycord is installed and is NOT running.
+
+  1. Choose a network and, to mine, a payout address:
+       sudoedit /etc/zycord/zycordd.conf
+  2. Start it:
+       sudo systemctl enable --now zycordd
+  3. Watch it:
+       journalctl -u zycordd -f
+
+There is no coin yet. Genesis has not happened. Anyone selling you ZCD today is
+scamming you.
+
+NEXT
+    fi
+    ;;
+esac
+
+exit 0

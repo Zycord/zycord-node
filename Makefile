@@ -1237,6 +1237,79 @@ release-manifest: build
 release-manifest-verify: build
 	$(BIN)/zcd update verify --dir "$(MANIFEST_DIR)"
 
+# The Debian package, for the operators this project actually wants: somebody
+# putting a node on a VPS.
+#
+# It carries the -randomx tier, a systemd unit it does not enable, an
+# unprivileged account and a data directory. What it is FOR is the system
+# integration -- the service, the user, the directories, a clean removal -- not
+# saving a download. install.sh already saves the download.
+#
+# Three things make it safe to publish, and a naive `dpkg-deb --build` gets all
+# three wrong:
+#
+#   SOURCE_DATE_EPOCH and a zeroed mtime, because a .deb is an ar archive of
+#   tarballs and tarballs store modification times. An uncontrolled build writes
+#   the exact minute it ran into the package, which is activity hours and a
+#   timezone, published (RELEASE.md section 2).
+#
+#   --root-owner-group, because the same tarballs store owner NAMES. An
+#   uncontrolled build writes the build machine's account into every entry.
+#   Measured, not assumed: the first build of this target recorded a real
+#   username before this flag was added.
+#
+#   -Zxz with no threading, so the compressor's output does not depend on how
+#   many cores the builder happened to have.
+DEB       := $(DIST)/deb
+DEB_ARCH  ?= amd64
+
+.PHONY: dist-deb
+dist-deb: build-randomx
+	@command -v dpkg-deb >/dev/null || { echo "dist-deb needs dpkg-deb"; exit 1; }
+	@rm -rf $(DEB)
+	@mkdir -p $(DEB)/pkg/DEBIAN $(DEB)/pkg/usr/bin $(DEB)/pkg/etc/zycord \
+	          $(DEB)/pkg/lib/systemd/system $(DEB)/pkg/usr/share/doc/zycord
+	@cp $(BIN)/zcd-randomx      $(DEB)/pkg/usr/bin/zcd
+	@cp $(BIN)/zycordd-randomx  $(DEB)/pkg/usr/bin/zycordd
+	@chmod 0755 $(DEB)/pkg/usr/bin/zcd $(DEB)/pkg/usr/bin/zycordd
+	@# Comments are stripped: dpkg refuses a control file with them ("field
+	@# name '#' must be followed by colon"), and the reasoning belongs in the
+	@# tracked source where a reviewer reads it rather than in the artefact.
+	@sed -e '/^#/d' -e 's/@VERSION@/$(DIST_VERSION)/' -e 's/@ARCH@/$(DEB_ARCH)/' \
+	     packaging/debian/control > $(DEB)/pkg/DEBIAN/control
+	@cp packaging/debian/postinst packaging/debian/prerm packaging/debian/postrm $(DEB)/pkg/DEBIAN/
+	@chmod 0755 $(DEB)/pkg/DEBIAN/postinst $(DEB)/pkg/DEBIAN/prerm $(DEB)/pkg/DEBIAN/postrm
+	@cp packaging/debian/zycordd.service $(DEB)/pkg/lib/systemd/system/zycordd.service
+	@cp packaging/debian/zycordd.conf    $(DEB)/pkg/etc/zycord/zycordd.conf
+	@printf '/etc/zycord/zycordd.conf\n' > $(DEB)/pkg/DEBIAN/conffiles
+	@cp README.md LICENSE docs/INSTALL.md docs/RUNNING.md docs/UPDATES.md \
+	    $(DEB)/pkg/usr/share/doc/zycord/
+	@find $(DEB)/pkg -exec touch -h -d @0 {} +
+	@SOURCE_DATE_EPOCH=0 dpkg-deb --build --root-owner-group -Zxz \
+	    $(DEB)/pkg $(DIST)/zycord_$(DIST_VERSION)_$(DEB_ARCH).deb >/dev/null
+	@rm -rf $(DEB)
+	@# A checksum, so the package can be verified like everything else beside
+	@# it. The manifest does not describe it and should not: a dpkg-managed
+	@# install is one the updater refuses to replace, so offering the .deb as a
+	@# self-update asset would be describing a path that ends in a refusal.
+	@cd $(DIST) && $(SHA256) zycord_$(DIST_VERSION)_$(DEB_ARCH).deb > SHA256SUMS.deb
+	@echo "wrote $(DIST)/zycord_$(DIST_VERSION)_$(DEB_ARCH).deb"
+
+# Proof, not assertion: unpack what was just built and look for the two things
+# an uncontrolled build leaks. A package that carries the builder's username or
+# the minute it was made is one this project cannot publish.
+.PHONY: dist-deb-check
+dist-deb-check:
+	@deb=$$(ls $(DIST)/zycord_*_$(DEB_ARCH).deb 2>/dev/null | head -1); \
+	test -n "$$deb" || { echo "no .deb in $(DIST); run make dist-deb"; exit 1; }; \
+	bad=$$(ar p "$$deb" data.tar.xz 2>/dev/null | xz -dc | tar tvf - \
+	       | grep -vE '(^|[[:space:]])root/root([[:space:]]|$$)' || true); \
+	if [ -n "$$bad" ]; then echo "owner names other than root/root:"; echo "$$bad"; exit 1; fi; \
+	bad=$$(ar p "$$deb" data.tar.xz 2>/dev/null | xz -dc | tar tvf - \
+	       | grep -vE '1970-01-01' || true); \
+	if [ -n "$$bad" ]; then echo "timestamps that are not the epoch:"; echo "$$bad"; exit 1; fi; \
+	echo "deb ok: root/root and the epoch throughout, no builder identity and no build time"
+
 .PHONY: dist-clean
 dist-clean:
 	rm -rf $(DIST)

@@ -37,6 +37,7 @@ func Guard(t Target, current string) *Refusal {
 		guardScoop,
 		guardVersionedDirectory,
 		guardAppImage,
+		guardDpkg,      // platform split
 		guardOwnership, // platform split
 		guardWritable,  // last: a probe, and the least specific answer
 	} {

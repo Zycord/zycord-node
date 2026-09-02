@@ -1,0 +1,28 @@
+# No e-mail address in Maintainer, and that is deliberate rather than an
+# omission. Debian convention puts one there and dpkg accepts the field without
+# it. An address inside an artefact people download is a contact point and a
+# correlation handle, published to everyone who installs -- and this
+# repository's own anonymity sweep refuses one in a tracked file, which is how
+# it was caught here before it shipped. Security reports go through the
+# repository's private vulnerability reporting, which SECURITY.md names as the
+# only channel that is both private and does not ask who you are.
+Package: zycord
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Simstoshi
+Section: net
+Priority: optional
+Homepage: https://github.com/thesimstoshi/zycord
+Depends: libc6, libstdc++6
+Description: Zycord node and command-line tool
+ A Zycord full node with the RandomX proof-of-work engine, so it joins mainnet
+ and the public testnet, and zcd, the command-line tool for keys, wallets and
+ protocol checks.
+ .
+ This package installs a systemd unit and does not enable it. A node needs a
+ network and, to mine, a payout address, and starting one that has neither would
+ be a service that runs and does nothing. See /etc/zycord/zycordd.conf.
+ .
+ These binaries are cgo builds and are not byte-identical across machines. The
+ pure-Go tier is what a reader rebuilds and compares against SHA256SUMS.binaries;
+ it is devnet-only and is not shipped, here or anywhere.

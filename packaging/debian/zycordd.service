@@ -1,0 +1,46 @@
+[Unit]
+# A Zycord node, as a service.
+#
+# Not enabled by installation. A node needs to be told which network it is on,
+# and a mining node needs a payout address; starting one with neither would be a
+# service that runs and does nothing while looking healthy. The package installs
+# this and stops.
+Description=Zycord node
+Documentation=file:///usr/share/doc/zycord/RUNNING.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zycord
+Group=zycord
+
+# Everything the operator chooses lives here, so an upgrade never overwrites it.
+EnvironmentFile=/etc/zycord/zycordd.conf
+ExecStart=/usr/bin/zycordd --dir /var/lib/zycord $ZYCORDD_ARGS
+
+Restart=on-failure
+RestartSec=5s
+
+# The node holds no key material and needs no privilege. It reads its data
+# directory, writes its data directory, and talks to the network.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+ReadWritePaths=/var/lib/zycord
+
+# The node's own shutdown is orderly and bounded; give it room to finish rather
+# than killing it under an open chain store.
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
