@@ -116,12 +116,27 @@ job downloads that exact archive on a Windows runner, unzips it and starts
 `zycordd.exe` — the platform nobody can test locally is not the platform nobody
 tested at all.
 
-Windows arm64 has no cross-toolchain in the runner image and no native runner to
-build one on, so it ships the pure-Go archive alone. On that platform `--devnet`
-runs, `zcd` works for keys and wallets against somebody else's node, and mining
-means building the engine yourself with `make build-randomx` and a MinGW-w64
-toolchain — measured to work, `zcd version` on the result names `randomx-v1`.
-That is stated here rather than discovered at start-up.
+**Windows arm64 ships nothing, and the reason is narrower than this page used to
+claim.** It said there was no cross-toolchain and no native runner. The first
+half is true — Ubuntu's MinGW packages target i686 and x86-64 only, there is no
+aarch64 one. The second half was wrong, and it was measured rather than argued:
+a `windows-11-arm` runner schedules, reports `PROCESSOR_ARCHITECTURE = ARM64`,
+and carries Go for windows/arm64.
+
+What it does not carry is a compiler cgo can use for this target. Its `gcc` is an
+x86-64 MinGW running under emulation, so it assembles RandomX's `gcc_arm64.S`
+for the wrong architecture and fails on every ARM instruction in the file. Its
+clang is native but targets `aarch64-pc-windows-msvc`, and cgo on Windows needs a
+GNU-style driver; the build stops at `unsupported option '-fPIC' for target
+'aarch64-pc-windows-msvc'`.
+
+So the gap is one toolchain — `llvm-mingw`, which targets `aarch64-w64-mingw32` —
+and not a missing machine. Until that is in the pipeline, mining on Windows arm64
+means building the engine yourself. RandomX itself is fine on this architecture:
+the same sources build on linux/arm64 and darwin/arm64 in every release.
+
+That is stated here rather than discovered at start-up, and it is now what was
+observed rather than what was assumed.
 
 This is the honest version and it is not a footnote. On Linux and macOS the
 desktop wallet links against the platform's webview through cgo, and `-trimpath`
