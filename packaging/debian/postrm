@@ -1,0 +1,31 @@
+#!/bin/sh
+# Removal, and what it deliberately does not remove.
+set -e
+
+case "$1" in
+remove)
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    ;;
+purge)
+    # /var/lib/zycord is LEFT IN PLACE, on purge as well.
+    #
+    # Debian convention says purge removes what the package created, and this
+    # deliberately does not follow it. What is in there is a chain the operator
+    # spent time and bandwidth synchronising, and -- once genesis has happened --
+    # a node's own history. `apt purge` is a command people run while cleaning
+    # up, sometimes on the wrong host, and silently deleting a synced chain is
+    # not a tidy-up, it is a loss with no undo.
+    #
+    # Saying so is better than doing it quietly in either direction.
+    if [ -d /var/lib/zycord ]; then
+        echo "zycord: /var/lib/zycord was left in place; remove it by hand if you mean to." >&2
+    fi
+    rm -f /etc/zycord/zycordd.conf.dpkg-* 2>/dev/null || true
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+exit 0

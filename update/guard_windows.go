@@ -7,3 +7,6 @@ package update
 // the same question on this platform, and it answers it better than any
 // permission reading could: it performs the operation.
 func guardOwnership(Target, string) *Refusal { return nil }
+
+// guardDpkg has nothing to check on this platform.
+func guardDpkg(Target, string) *Refusal { return nil }
