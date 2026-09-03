@@ -163,7 +163,7 @@ func TestAnAnnouncementThatFailsItsWorkCheckMutatesNothing(t *testing.T) {
 	// Every check before the work check passes, so this input separates the
 	// work gate from all of them.
 	forged := BlockAnnounce{Header: blk.Header, CertExemplars: blk.CertExemplars()}
-	forged.Header.PoW.Nonce ^= 1 << 62
+	forged.Header.PoW.Nonce ^= 1 << 30
 
 	before := work.count()
 	v := e.OnBlockAnnounce(attacker, forged.MarshalAnnounce())

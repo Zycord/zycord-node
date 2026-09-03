@@ -130,7 +130,7 @@ func (h *budgetHarness) headerAtEpoch(t *testing.T, epoch, nonce uint64, target 
 		Time:     uint64(h.now.Unix()),
 		Target:   target,
 		CertRoot: certRoot(nil, p),
-		PoW:      types.PoWSeal{Nonce: nonce | 1<<63, SeedEpoch: pow.SeedEpochFor(height, p)},
+		PoW:      types.PoWSeal{Nonce: uint32(nonce) | 1<<31, SeedEpoch: pow.SeedEpochFor(height, p)},
 	}
 	// Anti-vacuity for every call: at the maximal target the header must PASS
 	// the work check, or a refusal downstream is the work check's and not the

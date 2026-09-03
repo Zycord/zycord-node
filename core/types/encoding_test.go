@@ -402,7 +402,7 @@ func TestBlockRoundTrip(t *testing.T) {
 			Height:  rng.Uint64(),
 			Time:    rng.Uint64(),
 			Target:  randU256(rng),
-			PoW:     types.PoWSeal{Nonce: rng.Uint64(), SeedEpoch: rng.Uint64()},
+			PoW:     types.PoWSeal{Nonce: rng.Uint32(), ExtraNonce: rng.Uint32(), SeedEpoch: rng.Uint64()},
 		}}
 		rng.Read(b.Header.ParentID[:])
 		rng.Read(b.Header.StateRoot[:])

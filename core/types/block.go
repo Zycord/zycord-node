@@ -12,6 +12,34 @@ const PoWSealSize = 16
 
 // PoWSeal is the miner's proof-of-work answer.
 //
+// Nonce is the 32-bit value a miner searches. It is 32 bits and not 64 because
+// stock XMRig writes a four-byte little-endian nonce at a fixed offset in the
+// blob it is handed and cannot be told otherwise; PoWInput's comment carries
+// the whole of that argument. The width is therefore a consensus fact, not an
+// arithmetic preference: widening it would move the blob and re-key every
+// proof of work on the chain.
+//
+// ExtraNonce is the other half of that trade, and it is the half that makes
+// the narrow nonce survivable. It sits INSIDE the seed preimage (PoWSeed
+// zeroes Nonce and nothing else), so every distinct value of it is a distinct
+// 32-byte seed and therefore a disjoint 2^32 nonce space. That is what lets a
+// pool serve stock miners: one ExtraNonce per connection or per job hands each
+// miner a search space no other miner is walking. Monero pools obtain the same
+// separation by varying tx_extra in the coinbase transaction; this chain has
+// no coinbase transaction to vary, so the separation has to be a header field.
+//
+// **A solo miner sets ExtraNonce to 0 and is not disadvantaged by doing so.**
+// 2^32 nonces per (template, ExtraNonce) pair is ample at a 30-second target:
+// a template refresh re-rolls the seed anyway, through Time, CertRoot and
+// every other header field the assembler moves. ExtraNonce buys parallel
+// *separation*, not depth.
+//
+// Nothing in consensus constrains ExtraNonce, and that is deliberate. It is
+// free grinding space inside the seed in exactly the sense SeedEpoch below is
+// not — but it is 32 bits of it that a miner already has for free by iterating
+// Nonce, so pinning it would remove a pool's only means of sharding work while
+// removing no grinding capability at all.
+//
 // SeedEpoch names the key epoch the proof-of-work function was keyed for.
 //
 // **A verifier does not read it to find the key.** The key is derived from the
@@ -33,14 +61,23 @@ const PoWSealSize = 16
 // was the design before the key came from the height, and nothing ever read
 // the field.
 type PoWSeal struct {
-	Nonce     uint64
-	SeedEpoch uint64
+	Nonce      uint32
+	ExtraNonce uint32
+	SeedEpoch  uint64
 }
 
 // MarshalSSZ returns the canonical encoding.
+//
+// Two uint32s where there was one uint64, so the seal is still PoWSealSize
+// bytes and HeaderSize does not move. That is not a coincidence to be grateful
+// for; it is the reason the split was drawn this way rather than by widening
+// the seal. A header that changed width would move every offset in the
+// fixed-size framing node/p2p builds on, invalidate the fuzz corpus, and turn
+// a blob-layout change into a wire change.
 func (s PoWSeal) MarshalSSZ() []byte {
 	out := make([]byte, 0, PoWSealSize)
-	out = append(out, ssz.Uint64(s.Nonce)...)
+	out = append(out, ssz.Uint32(s.Nonce)...)
+	out = append(out, ssz.Uint32(s.ExtraNonce)...)
 	out = append(out, ssz.Uint64(s.SeedEpoch)...)
 	return out
 }
@@ -51,7 +88,8 @@ func UnmarshalPoWSeal(b []byte) (PoWSeal, error) {
 	if len(b) != PoWSealSize {
 		return s, ErrDecode
 	}
-	s.Nonce = ssz.ReadUint64(b[:8])
+	s.Nonce = ssz.ReadUint32(b[:4])
+	s.ExtraNonce = ssz.ReadUint32(b[4:8])
 	s.SeedEpoch = ssz.ReadUint64(b[8:])
 	return s, nil
 }
@@ -143,9 +181,32 @@ func (h Header) ID() Hash {
 	return crypto.Sum(crypto.TagBlock, h.MarshalSSZ())
 }
 
+// PoWInput's layout. These are consensus constants: a second implementation
+// that placed the nonce anywhere else computes different digests and forks on
+// its first block.
+const (
+	// PoWInputSize is the width of the hashing blob.
+	PoWInputSize = 43
+	// PoWInputNonceOffset is where the four little-endian nonce bytes begin.
+	// 39 is not ours to choose — see PoWInput.
+	PoWInputNonceOffset = 39
+	// PoWInputReservedOffset and PoWInputReservedSize delimit the bytes
+	// between the seed and the nonce. **Every one of them MUST be zero.**
+	PoWInputReservedOffset = 32
+	PoWInputReservedSize   = PoWInputNonceOffset - PoWInputReservedOffset
+)
+
 // PoWSeed is the part of the proof-of-work input that does not change as the
 // miner iterates nonces. Separating it is what lets a miner hash the header
 // once per candidate block instead of once per attempt.
+//
+// **It zeroes Nonce and only Nonce.** ExtraNonce stays in the preimage on
+// purpose: that is the entire mechanism by which a pool gives two miners
+// disjoint search spaces, and PoWSeal's comment has the argument. Zeroing it
+// here would collapse every ExtraNonce onto one seed and silently un-shard
+// every pool on the network — a change that breaks nothing a test would
+// notice, which is why the omission is stated rather than left to be read out
+// of the absence of a line.
 func (h Header) PoWSeed() Hash {
 	sansNonce := h
 	sansNonce.PoW.Nonce = 0
@@ -153,12 +214,48 @@ func (h Header) PoWSeed() Hash {
 }
 
 // PoWInput is the exact byte string the proof-of-work function is evaluated
-// over: the seed followed by the nonce.
+// over:
+//
+//	0..31   PoWSeed()      blake3(TagPoW, SSZ(header with Nonce zeroed))
+//	32..38  seven zeroes   reserved; MUST be zero
+//	39..42  le32(Nonce)    the searched nonce
+//
+// **The shape is dictated by stock XMRig and nothing else.** For rx/0 XMRig
+// writes a four-byte little-endian nonce at byte 39 of whatever blob it is
+// given, because that is where Monero's block-hashing blob puts it; the offset
+// is compiled in and no pool protocol field moves it. A chain that wants to be
+// mined by unmodified XMRig therefore does not get to pick 32, or 40, or any
+// other number — it picks 39 or it ships a forked miner. Shipping a forked
+// miner was the alternative and it was rejected: it makes the hashrate that
+// can point at this chain a function of who is willing to build and trust an
+// unofficial binary, which for a young chain is close to nobody.
+//
+// **The seven reserved bytes are a consensus rule, not padding.** They exist
+// only because 32 and 39 are seven apart, and they are pinned at zero so that
+// the gap can never become a place to put something. Two failure modes are
+// closed by pinning it rather than leaving it unspecified. A verifier that
+// filled the gap with anything else — a nonce's high bytes, a version byte, an
+// uninitialised buffer — computes a different digest for the same header and
+// forks. And a future field placed there would be grinding space that
+// PoWSeed's zeroing does not reach, since the gap is written here rather than
+// derived from the header. There is no header field that can reach these
+// bytes, so nothing constructs a non-zero one; the rule binds *implementations
+// of this function*, which is exactly the kind of rule a golden vector over
+// the blob has to carry. **No such vector exists yet**: the corpus in spec/
+// covers folds over blocks, and a block cannot express this gap, so until a
+// vector fixes the 43 bytes themselves against a known-good digest the layout
+// is binding on this tree and on nothing else. docs/ARCHITECTURE.md §12 is the
+// normative statement in the meantime.
+//
+// The construction here starts from a zeroed array rather than appending, so
+// that the gap is zero because the buffer is zero and not because a caller
+// remembered to append zeroes.
 func (h Header) PoWInput() []byte {
 	seed := h.PoWSeed()
-	out := make([]byte, 0, 32+8)
-	out = append(out, seed[:]...)
-	out = append(out, ssz.Uint64(h.PoW.Nonce)...)
+	out := make([]byte, PoWInputSize)
+	copy(out[:PoWInputReservedOffset], seed[:])
+	// out[PoWInputReservedOffset:PoWInputNonceOffset] is left as make gave it.
+	copy(out[PoWInputNonceOffset:], ssz.Uint32(h.PoW.Nonce))
 	return out
 }
 

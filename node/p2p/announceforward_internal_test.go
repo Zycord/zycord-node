@@ -30,7 +30,7 @@ func unheldParentGhost(tb testing.TB, c *chain.Chain, salt uint64) types.Header 
 		Time:     c.Tip().Time + 100*p.TargetBlockSeconds,
 		CertRoot: certRoot(nil, p),
 		Target:   u256.Max,
-		PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p), Nonce: salt | 1<<63},
+		PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p), Nonce: uint32(salt) | 1<<31},
 	}
 	if err := pow.CheckWork(pow.Dev{}, h, p); err != nil {
 		tb.Fatalf("the ghost does not pass CheckWork (%v); at u256.Max no digest "+

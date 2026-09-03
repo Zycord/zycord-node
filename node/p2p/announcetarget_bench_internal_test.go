@@ -70,7 +70,7 @@ func BenchmarkTheWorkCheckTheRederivationStandsInFrontOf(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// A distinct id each iteration, so the work cache never answers.
-		h.PoW.Nonce = uint64(i) | 1<<62
+		h.PoW.Nonce = uint32(i) | 1<<30
 		_ = e.work.Check(e.Engine, h, c.Params())
 	}
 }

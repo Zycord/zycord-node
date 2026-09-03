@@ -54,9 +54,19 @@ func announceChain(tb testing.TB, blocks int) (*chain.Chain, *Engine, *epochCoun
 	return c, NewEngine(c, pool, peers, counter, "n:1"), counter
 }
 
+// nonceSearchBits is how many low nonce bits these helpers search before
+// giving up, and therefore also how far a caller's salt is shifted to get a
+// window no other salt walks. 22 bits is ample against pow.Dev at the targets
+// these tests use, and the salts passed here are single digits, so the shifted
+// value stays far inside the 32-bit nonce.
+const (
+	nonceSearchBits   = 22
+	nonceSearchWindow = uint32(1) << nonceSearchBits
+)
+
 // tipHeaderAt builds an announcement header naming c's tip as its parent,
 // carrying the target given, and solved against that target.
-func tipHeaderAt(tb testing.TB, c *chain.Chain, target u256.U256, salt uint64) types.Header {
+func tipHeaderAt(tb testing.TB, c *chain.Chain, target u256.U256, salt uint32) types.Header {
 	tb.Helper()
 	p := c.Params()
 	tip := c.Tip()
@@ -69,8 +79,14 @@ func tipHeaderAt(tb testing.TB, c *chain.Chain, target u256.U256, salt uint64) t
 		Target:   target,
 		PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(tip.Height+1, p)},
 	}
-	for n := uint64(0); n < 1<<22; n++ {
-		h.PoW.Nonce = n ^ (salt << 40)
+	// The salt moves the search into its own window so that two calls asking
+	// for the same target still get two different headers. It shifts by
+	// nonceSearchBits rather than by 40: the nonce is 32 bits wide now
+	// (types.PoWSeal), and a 40-bit shift would truncate every salt to zero,
+	// silently handing every caller the same header — a defect that would look
+	// like a dedupe bug in whatever test noticed it first.
+	for n := uint32(0); n < nonceSearchWindow; n++ {
+		h.PoW.Nonce = n ^ (salt << nonceSearchBits)
 		if pow.CheckWork(pow.Dev{}, h, p) == nil {
 			return h
 		}
@@ -242,7 +258,7 @@ func TestAnAnnouncementNamingAParentThisNodeDoesNotHoldIsStillAccepted(t *testin
 			"arrangement cannot separate a check keyed on the tip from one that " +
 			"is not, and would pass whatever the engine did")
 	}
-	for n := uint64(0); n < 1<<22; n++ {
+	for n := uint32(0); n < nonceSearchWindow; n++ {
 		h.PoW.Nonce = n
 		if pow.CheckWork(pow.Dev{}, h, p) == nil {
 			break
@@ -292,7 +308,7 @@ func TestTheGhostsAnnouncerIsBannedAndTheRelayIsNever(t *testing.T) {
 
 	forwarded, chargedRelay := 0, 0
 	for i := 0; i < 30 && !b.Peers.Banned(attacker); i++ {
-		ghost := tipHeaderAt(t, cb, cb.Params().MaxTarget, uint64(i)+1)
+		ghost := tipHeaderAt(t, cb, cb.Params().MaxTarget, uint32(i)+1)
 		v := b.OnBlockAnnounce(attacker, BlockAnnounce{Header: ghost}.MarshalAnnounce())
 		if v.Score != 0 {
 			b.Peers.Adjust(attacker, v.Score)
@@ -377,7 +393,7 @@ func TestAnAnnouncementOnThisNodesTipAtAnyHeightButItsSuccessorIsRefused(t *test
 		PoW:    types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p)},
 	}
 	solved := false
-	for n := uint64(0); n < 1<<22 && !solved; n++ {
+	for n := uint32(0); n < nonceSearchWindow && !solved; n++ {
 		h.PoW.Nonce = n
 		solved = pow.CheckWork(pow.Dev{}, h, p) == nil
 	}
@@ -439,7 +455,7 @@ func TestTheSuccessorHeightIsWhatThatCheckReadsAndNotMerelyBeingAbove(t *testing
 	p := c.Params()
 	tip := c.Tip()
 
-	build := func(height uint64, nonceSalt uint64) types.Header {
+	build := func(height uint64, nonceSalt uint32) types.Header {
 		t.Helper()
 		h := types.Header{
 			Version:  types.HeaderVersion,
@@ -450,8 +466,8 @@ func TestTheSuccessorHeightIsWhatThatCheckReadsAndNotMerelyBeingAbove(t *testing
 			Target:   ruleTarget(c),
 			PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p)},
 		}
-		for n := uint64(0); n < 1<<22; n++ {
-			h.PoW.Nonce = n ^ (nonceSalt << 40)
+		for n := uint32(0); n < nonceSearchWindow; n++ {
+			h.PoW.Nonce = n ^ (nonceSalt << nonceSearchBits)
 			if pow.CheckWork(pow.Dev{}, h, p) == nil {
 				return h
 			}
@@ -588,7 +604,7 @@ func TestATipExtensionDeclaringAHarderTargetThanTheRuleIsAlsoRefused(t *testing.
 		Time:     tip.Time + p.TargetBlockSeconds,
 		CertRoot: certRoot(nil, p),
 		Target:   hard,
-		PoW:      types.PoWSeal{Nonce: 1 << 63, SeedEpoch: pow.SeedEpochFor(tip.Height+1, p)},
+		PoW:      types.PoWSeal{Nonce: 1 << 31, SeedEpoch: pow.SeedEpochFor(tip.Height+1, p)},
 	}
 
 	v := e.OnBlockAnnounce("10.66.0.5:5000", BlockAnnounce{Header: h}.MarshalAnnounce())

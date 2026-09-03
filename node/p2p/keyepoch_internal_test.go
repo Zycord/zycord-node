@@ -134,7 +134,7 @@ func TestOneBlockBodyCannotBuyManyKeyEpochs(t *testing.T) {
 			ParentID: types.Hash{byte(i)},
 			Time:     p.GenesisTime + h*p.TargetBlockSeconds,
 			Target:   u256.Max,
-			PoW:      types.PoWSeal{Nonce: i},
+			PoW:      types.PoWSeal{Nonce: uint32(i)},
 		})
 	}
 	blk.Header.CertRoot = blk.ComputeCertRoot(p)

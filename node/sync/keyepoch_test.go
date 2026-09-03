@@ -80,7 +80,7 @@ func newFarCitingPeer(t *testing.T, base *peer, p *params.Params) *farCitingPeer
 			// sender zero hashes. Nothing on this path bounds a cited header's
 			// declared target.
 			Target: u256.Max,
-			PoW:    types.PoWSeal{Nonce: i},
+			PoW:    types.PoWSeal{Nonce: uint32(i)},
 		})
 	}
 	body.Header.CitesRoot = body.ComputeCitesRoot(p)

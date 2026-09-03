@@ -43,7 +43,7 @@ func floodEngine(t *testing.T) (*Engine, *params.Params, *countingPoW, *int64) {
 // node is working in (height tip+1), carrying the announcer's own target so the
 // work check accepts it, and a non-tip parent so the difficulty-vs-tip gate is
 // skipped. nonce makes each one distinct; when dates it.
-func workingAnnounce(p *params.Params, tip types.Header, nonce uint64, when int64) []byte {
+func workingAnnounce(p *params.Params, tip types.Header, nonce uint32, when int64) []byte {
 	height := tip.Height + 1
 	h := types.Header{
 		Version:  types.HeaderVersion,
@@ -52,7 +52,7 @@ func workingAnnounce(p *params.Params, tip types.Header, nonce uint64, when int6
 		Time:     uint64(when),
 		Target:   u256.Max,
 		CertRoot: certRoot(nil, p),
-		PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p), Nonce: nonce | 1<<63},
+		PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p), Nonce: nonce | 1<<31},
 	}
 	return BlockAnnounce{Header: h, CertExemplars: nil}.MarshalAnnounce()
 }
@@ -88,7 +88,7 @@ func TestWorkEvalCeilingBoundsTheAggregateUnderIdentityChurn(t *testing.T) {
 
 	// Fixed clock: no credit refills inside the run, so the aggregate is the raw
 	// ceiling and the assertion is exact.
-	var salt uint64
+	var salt uint32
 	for k := 0; k < identities; k++ {
 		conn := fmt.Sprintf("10.20.%d.1:5000", k) // a fresh identity per connection
 		for i := 0; i < perIdentity; i++ {
@@ -151,7 +151,7 @@ func TestHonestAnnounceVolumeIsNotThrottled(t *testing.T) {
 	const conn = "10.0.0.1:5000"
 	const rounds = 3 * MaxWorkEvalsPerConn
 	for i := 0; i < rounds; i++ {
-		v := e.OnBlockAnnounceFrom(conn, conn, workingAnnounce(p, tip, uint64(i), *clock))
+		v := e.OnBlockAnnounceFrom(conn, conn, workingAnnounce(p, tip, uint32(i), *clock))
 		if v.Cost == CostBudgeted {
 			t.Fatalf("honest announcement %d of %d at the honest rate (one new block per "+
 				"refill period) was throttled; the budgets refill at least this fast, so "+
@@ -175,7 +175,7 @@ func TestHonestAnnounceVolumeIsNotThrottled(t *testing.T) {
 	before := work.count()
 	deduped, accepted := 0, 0
 	for d := 0; d < distinct; d++ {
-		raw := workingAnnounce(p, tip, uint64(1)<<40+uint64(d), *clock)
+		raw := workingAnnounce(p, tip, uint32(1)<<20+uint32(d), *clock)
 		for c := 0; c < peersPer; c++ {
 			conn := fmt.Sprintf("10.9.%d.%d:5000", c, d%250)
 			v := e.OnBlockAnnounceFrom(conn, conn, raw)
@@ -217,7 +217,7 @@ func TestAValidBlockStaysObtainableThroughASaturatedNode(t *testing.T) {
 
 	// Saturate the NODE-WIDE ceiling: it takes more than one connection's budget
 	// to fill, so spend it across enough connections to run the ceiling dry.
-	var salt uint64
+	var salt uint32
 	conns := int(ceiling)/MaxWorkEvalsPerConn + 1
 	for k := 0; k <= conns; k++ {
 		conn := fmt.Sprintf("10.30.%d.1:5000", k)

@@ -592,6 +592,26 @@ func (m *Miner) Seal(b *types.Block, attempts uint64) error {
 // miner subscribing to chain events — real machinery, for a signal a cheap
 // read already carries.
 func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) error {
+	// The nonce is 32 bits (types.PoWSeal), so a budget above 2^32 asks for
+	// attempts there is no nonce to make. Clamped rather than wrapped, for the
+	// reason pow.Solve clamps: the workers stride over a uint64 counter and a
+	// wrapped one would re-test nonces already rejected, reporting hashrate it
+	// was not converting into coverage.
+	//
+	// **This is the minimum this function needs to be correct at the new nonce
+	// width, and deliberately not more.** **This miner never sets or rolls
+	// ExtraNonce: it mines at zero, always.** Rolling it to buy a fresh 2^32
+	// space when this one is exhausted — the mechanism types.PoWSeal describes
+	// — is left to whoever next rewrites this loop, together with the policy
+	// question it carries: whether a solo miner reaching the end of a space
+	// should prefer a fresh ExtraNonce or a fresh template, which re-rolls the
+	// seed through Time and CertRoot anyway. Exhausting 2^32 RandomX hashes inside
+	// one 30-second interval is far out of reach for the hardware this
+	// milestone targets, so the clamp is not a live limit today; it is here so
+	// that reaching it is a bounded search rather than an infinite loop.
+	if attempts > nonceSpace {
+		attempts = nonceSpace
+	}
 	threads := m.Threads
 	if threads <= 0 {
 		threads = 1
@@ -608,7 +628,7 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 	var (
 		wg     sync.WaitGroup
 		found  atomic.Bool
-		winner atomic.Uint64
+		winner atomic.Uint32
 	)
 	for w := 0; w < threads; w++ {
 		wg.Add(1)
@@ -621,6 +641,9 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 			// searching nonces a shorter run would never have reached. With
 			// blocks, a search abandoned early would have covered only the
 			// first worker's range densely and every other range not at all.
+			// The counter stays uint64 so the stride and the bound cannot
+			// wrap; the narrowing below is lossless because attempts was
+			// clamped to nonceSpace above, so i is always under 2^32.
 			for i := uint64(w); i < attempts; i += uint64(threads) {
 				if i%pollAttempts < uint64(threads) {
 					if found.Load() {
@@ -630,12 +653,12 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 						return
 					}
 				}
-				if s.Try(i) {
+				if s.Try(uint32(i)) {
 					// A concurrent winner is possible and harmless: both
 					// nonces satisfy the target, so either is a valid seal.
 					// CompareAndSwap only decides which one the block carries.
 					if found.CompareAndSwap(false, true) {
-						winner.Store(i)
+						winner.Store(uint32(i))
 					}
 					return
 				}
@@ -657,6 +680,11 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 // speeds this is a fraction of a second per worker; against pow.Dev it is
 // nothing at all.
 const pollAttempts = 512
+
+// nonceSpace is how many nonces one (template, ExtraNonce) pair holds, the
+// width of types.PoWSeal's Nonce. It bounds the attempt budget rather than the
+// header: a budget above it cannot buy a nonce that does not exist.
+const nonceSpace = 1 << 32
 
 // MineOne assembles, seals and applies a single block.
 func (m *Miner) MineOne(attempts uint64) (*types.Block, *fold.Result, error) {

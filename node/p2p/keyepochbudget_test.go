@@ -66,7 +66,7 @@ func TestTheFreeKeyEpochsFollowThisNodesOwnTip(t *testing.T) {
 			Time:     tip.Header.Time,
 			Target:   u256.Max,
 			CertRoot: emptyRoot,
-			PoW:      types.PoWSeal{Nonce: nonce | 1<<63, SeedEpoch: pow.SeedEpochFor(height, p)},
+			PoW:      types.PoWSeal{Nonce: uint32(nonce) | 1<<31, SeedEpoch: pow.SeedEpochFor(height, p)},
 		}
 		// Anti-vacuity: a header that the work check refuses would be refused
 		// below for a reason that is not the budget's.

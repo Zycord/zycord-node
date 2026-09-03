@@ -121,7 +121,7 @@ func TestAppearingInTheCandidateSetDoesNotPreemptTheRotation(t *testing.T) {
 					EmissionAddr: key(t, 9).Persistent(),
 					Target:       p.MaxTarget,
 				}
-				ghost.PoW.Nonce = 1 << 63
+				ghost.PoW.Nonce = 1 << 31
 				blk := &types.Block{Header: ghost}
 				blk.Header.CertRoot = blk.ComputeCertRoot(p)
 				ann := p2p.BlockAnnounce{Header: blk.Header}

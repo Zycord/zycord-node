@@ -106,7 +106,7 @@ func TestSealAbandonsWithoutBurningTheBudget(t *testing.T) {
 // this, and node/chain's restart-equivalence test failed the moment the default
 // became parallel.
 func TestOneThreadIsReproducible(t *testing.T) {
-	var nonces []uint64
+	var nonces []uint32
 	for run := 0; run < 3; run++ {
 		m := sealHarness(t)
 		m.Threads = 1

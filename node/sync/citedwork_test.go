@@ -98,7 +98,7 @@ func newUnworkedCitingPeer(t *testing.T, base *peer, p *params.Params) *citingPe
 	cited.EmissionAddr = key(t, 9).Persistent()
 
 	var found bool
-	for n := uint64(0); n < 1<<16; n++ {
+	for n := uint32(0); n < 1<<16; n++ {
 		cited.PoW.Nonce = n
 		if pow.CheckWork(pow.Dev{}, cited, p) != nil {
 			found = true
@@ -110,7 +110,13 @@ func newUnworkedCitingPeer(t *testing.T, base *peer, p *params.Params) *citingPe
 			"target; work is free at these parameters and the test is vacuous")
 	}
 	digest := (pow.Dev{}).Hash(pow.KeyFor(cited.Height, p), cited.PoWInput())
-	if !u256.FromBytes(digest).Gt(cited.Target) {
+	// FromLEBytes, matching the rule this line is confirming: the work check
+	// reads the digest little-endian (pow.checkWorkWith), so a confirmation
+	// that read it big-endian would be asserting something the rule never
+	// says. The two conventions read independent ends of the digest, so they
+	// agree only by luck — and where the luck runs out this arm claims a
+	// forgery meets its target while CheckWork has just said it does not.
+	if !u256.FromLEBytes(digest).Gt(cited.Target) {
 		t.Fatal("setup: the forged citation meets its declared target after all")
 	}
 	if cited.ID() == tip.Header.ParentID {

@@ -469,7 +469,7 @@ func armWorkRefused(t *testing.T, f *budgetFixture, e *Engine, peerAddr string, 
 		// is already working in and the key-epoch price never intervenes.
 		Target:   u256.FromUint64(1),
 		CertRoot: certRoot(nil, p),
-		PoW:      types.PoWSeal{Nonce: 1 << 63, SeedEpoch: pow.SeedEpochFor(height, p)},
+		PoW:      types.PoWSeal{Nonce: 1 << 31, SeedEpoch: pow.SeedEpochFor(height, p)},
 	}
 	v := e.OnBlockAnnounceFrom(peerAddr, payer, BlockAnnounce{Header: hd}.MarshalAnnounce())
 	if v.Score != ScoreInvalidMessage {

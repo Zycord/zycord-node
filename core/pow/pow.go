@@ -172,8 +172,17 @@ type Solver struct {
 	engine Engine
 	key    types.Hash
 	target u256.U256
-	// input is seed ‖ le64(nonce), with the seed already written. Try
-	// overwrites the last eight bytes and nothing else.
+	// input is a types.PoWInputSize blob laid out exactly as
+	// types.Header.PoWInput lays it out, with the seed already written and the
+	// reserved gap left at zero. Try overwrites the four nonce bytes at
+	// types.PoWInputNonceOffset and nothing else.
+	//
+	// It is built from the same named offsets the rule uses rather than from
+	// "the last four bytes", because the nonce being last is an accident of
+	// this layout and not a property of it. A future reserved byte appended
+	// after the nonce would leave a positional expression here silently
+	// hashing the wrong bytes, and the failure would look like a miner that
+	// mysteriously never finds a block its own node accepts.
 	input []byte
 }
 
@@ -216,9 +225,8 @@ func NewSolver(e Engine, h types.Header, p *params.Params) Solver {
 		hot.MineOn(key)
 	}
 	seed := h.PoWSeed()
-	in := make([]byte, 0, len(seed)+8)
-	in = append(in, seed[:]...)
-	in = append(in, make([]byte, 8)...)
+	in := make([]byte, types.PoWInputSize)
+	copy(in[:types.PoWInputReservedOffset], seed[:])
 	return Solver{engine: e, key: key, target: h.Target, input: in}
 }
 
@@ -228,8 +236,13 @@ func NewSolver(e Engine, h types.Header, p *params.Params) Solver {
 // a parallel miner takes one Solver per worker. That is deliberate: the
 // alternative is allocating a buffer per attempt, in the loop this type exists
 // to keep tight.
-func (s *Solver) Try(nonce uint64) bool {
-	copy(s.input[len(s.input)-8:], ssz.Uint64(nonce))
+// It takes a uint32 because the nonce IS 32 bits (types.PoWSeal). A uint64
+// parameter would have compiled unchanged when the seal narrowed and silently
+// truncated, so that a miner searching past 2^32 would have re-tested nonces
+// it had already rejected and reported hashrate it was not converting into
+// coverage. Making the width a compile error was the point.
+func (s *Solver) Try(nonce uint32) bool {
+	copy(s.input[types.PoWInputNonceOffset:], ssz.Uint32(nonce))
 	// FromLEBytes, not FromBytes, and for the reason checkWorkWith gives at
 	// length: this is the same comparison by a second route, and the two
 	// routes not sharing code is the hazard TestTheSolverAgreesWithCheckWork
@@ -260,14 +273,27 @@ func Solve(e Engine, h *types.Header, p *params.Params, limit uint64) bool {
 		return CheckWork(e, *h, p) == nil
 	}
 	s := NewSolver(e, *h, p)
+	// The nonce space is 2^32 wide, so a limit above it asks for attempts
+	// there is no nonce to make. Clamping rather than wrapping keeps a caller
+	// that passes a large sentinel — several tests pass one — searching the
+	// whole space exactly once instead of looping forever over the low nonces.
+	if limit > nonceSpace {
+		limit = nonceSpace
+	}
 	for i := uint64(0); i < limit; i++ {
-		if s.Try(i) {
-			h.PoW.Nonce = i
+		if s.Try(uint32(i)) {
+			h.PoW.Nonce = uint32(i)
 			return true
 		}
 	}
 	return false
 }
+
+// nonceSpace is how many nonces exist for one (template, ExtraNonce) pair.
+// Exhausting it is not a failure a solo miner can reach at any realistic
+// hashrate inside a 30-second interval; a pool that could would shard by
+// ExtraNonce instead (types.PoWSeal).
+const nonceSpace = 1 << 32
 
 // CheckMedianTime enforces the lower time bound: a header must be strictly
 // later than the median of the last MEDIAN_TIME_BLOCKS headers.

@@ -74,7 +74,7 @@ func TestABlockCitingAHeaderThatNeverDidItsWorkIsRefused(t *testing.T) {
 	// if a hash, a tag or the target ever moves.
 	forged := sibling()
 	var found bool
-	for n := uint64(0); n < 1<<16; n++ {
+	for n := uint32(0); n < 1<<16; n++ {
 		forged.PoW.Nonce = n
 		if pow.CheckWork(pow.Dev{}, forged, p) != nil {
 			found = true
@@ -88,7 +88,13 @@ func TestABlockCitingAHeaderThatNeverDidItsWorkIsRefused(t *testing.T) {
 	// Stated twice on purpose: the digest must genuinely exceed the target, so
 	// that what refuses the block can only be the work.
 	digest := (pow.Dev{}).Hash(pow.KeyFor(forged.Height, p), forged.PoWInput())
-	if !u256.FromBytes(digest).Gt(forged.Target) {
+	// FromLEBytes, matching the rule this line is confirming: the work check
+	// reads the digest little-endian (pow.checkWorkWith), so a confirmation
+	// that read it big-endian would be asserting something the rule never
+	// says. The two conventions read independent ends of the digest, so they
+	// agree only by luck — and where the luck runs out this arm claims a
+	// forgery meets its target while CheckWork has just said it does not.
+	if !u256.FromLEBytes(digest).Gt(forged.Target) {
 		t.Fatal("setup: the forged citation meets its declared target after all")
 	}
 

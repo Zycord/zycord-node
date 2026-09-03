@@ -12,6 +12,7 @@ import (
 	"zycord/core/pow"
 	"zycord/core/ssz"
 	"zycord/core/types"
+	"zycord/core/u256"
 	"zycord/spec"
 )
 
@@ -226,17 +227,74 @@ func TestTheSolverAgreesWithCheckWork(t *testing.T) {
 		Time:    1000,
 		Target:  p.GenesisTarget,
 	}
-	s := pow.NewSolver(pow.Dev{}, h, p)
-
-	for _, nonce := range []uint64{
+	// The boundaries of the 32-bit nonce space (types.PoWSeal), plus the byte
+	// and half-word edges the blob's little-endian writes cross. The top two
+	// matter most: they are the values a solver that still wrote eight bytes,
+	// or wrote them at the wrong offset, would disagree with the rule about.
+	nonces := []uint32{
 		0, 1, 2, 255, 256, 65535, 65536,
-		1 << 31, 1 << 32, 1<<32 + 1,
-		math.MaxUint64 - 1, math.MaxUint64,
+		1 << 23, 1 << 24, 1 << 31,
+		math.MaxUint32 - 1, math.MaxUint32,
+	}
+	// A contiguous run on top of the boundaries, because the boundaries alone
+	// do not reach a solution. At MaxTarget roughly one nonce in thirty-four
+	// solves, and all twelve values above miss — so without this run the true
+	// arm of the comparison is never taken at either target and the whole
+	// test degenerates to `false == false`. 256 is far more than enough to
+	// make that essentially impossible while staying instant against pow.Dev;
+	// the anti-vacuity check below is what actually holds the property, so a
+	// future engine change that moved the rate cannot silently re-hollow it.
+	for n := uint32(0); n < 256; n++ {
+		nonces = append(nonces, n)
+	}
+
+	// **Both targets, and the second one is what makes this test bite.**
+	//
+	// At GenesisTarget no nonce in the list satisfies the rule, so `viaRule`
+	// and `viaSolver` are both false at every one of them and the comparison
+	// is `false == false`. That is a test which passes however the solver is
+	// broken: measured directly, a Try that wrote the nonce at the old offset
+	// 32, and a Try that read the digest big-endian while CheckWork read it
+	// little-endian, BOTH survived this test when it ran at GenesisTarget
+	// alone. It agreed with the rule by never reaching a solution on either
+	// route.
+	//
+	// MaxTarget is where essentially every nonce solves, so the true arm is
+	// exercised too and a divergence between the two routes has somewhere to
+	// show. Keeping both is the point: one target proves they agree on
+	// rejection, the other that they agree on acceptance, and a solver only
+	// has to disagree on one of the two to hand a miner blocks its own
+	// network refuses.
+	for _, target := range []struct {
+		name string
+		t    u256.U256
+	}{
+		{"GenesisTarget", p.GenesisTarget},
+		{"MaxTarget", p.MaxTarget},
 	} {
-		h.PoW.Nonce = nonce
-		viaRule := pow.CheckWork(pow.Dev{}, h, p) == nil
-		if viaSolver := s.Try(nonce); viaSolver != viaRule {
-			t.Fatalf("nonce %d: solver says %v, CheckWork says %v", nonce, viaSolver, viaRule)
+		h.Target = target.t
+		s := pow.NewSolver(pow.Dev{}, h, p)
+
+		var solved int
+		for _, nonce := range nonces {
+			h.PoW.Nonce = nonce
+			viaRule := pow.CheckWork(pow.Dev{}, h, p) == nil
+			if viaRule {
+				solved++
+			}
+			if viaSolver := s.Try(nonce); viaSolver != viaRule {
+				t.Fatalf("%s, nonce %d: solver says %v, CheckWork says %v",
+					target.name, nonce, viaSolver, viaRule)
+			}
+		}
+
+		// Anti-vacuity, stated per target rather than assumed: at MaxTarget the
+		// list must contain a solution, or the run above compared false against
+		// false at every nonce and measured nothing at all.
+		if target.name == "MaxTarget" && solved == 0 {
+			t.Fatal("no nonce in the list solves at MaxTarget, so the agreement " +
+				"between the two routes was only ever checked on rejection and a " +
+				"solver that accepts what the rule refuses would pass this test")
 		}
 	}
 }
@@ -270,8 +328,14 @@ func TestACloneSolvesIndependently(t *testing.T) {
 		go func(w int) {
 			defer wg.Done()
 			s := base.Clone()
-			for i := uint64(0); i < 256; i++ {
-				nonce := uint64(w)<<40 | i
+			for i := uint32(0); i < 256; i++ {
+				// Each worker walks its own high region, so the clones are
+				// genuinely testing different nonces rather than racing over
+				// one range. The shift is 20 rather than 40 because the nonce
+				// is 32 bits now; a 40-bit shift would collapse every worker
+				// onto region zero and the test would pass while measuring
+				// nothing.
+				nonce := uint32(w)<<20 | i
 				got := s.Try(nonce)
 
 				hh := h

@@ -788,7 +788,7 @@ func TestTheChargedHalfsAggregateIsStillBoundedPerIdentityByTheBan(t *testing.T)
 					Time:     tip.Time + p.TargetBlockSeconds,
 					Target:   honest, // the RULE's target: the work check refuses
 					CertRoot: certRoot(nil, p),
-					PoW: types.PoWSeal{Nonce: uint64(sent) | 1<<63,
+					PoW: types.PoWSeal{Nonce: uint32(sent) | 1<<31,
 						SeedEpoch: pow.SeedEpochFor(height, p)},
 				}
 				v := a.e.OnBlockAnnounce(conn, BlockAnnounce{Header: hd}.MarshalAnnounce())

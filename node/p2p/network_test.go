@@ -1463,7 +1463,7 @@ func fakeOrphan(t *testing.T, p *params.Params, height uint64, target u256.U256,
 		Time:         p.GenesisTime + height*p.TargetBlockSeconds,
 		EmissionAddr: key(t, 3).Persistent(),
 		Target:       target,
-		PoW:          types.PoWSeal{Nonce: nonce},
+		PoW:          types.PoWSeal{Nonce: uint32(nonce)},
 	}}
 	b.Header.CertRoot = b.ComputeCertRoot(p)
 	return b
@@ -1846,7 +1846,13 @@ func TestABlockCitingAGenesisHeightHeaderIsRefused(t *testing.T) {
 	}
 	// Anti-vacuity: confirm the citation genuinely fails its declared target,
 	// so what admits it below can only be the height exemption.
-	if digest := (pow.Dev{}).Hash(pow.KeyFor(cited.Height, p), cited.PoWInput()); !u256.FromBytes(digest).Gt(cited.Target) {
+	// FromLEBytes, matching the rule this line is confirming: the work check
+	// reads the digest little-endian (pow.checkWorkWith), so a confirmation
+	// that read it big-endian would be asserting something the rule never
+	// says. The two conventions read independent ends of the digest, so they
+	// agree only by luck — and where the luck runs out this arm claims a
+	// forgery meets its target while CheckWork has just said it does not.
+	if digest := (pow.Dev{}).Hash(pow.KeyFor(cited.Height, p), cited.PoWInput()); !u256.FromLEBytes(digest).Gt(cited.Target) {
 		t.Fatal("setup: the forged citation happens to meet its declared target")
 	}
 
@@ -1951,7 +1957,13 @@ func TestAGenesisBlockBodyIsRefused(t *testing.T) {
 	// genuinely fails the declared target. If it happened to pass, this test
 	// would not be exercising the exemption at all.
 	digest := pow.Dev{}.Hash(pow.KeyFor(forged.Header.Height, p), forged.Header.PoWInput())
-	if !u256.FromBytes(digest).Gt(forged.Header.Target) {
+	// FromLEBytes, matching the rule this line is confirming: the work check
+	// reads the digest little-endian (pow.checkWorkWith), so a confirmation
+	// that read it big-endian would be asserting something the rule never
+	// says. The two conventions read independent ends of the digest, so they
+	// agree only by luck — and where the luck runs out this arm claims a
+	// forgery meets its target while CheckWork has just said it does not.
+	if !u256.FromLEBytes(digest).Gt(forged.Header.Target) {
 		t.Fatal("setup: the forged header happens to meet its declared target, " +
 			"so this case is not exercising the height-0 exemption")
 	}

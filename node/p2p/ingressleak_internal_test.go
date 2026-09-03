@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -16,11 +17,29 @@ import (
 // distinct valid headers at one height". The search starts at `start`, so
 // callers that need distinct headers over otherwise identical fields pass
 // disjoint windows and land on distinct valid nonces (hence distinct ids).
-func solveMaxTarget(tb testing.TB, h types.Header, start uint64) types.Header {
+// floodWindowBits is how wide one caller's nonce window is, and therefore also
+// how far a caller's salt is shifted to reach it. The two are the same number
+// because that is what makes the windows exactly tile the space.
+//
+// **The value is bounded from both ends, and both bounds are why it is not
+// 24.** The nonce is 32 bits (types.PoWSeal), and the seen-set flood below
+// asks for MaxSeenBlocks+200 = 4296 distinct salts, so the shift may use at
+// most 32 - ceil(log2(4296)) = 19 bits; a 24-bit one would truncate every salt
+// above 255 back onto a window an earlier caller had already walked, hand two
+// callers the same header, and leave a test about the seen set's *cap*
+// quietly measuring its dedupe instead. From the other end the window has to
+// be wide enough to contain a solution, and at MaxTarget essentially every
+// nonce is one — so 2^18 is chosen for the margin rather than for the count.
+const floodWindowBits = 18
+
+func solveMaxTarget(tb testing.TB, h types.Header, start uint32) types.Header {
 	tb.Helper()
 	p := spec.Devnet()
-	for n := start; n < start+(1<<24); n++ {
-		h.PoW.Nonce = n
+	// Counted in uint64 so that a window butting against the top of the nonce
+	// space ends there rather than wrapping back over nonces an earlier
+	// caller's window already claimed.
+	for n := uint64(start); n < uint64(start)+(1<<floodWindowBits) && n <= math.MaxUint32; n++ {
+		h.PoW.Nonce = uint32(n)
 		if pow.CheckWork(pow.Dev{}, h, p) == nil {
 			return h
 		}
@@ -54,7 +73,7 @@ func floodHeader(tb testing.TB, c interface {
 	// A disjoint nonce window per salt, so every solved header has a distinct
 	// nonce and therefore a distinct id — the flood of "unbounded distinct valid
 	// headers" the finding describes, not one header re-announced.
-	return solveMaxTarget(tb, h, salt<<24)
+	return solveMaxTarget(tb, h, uint32(salt)<<floodWindowBits)
 }
 
 // TestBlockSeenSetStaysBoundedUnderAFlood is the bound: the block-announce

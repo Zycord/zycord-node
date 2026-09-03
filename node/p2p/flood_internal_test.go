@@ -107,7 +107,7 @@ func TestAUniqueInvalidHeaderFloodIsSelfLimiting(t *testing.T) {
 			PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(tip.Height+1, p)},
 		}
 		// Unique every time, and never solved.
-		h.PoW.Nonce = uint64(i) | 1<<63
+		h.PoW.Nonce = uint32(i) | 1<<31
 
 		ann := BlockAnnounce{Header: h, CertExemplars: nil}
 		v := e.OnBlockAnnounce(attacker, ann.MarshalAnnounce())
@@ -289,7 +289,7 @@ func TestAHeightVaryingFloodIsBoundedInEpochsToo(t *testing.T) {
 			Target:   honestTarget,
 			PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p)},
 		}
-		h.PoW.Nonce = uint64(i) | 1<<63
+		h.PoW.Nonce = uint32(i) | 1<<31
 
 		ann := BlockAnnounce{Header: h, CertExemplars: nil}
 		v := e.OnBlockAnnounce(attacker, ann.MarshalAnnounce())
@@ -387,7 +387,7 @@ func TestAHeightVaryingFloodIsBoundedInEpochsToo(t *testing.T) {
 // own declared field**, and still clamps it against nothing:
 //
 //	digest := e.Hash(key, h.PoWInput())
-//	if u256.FromBytes(digest).Gt(h.Target) { return ErrWorkTooLow }
+//	if u256.FromLEBytes(digest).Gt(h.Target) { return ErrWorkTooLow }
 //
 // At `Target = u256.Max` no digest can exceed it, so the check still PASSES,
 // and it is still evaluated under `pow.KeyFor(h.Height, p)` at a height the
@@ -500,7 +500,7 @@ func TestAnAnnouncersOwnTargetBuysABoundedNumberOfKeyEpochs(t *testing.T) {
 				CertRoot: certRoot(nil, p),
 				PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p)},
 			}
-			h.PoW.Nonce = uint64(i) | 1<<63
+			h.PoW.Nonce = uint32(i) | 1<<31
 
 			// Anti-vacuity, on the first header and asked of a bare pow.Dev so
 			// that the instrument is not seeded with the answer: the work check

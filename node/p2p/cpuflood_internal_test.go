@@ -62,7 +62,7 @@ func workingEpochFlood(t *testing.T, conn string, send int) (evals int, banned b
 		}
 		// Distinct every message, so ann.Header.ID() differs and the seen-set
 		// dedup read never hits.
-		h.PoW.Nonce = uint64(i) | 1<<63
+		h.PoW.Nonce = uint32(i) | 1<<31
 
 		if i == 0 {
 			// Anti-vacuity: the header must reach and pass the work check, and
