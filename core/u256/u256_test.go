@@ -158,3 +158,63 @@ func TestDecimalIsCanonical(t *testing.T) {
 		t.Fatal(`FromDecimal("0") must be zero`)
 	}
 }
+
+// TestFromLEBytesReadsTheOtherEnd pins the one property that makes
+// FromLEBytes worth having: it is not FromBytes, and the difference is not a
+// permutation a caller could paper over.
+//
+// The check is deliberately stated as a byte-reversal identity rather than as
+// a table of golden values. A table would pass for any implementation that
+// happened to agree on the samples chosen; the identity says the whole thing
+// — FromLEBytes(b) is FromBytes(reverse(b)) for every b — which is exactly
+// what "the two conventions read opposite ends" means, and it is the sentence
+// the consensus rule in core/pow rests on.
+func TestFromLEBytesReadsTheOtherEnd(t *testing.T) {
+	rng := rand.New(rand.NewSource(11))
+	for i := 0; i < 5000; i++ {
+		var b [32]byte
+		for j := range b {
+			b[j] = byte(rng.Intn(256))
+		}
+		var rev [32]byte
+		for j := range b {
+			rev[j] = b[31-j]
+		}
+		if got, want := FromLEBytes(b), FromBytes(rev); got != want {
+			t.Fatalf("FromLEBytes(%x) = %s, want %s", b, got, want)
+		}
+	}
+
+	// The two fixed points, spelled out because they are the cases a
+	// reversal identity cannot distinguish and a reader will want to see:
+	// the least significant byte is byte 0 under LE and byte 31 under BE.
+	var one [32]byte
+	one[0] = 1
+	if got := FromLEBytes(one); !got.Eq(One) {
+		t.Fatalf("FromLEBytes(01 00..) = %s, want 1", got)
+	}
+	var top [32]byte
+	top[31] = 1
+	if got, want := FromLEBytes(top), (U256{lo: [4]uint64{0, 0, 0, 1 << 56}}); got != want {
+		t.Fatalf("FromLEBytes(00.. 01) = %s, want 2^248", got)
+	}
+}
+
+// TestFromLEBytesRoundTripsThroughReversedCanonicalBytes: a value's LE
+// encoding is its canonical big-endian encoding read backwards, so the pair
+// composes back to the identity. This is what lets a caller that has to
+// produce an LE digest for a test build it from Bytes() and reverse.
+func TestFromLEBytesRoundTripsThroughReversedCanonicalBytes(t *testing.T) {
+	rng := rand.New(rand.NewSource(12))
+	for i := 0; i < 5000; i++ {
+		a := randU256(rng)
+		be := a.Bytes()
+		var le [32]byte
+		for j := range be {
+			le[j] = be[31-j]
+		}
+		if FromLEBytes(le) != a {
+			t.Fatalf("LE round trip failed for %s", a.String())
+		}
+	}
+}

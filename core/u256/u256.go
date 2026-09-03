@@ -49,6 +49,34 @@ func FromBytes(b [32]byte) U256 {
 	return u
 }
 
+// FromLEBytes interprets b as a little-endian 256-bit integer.
+//
+// This is NOT the canonical encoding of a cell value, and it exists for
+// exactly one caller: the proof-of-work check, which compares a work-function
+// digest against a target. A digest is not a number that anybody encoded — it
+// is 32 opaque bytes — so which end of it is "most significant" is a
+// convention the consensus rule picks, and the Monero family (RandomX, XMRig,
+// every pool and proxy that speaks to them) reads it little-endian. Reading it
+// big-endian instead is not merely a different convention: the two read
+// *opposite ends* of the digest, so no translation layer can exist between
+// them and a share a stock miner finds is noise to a node that disagrees.
+//
+// Nothing else in the tree should reach for this. Every other 256-bit value
+// here — a cell value, a target, accumulated work — is a number somebody wrote
+// down, and its encoding is big-endian by the rule stated in this package's
+// doc comment. If a second caller ever appears, that is the moment to ask
+// whether it is really reading a digest.
+func FromLEBytes(b [32]byte) U256 {
+	var u U256
+	for i := 0; i < 4; i++ {
+		off := i * 8
+		u.lo[i] = uint64(b[off]) | uint64(b[off+1])<<8 | uint64(b[off+2])<<16 |
+			uint64(b[off+3])<<24 | uint64(b[off+4])<<32 | uint64(b[off+5])<<40 |
+			uint64(b[off+6])<<48 | uint64(b[off+7])<<56
+	}
+	return u
+}
+
 // Bytes returns the canonical big-endian 32-byte encoding.
 func (u U256) Bytes() [32]byte {
 	var b [32]byte

@@ -95,6 +95,46 @@ func CheckWork(e Engine, h types.Header, p *params.Params) error {
 // this body deliberately: a Solve that reimplemented the comparison could
 // drift from the rule it is supposed to be satisfying, and the drift would
 // show up as a miner producing headers its own network rejects.
+//
+// **The digest is read little-endian, and that is the consensus rule.** It is
+// the single most consequential line in this file, so the reason is written
+// here rather than left to the u256 helper it calls.
+//
+// A digest is not a number anybody encoded: it is 32 opaque bytes out of the
+// work function, and which end of it counts as most significant is a
+// convention the rule has to *choose*. Everywhere else in this project the
+// choice is already made and it is big-endian — a cell value, a target,
+// accumulated work are all numbers somebody wrote down, and the wire form of
+// each is 32 big-endian bytes. This one place departs from that, on purpose,
+// because the digest is the one 256-bit quantity here whose producer is
+// outside this tree.
+//
+// RandomX is a Monero-family work function, and the whole Monero-family
+// ecosystem — XMRig, every pool, every proxy, every stratum dialect — reads
+// its digest little-endian, comparing the *last* eight bytes as an LE `uint64`
+// against a compact target. Reading it big-endian is not a harmlessly
+// different convention that a translation layer could bridge: the two read
+// **opposite ends** of the digest, and the ends are independent. A share a
+// stock miner finds is uniform noise under the other rule, and vice versa, so
+// there is no proxy that can sit between a big-endian node and the miners that
+// exist. The node would be alone with its own miner, which is the failure the
+// distribution mechanism in this package's doc comment cannot survive.
+//
+// The difficulty of the rule is unchanged by the choice — a digest is uniform,
+// so the probability that either interpretation lands at or below a given
+// target is the same. What changes is *which* nonces win, and therefore who
+// can mine at all.
+//
+// One consequence is worth recording here because a later component depends on
+// it. Under the LE reading, the leading bytes of a 256-bit target — the ones a
+// truncation keeps — correspond to the *last* bytes of the digest, which is
+// exactly the window XMRig's 64-bit job target compares. A stratum job target
+// is therefore a clean truncation of the consensus target,
+// `t64 = max(1, floor((target256 + 1) / 2^192))`, and every share found under
+// it satisfies the full 256-bit check up to a boundary sliver of width one
+// part in 2^64. Under the big-endian reading no such truncation exists, which
+// is the practical statement of "no proxy can translate between them".
+// docs/ARCHITECTURE.md §12 is normative and states both halves.
 func checkWorkWith(e Engine, h types.Header, key types.Hash) error {
 	if h.Height == 0 {
 		return nil
@@ -103,7 +143,7 @@ func checkWorkWith(e Engine, h types.Header, key types.Hash) error {
 		return ErrTargetMissing
 	}
 	digest := e.Hash(key, h.PoWInput())
-	if u256.FromBytes(digest).Gt(h.Target) {
+	if u256.FromLEBytes(digest).Gt(h.Target) {
 		return ErrWorkTooLow
 	}
 	return nil
@@ -190,7 +230,14 @@ func NewSolver(e Engine, h types.Header, p *params.Params) Solver {
 // to keep tight.
 func (s *Solver) Try(nonce uint64) bool {
 	copy(s.input[len(s.input)-8:], ssz.Uint64(nonce))
-	return !u256.FromBytes(s.engine.Hash(s.key, s.input)).Gt(s.target)
+	// FromLEBytes, not FromBytes, and for the reason checkWorkWith gives at
+	// length: this is the same comparison by a second route, and the two
+	// routes not sharing code is the hazard TestTheSolverAgreesWithCheckWork
+	// exists to cover. A Try that read the digest the other way round would
+	// find nonces the rule refuses — a miner rejected by its own network —
+	// and every test in the tree that mines a block would still pass, because
+	// they all mine through this function.
+	return !u256.FromLEBytes(s.engine.Hash(s.key, s.input)).Gt(s.target)
 }
 
 // Clone returns an independent Solver over the same candidate, for one more

@@ -542,3 +542,151 @@ func legalBackdate(headers []types.Header, i int, realTime, maxSolve uint64, p *
 	}
 	return wanted
 }
+
+// fixedEngine returns one digest whatever it is asked, so that a test can put
+// an exact 32-byte string in front of the comparison the rule performs. The
+// rule is a comparison between a digest and a target; the only way to pin
+// *how the digest is read* is to choose the digest.
+type fixedEngine struct{ digest types.Hash }
+
+func (fixedEngine) Name() string                         { return "fixed" }
+func (e fixedEngine) Hash(types.Hash, []byte) types.Hash { return e.digest }
+
+// TestTheDigestIsReadLittleEndian pins the consensus rule that the
+// work-function digest is compared against the target as a LITTLE-endian
+// 256-bit integer, byte 0 least significant — the one 256-bit quantity in this
+// protocol that is not big-endian. checkWorkWith carries the full argument and
+// docs/ARCHITECTURE.md §12 is normative; the short form is that RandomX is a
+// Monero-family work function, the whole Monero-family ecosystem reads its
+// digest little-endian, and the two conventions read opposite ends of an
+// independent 32 bytes, so a big-endian node shares no valid nonce with any
+// miner that exists.
+//
+// Every other proof-of-work test in this tree mines: it asks the engine for
+// nonces until one passes and then asserts that it passes. Such a test is
+// invariant under the endianness of the comparison — flip the rule and a
+// different nonce wins, and the test still goes green. That is exactly how a
+// convention mismatch with the entire Monero-family mining ecosystem survives
+// a full suite, so this test does not mine at all. It hands the rule a chosen
+// digest and a chosen target and asserts the verdict.
+//
+// The digest below is a "one-sided" string: it is small when read
+// little-endian (the high-order bytes, at the END under LE, are zero) and
+// enormous when read big-endian. A target between the two readings therefore
+// separates them completely — the LE rule accepts, the BE rule rejects — and
+// the second case is its mirror image. Neither can pass under the wrong rule
+// by luck.
+func TestTheDigestIsReadLittleEndian(t *testing.T) {
+	p := spec.Mainnet()
+
+	// leSmall reads as 0x01 little-endian and as 2^248 big-endian.
+	var leSmall types.Hash
+	leSmall[0] = 0x01
+	// leHuge is the mirror: 2^248 little-endian, 0x01 big-endian.
+	var leHuge types.Hash
+	leHuge[31] = 0x01
+
+	// A target of 2^128 sits strictly between 1 and 2^248, so it decides
+	// both cases and decides them oppositely under the two conventions.
+	target := u256.MustFromDecimal("340282366920938463463374607431768211456") // 2^128
+
+	h := header(1, 100, target)
+
+	if err := pow.CheckWork(fixedEngine{leSmall}, h, p); err != nil {
+		t.Fatalf("a digest that is 1 little-endian was refused against 2^128: %v "+
+			"(the rule is reading the digest big-endian, where it is 2^248)", err)
+	}
+	if err := pow.CheckWork(fixedEngine{leHuge}, h, p); err != pow.ErrWorkTooLow {
+		t.Fatalf("a digest that is 2^248 little-endian was accepted against 2^128: %v "+
+			"(the rule is reading the digest big-endian, where it is 1)", err)
+	}
+}
+
+// TestTheSolverReadsTheDigestLittleEndianToo covers the second route to the
+// same comparison. Solver.Try and checkWorkWith share no code — deliberately,
+// see the Solver doc comment — so an endianness change applied to one and not
+// the other produces a miner whose every block its own network rejects, and
+// TestTheSolverAgreesWithCheckWork would not catch it if BOTH were flipped
+// together into the wrong convention. This pins the absolute answer, not the
+// agreement.
+func TestTheSolverReadsTheDigestLittleEndianToo(t *testing.T) {
+	p := spec.Mainnet()
+	target := u256.MustFromDecimal("340282366920938463463374607431768211456") // 2^128
+
+	var leSmall types.Hash
+	leSmall[0] = 0x01
+	var leHuge types.Hash
+	leHuge[31] = 0x01
+
+	s := pow.NewSolver(fixedEngine{leSmall}, header(1, 100, target), p)
+	if !s.Try(0) {
+		t.Fatal("the solver refused a digest that is 1 little-endian against 2^128")
+	}
+	s = pow.NewSolver(fixedEngine{leHuge}, header(1, 100, target), p)
+	if s.Try(0) {
+		t.Fatal("the solver accepted a digest that is 2^248 little-endian against 2^128")
+	}
+}
+
+// TestAStratumJobTargetIsACleanTruncation states, as an executable claim, the
+// property the little-endian rule buys: t64 = max(1, floor((target256 + 1) /
+// 2^192)) selects exactly the digest bytes a Monero-dialect miner compares, so
+// a share found under a 64-bit job target satisfies the full 256-bit rule up
+// to a boundary sliver one part in 2^64 wide. Under a big-endian reading no
+// such truncation exists at all, because the bytes a truncation keeps and the
+// bytes the miner compares are then at opposite ends of the digest.
+//
+// It is here rather than in the pool-facing endpoint that will consume it
+// because it is a property of the *consensus rule*, not of the endpoint: if
+// this rule changes back, the truncation stops being sound and any endpoint
+// resting on it is silently wrong — handing miners shares the node refuses.
+// docs/ARCHITECTURE.md §12 records the same identity normatively. Written
+// against the digest bytes directly for the same reason the test above does
+// not mine.
+func TestAStratumJobTargetIsACleanTruncation(t *testing.T) {
+	p := spec.Mainnet()
+	target := p.GenesisTarget
+
+	// t64 as a Stratum job would carry it: floor((target256 + 1) / 2^192),
+	// floored at one. Dividing by 2^192 is taking the top 64 bits, which the
+	// canonical big-endian encoding puts in its first eight bytes.
+	t256plus1, _ := target.Add(u256.One)
+	beBytes := t256plus1.Bytes()
+	var t64 uint64
+	for i := 0; i < 8; i++ {
+		t64 = t64<<8 | uint64(beBytes[i])
+	}
+	if t64 == 0 {
+		t64 = 1
+	}
+
+	// A digest whose last eight bytes, read as an LE uint64, are strictly
+	// below t64 is a share XMRig would submit. Build the extreme one — every
+	// other digest byte 0xff — and assert the full rule accepts it. If the
+	// full rule accepted only some such digests, a pool would be handing
+	// miners shares the node then rejects.
+	var d types.Hash
+	for i := 0; i < 24; i++ {
+		d[i] = 0xff
+	}
+	share := t64 - 1
+	for i := 0; i < 8; i++ {
+		d[24+i] = byte(share >> (8 * i))
+	}
+	if err := pow.CheckWork(fixedEngine{d}, header(1, 100, target), p); err != nil {
+		t.Fatalf("a share at the very top of the 64-bit job target was refused by "+
+			"the full rule: %v — the truncation is not clean", err)
+	}
+
+	// And the boundary sliver is on the other side: a digest whose top 64
+	// bits equal t64 exactly is NOT guaranteed to pass, which is why the job
+	// target is a strict-inequality filter and the node re-verifies every
+	// submit. Assert the direction rather than a value.
+	for i := 0; i < 8; i++ {
+		d[24+i] = byte(t64 >> (8 * i))
+	}
+	if err := pow.CheckWork(fixedEngine{d}, header(1, 100, target), p); err == nil {
+		t.Fatal("a digest above the truncated job target passed the full rule; " +
+			"the truncation would then not be conservative")
+	}
+}
