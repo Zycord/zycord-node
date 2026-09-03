@@ -16,21 +16,64 @@ name: ci
 # job gated with `if:` is still parsed, still policed, and still fails the
 # wiring test the day somebody changes what it runs.
 #
-# The split itself is about billed minutes on a pull request, which is where
-# the same commit is pushed over and over. Four things are therefore skipped
-# for `pull_request` and run on every push to main, every tag and on demand:
-# `canonical`, both legs of `randomx`, `reproducible`, and the `make race`
-# STEP inside `build`. Together they are most of the bill and none of them is
-# a gate that catches a defect a reviewer would otherwise merge blind — they
-# re-verify build determinism and engine behaviour that the merge to main
-# re-checks minutes later.
+# There are three tiers, and the thing that separates them is not importance
+# but WHEN the answer is worth paying for.
 #
-# What deliberately did NOT move, because each is the only thing that checks
-# what it checks, at the only time it is useful:
+#   nothing        a draft pull request, and every push to a branch that is
+#                  not main. Work in progress bills zero minutes.
+#   verification   a pull request that has been marked ready for review, and
+#                  everything the heavy tier runs on. Tests, vets, lints,
+#                  spec vectors, the differential fold, fuzz, the desktop
+#                  bridge, Windows — the checks that catch a defect a
+#                  reviewer would otherwise merge blind.
+#   heavy          pushes to main, tags, and `workflow_dispatch`. Container
+#                  builds, byte-for-byte reproducibility, the cgo engine
+#                  across two architectures, the race detector. Minutes, not
+#                  seconds, and none of them is a gate a review needs.
+#
+# # Why draft pull requests run nothing
+#
+# A draft pull request is where the same commit is pushed over and over, and
+# GitHub does NOT skip a draft on its own: without the condition below, every
+# one of those pushes bills a full `synchronize` run. With many concurrent
+# branches in flight that is most of the bill, spent re-answering a question
+# nobody has asked yet. So every job carries the same guard:
+#
+#     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+#
+# It is written on each job rather than once at the top because a workflow has
+# no workflow-level `if:`. A skipped job bills nothing; the run itself appears
+# in the checks list with every job grey, which is the intended reading — the
+# work exists and has not been submitted.
+#
+# `ready_for_review` is in the trigger's `types:` for the same reason the
+# guard cannot be `types: [ready_for_review]` alone. Marking a draft ready
+# fires ONLY that event: without it in the list, a pull request written as a
+# draft and then submitted would never run at all. Without `opened` and
+# `synchronize` beside it, a pull request opened ready — or one already ready
+# that gets a fix pushed to it — would never run either. The list is the union
+# of "somebody is asking for review" and the guard is what removes the drafts
+# from it; neither half works alone, and `reopened` is there because a closed
+# and reopened pull request is a fresh request for the same review.
+#
+# # Why the heavy tier is not at review time
+#
+# `canonical`, both legs of `randomx`, `reproducible` and the `make race` STEP
+# inside `build` were already skipped for `pull_request`, and they stay
+# skipped: they re-verify build determinism and engine behaviour that the
+# merge to main re-checks minutes later, and together they are most of the
+# bill. The same reasoning now names the tier rather than the event, so the
+# condition reads as the policy instead of as a list of exclusions.
+#
+# What deliberately stays in the verification tier, because each is the only
+# thing that checks what it checks, at the only time it is useful:
 #
 #   windows      the only Windows execution anywhere at review time; see
 #                windows.yml for the four defects that were green on every
-#                Linux runner.
+#                Linux runner. It is the most expensive job in this tier —
+#                Windows runners bill at twice a Linux minute — and it stays
+#                anyway, because a Windows-only defect found after merge is
+#                found on main.
 #   vectors      the only regeneration of spec/vectors. `go test ./spec/`
 #                passes when the corpus and the implementation have drifted
 #                together, so without this an undeclared consensus change is
@@ -38,14 +81,36 @@ name: ci
 #   desktop      the bridge contract breaks in ordinary node-zone changes, not
 #                at release time.
 #   fuzz         90 seconds a target; the cheapest real bug-finder here.
+#   differential two implementations of the fold must agree on every
+#                observable; divergence is a release blocker and it is a
+#                single `go test -run`.
 #   build        minus its race step: lint, the import graph, `make test`, the
 #                Wails contamination check — all cheap, and the contamination
 #                check exists in no other workflow.
+#
+# # Why `dev` is not in the push list
+#
+# It is not an oversight and it is not a change: `push` has named main alone
+# since this trigger was written, and it keeps naming main alone. Every commit
+# reaching `dev` arrives through a pull request into `dev`, and that pull
+# request has already run the verification tier at ready-for-review. Adding
+# `dev` here would re-run that same tier on the merge commit, which is the
+# identical tree in the ordinary fast-forward case — paying twice for one
+# answer. The merge into `main` is where the heavy tier earns its minutes,
+# because that is the first time the integration of many branches is a tree
+# nothing has built before. If a `dev` merge ever needs the full set, that is
+# what `workflow_dispatch` is for, and it can be pointed at `dev` directly.
 on:
   push:
     branches: [main]
     tags: ['v*']
   pull_request:
+    # The union of the events that mean "somebody is asking for review". The
+    # draft half is removed by the per-job guard, not here: `ready_for_review`
+    # alone would miss a pull request opened ready and every later push to
+    # one, and `opened`/`synchronize` alone would miss the draft that is
+    # submitted without another commit. See the header.
+    types: [opened, synchronize, reopened, ready_for_review]
   # So the full set can be demanded on a branch without minting a tag.
   workflow_dispatch:
 
@@ -62,6 +127,10 @@ permissions:
 
 jobs:
   build:
+    # Verification tier: skipped on a draft pull request, because a draft is
+    # work in progress and GitHub does not skip one on its own — every push
+    # to it would otherwise bill a full run. See the header.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -108,6 +177,9 @@ jobs:
       # moved: sim/wiring/workflow_test.go matches this job, directory and
       # command text and never reads `if:`, so gating keeps it policed where
       # relocating it would not.
+      # Heavy tier at step granularity: the rest of this job is verification
+      # and runs at review time, this one step does not. A pull request, draft
+      # or ready, skips it; main, a tag and `workflow_dispatch` run it.
       - name: tests with the race detector
         if: github.event_name != 'pull_request'
         run: make race
@@ -182,6 +254,10 @@ jobs:
         run: ./bin/zcd genesis
 
   vectors:
+    # Verification tier: skipped on a draft pull request, because a draft is
+    # work in progress and GitHub does not skip one on its own — every push
+    # to it would otherwise bill a full run. See the header.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -203,6 +279,10 @@ jobs:
         run: go test ./spec/
 
   differential:
+    # Verification tier: skipped on a draft pull request, because a draft is
+    # work in progress and GitHub does not skip one on its own — every push
+    # to it would otherwise bill a full run. See the header.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -216,6 +296,10 @@ jobs:
         run: go test -run TestDifferential -v ./sim/
 
   fuzz:
+    # Verification tier: skipped on a draft pull request, because a draft is
+    # work in progress and GitHub does not skip one on its own — every push
+    # to it would otherwise bill a full run. See the header.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -239,6 +323,10 @@ jobs:
   # computed a DIFFERENT HASH from an x86 one for the same header: a chain
   # split along CPU architecture, invisible on any single runner.
   randomx:
+    # Heavy tier: pushes to main, tags and `workflow_dispatch` only, and so
+    # never at review time. The expression already excludes a draft: it
+    # excludes every pull request. See the header for why re-verifying this
+    # per review buys nothing the merge does not re-check minutes later.
     if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
@@ -295,6 +383,10 @@ jobs:
   # change to build/Dockerfile is one to run `workflow_dispatch` against on the
   # branch, before review rather than after.
   canonical:
+    # Heavy tier: pushes to main, tags and `workflow_dispatch` only, and so
+    # never at review time. The expression already excludes a draft: it
+    # excludes every pull request. See the header for why re-verifying this
+    # per review buys nothing the merge does not re-check minutes later.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -344,6 +436,10 @@ jobs:
   # because `make ci` must stay exactly what it was: a green `make ci` is the
   # claim that the protocol is unaffected by any of this.
   desktop:
+    # Verification tier: skipped on a draft pull request, because a draft is
+    # work in progress and GitHub does not skip one on its own — every push
+    # to it would otherwise bill a full run. See the header.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -388,9 +484,17 @@ jobs:
   # answers 403, "Upgrade to GitHub Pro or make this repository public" -- so
   # there are no required status checks for a rename to break.
   windows:
+    # Verification tier: skipped on a draft pull request, because a draft is
+    # work in progress and GitHub does not skip one on its own — every push
+    # to it would otherwise bill a full run. See the header.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/windows.yml
 
   reproducible:
+    # Heavy tier: pushes to main, tags and `workflow_dispatch` only, and so
+    # never at review time. The expression already excludes a draft: it
+    # excludes every pull request. See the header for why re-verifying this
+    # per review buys nothing the merge does not re-check minutes later.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
