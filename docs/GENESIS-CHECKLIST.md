@@ -124,11 +124,14 @@ appears saying the same thing.
 
 **The relaunch also resets the measurement clock**, which is why it sits directly
 under the item below it. `genesis_time` in
-[`spec/params.testnet.json`](../spec/params.testnet.json) is 1788048000
-(2026-08-30), the current network's launch day; it moves to the relaunch day,
-because the difficulty rule reads the gap between a block's timestamp and its
-parent's and a genesis dated well before block 1 makes the first blocks measure
-the parameter file rather than the network.
+[`spec/params.testnet.json`](../spec/params.testnet.json) is 1788652800
+(2026-09-06), the relaunch day; it moved there from the first incarnation's
+1788048000 (2026-08-30), because the difficulty rule reads the gap between a
+block's timestamp and its parent's and a genesis dated well before block 1 makes
+the first blocks measure the parameter file rather than the network. The date
+sits before the 1.4 freeze target below, and deliberately: that item requires
+every consensus-visible encoding change to be *running* on the relaunched
+network, which a relaunch dated after it could not satisfy.
 
 Tracked under the **Testnet relaunch** milestone, due 2026-09-10.
 

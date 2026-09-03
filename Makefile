@@ -510,6 +510,26 @@ devnet: build
 	./$(BIN)/zycordd$(EXE) --devnet --dir .devnet --mine \
 	  --payout $$(./$(BIN)/zcd$(EXE) key new 2>/dev/null | awk '/persistent/ {print $$3}')
 
+# A local net running the REAL work function, mining to a throwaway address.
+#
+# It depends on build-randomx rather than build because the parameter file names
+# pow_engine randomx-v1, and a binary without the tag refuses to start against it
+# rather than falling back to dev-blake3 — the one-directional safety property
+# spec/params.devnet.json's pow_engine note sets out. So the -randomx binaries
+# are not a preference here, they are the only pair that can run this network.
+#
+# Unlike devnet this passes --params, which is also what leaves the node with no
+# seeds: an operator on their own parameter file is on a network this release
+# knows nothing about. docs/localnet/README.md is the recipe and says what to
+# watch for; the short version is that the key boundary at height 18 is the
+# event the whole thing exists to make reachable.
+.PHONY: localnet
+localnet: build-randomx
+	@mkdir -p .localnet
+	./$(BIN)/zycordd-randomx$(EXE) --params docs/localnet/params.randomx-localnet.json \
+	  --dir .localnet --mine \
+	  --payout $$(./$(BIN)/zcd-randomx$(EXE) key new 2>/dev/null | awk '/persistent/ {print $$3}')
+
 .PHONY: lint
 lint:
 	$(GO) vet ./...

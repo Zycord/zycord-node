@@ -172,10 +172,11 @@ type Solver struct {
 	engine Engine
 	key    types.Hash
 	target u256.U256
-	// input is a types.PoWInputSize blob laid out exactly as
-	// types.Header.PoWInput lays it out, with the seed already written and the
-	// reserved gap left at zero. Try overwrites the four nonce bytes at
-	// types.PoWInputNonceOffset and nothing else.
+	// input is the candidate header's own blob, as types.Header.PoWInput
+	// returns it — not a copy of that layout reproduced here. Try overwrites
+	// the four nonce bytes at types.PoWInputNonceOffset and nothing else, so
+	// every other byte is the verifier's, byte for byte, and the encoding
+	// rules have exactly one implementation for both to share.
 	//
 	// It is built from the same named offsets the rule uses rather than from
 	// "the last four bytes", because the nonce being last is an accident of
@@ -224,9 +225,20 @@ func NewSolver(e Engine, h types.Header, p *params.Params) Solver {
 	if hot, ok := e.(HotKeyEngine); ok {
 		hot.MineOn(key)
 	}
-	seed := h.PoWSeed()
-	in := make([]byte, types.PoWInputSize)
-	copy(in[:types.PoWInputReservedOffset], seed[:])
+	// The buffer is the header's own blob, built by the one function that
+	// knows the layout. It used to be assembled here from PoWSeed and the
+	// blob constants, which is the same bytes by a second route — and a
+	// second route is exactly how a miner comes to hash something its own
+	// verifier does not. The encoding rules (the seed at 0, the seven
+	// reserved zeroes at 32, the little-endian nonce at 39) then had two
+	// implementations, and only one of them was reachable from a test that
+	// reads a header.
+	//
+	// Try overwrites the nonce field and nothing else, so whatever nonce the
+	// header arrived with is irrelevant; what matters is that every byte
+	// outside that field comes from PoWInput and therefore cannot drift from
+	// what CheckWork will rebuild.
+	in := h.PoWInput()
 	return Solver{engine: e, key: key, target: h.Target, input: in}
 }
 

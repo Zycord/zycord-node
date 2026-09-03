@@ -49,7 +49,10 @@ announced yet:
 - **The testnet is `live`.** Its parameter hash and genesis id are pinned in the
   ledger and derived by every node at startup, so an edit to
   `spec/params.testnet.json` — prose included — is a release event from now on,
-  and takes the next free chain id if it moves any consensus value.
+  and regenerates its vectors and re-pins its genesis. It kept chain id 2 across
+  the 2026-09-06 respin under `spec/chain-ids.json`'s pre-mainnet respin
+  exception; that exception lapses when mainnet launches, and a respin after
+  that takes the next free id.
 - **Devnet is `ephemeral`** and pins nothing, by design.
 
 An entry belongs here the next time a note or a value inside `spec/params*.json`

@@ -529,13 +529,13 @@ func TestEveryEmbeddedNetworkHasAPinnedGenesis(t *testing.T) {
 		// decision somebody made rather than a byte that drifted.
 		announced := map[string]string{
 			// Mainnet's genesis_time is its launch day, 2026-09-15T00:00:00Z; the
-			// public testnet's is 2026-08-30T00:00:00Z. Both are round UTC values, as
+			// public testnet's is 2026-09-06T00:00:00Z, the day it was respun. Both are round UTC values, as
 			// RELEASE.md section 2 requires, and both are consensus fields: the
 			// consensus root, the genesis id and the state root all derive from them,
 			// so moving either regenerates that network's golden vectors and moves
 			// its hash below with them. Devnet is reset freely and pins nothing.
 			"mainnet": "0x0cdab31d391541c66a25510715bd3cea35f619e58fe45b1594b624e28ded1775",
-			"testnet": "0xce415e2d992c44d60adc0ae0b75775901b26c29e4acba081728e9ed3b505915a",
+			"testnet": "0x196b736a71b36bb3e943519a8da816a9d6edf072d7f7847b21b95a683ff07021",
 			"devnet":  "0xf1425bab784a24c737c61e95e99f0bb657ba3847936771fb7fa9e8969023d08a",
 		}
 		want, ok := announced[name]
