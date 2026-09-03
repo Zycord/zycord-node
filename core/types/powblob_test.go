@@ -80,11 +80,11 @@ func TestThePoWBlobIsTheLayoutXMRigExpects(t *testing.T) {
 // filled the gap with a nonce's high bytes, a version byte, or an
 // uninitialised buffer would compute a different digest for the same header and
 // fork on its first block, and nothing in the corpus of *blocks* can catch it.
-// What would make it binding on an implementation that never runs this test is
-// a golden vector over the blob itself — the 43 bytes and the digest they
-// produce, cross-checked against stock XMRig. **That vector does not exist
-// yet**, so this test and docs/ARCHITECTURE.md §12 are the whole of the hold
-// today, and both reach only this tree.
+// What makes it binding on an implementation that never runs this test is the
+// cross-check in core/pow/randomx, which rebuilds these 43 bytes from XMRig's
+// own published offsets and compares them byte for byte. This test still earns
+// its place: it needs no cgo and no build tag, so it runs in every ordinary
+// `go test` and fails first and fastest when the gap moves.
 //
 // It is asserted over a header whose every field is non-zero, so that the gap
 // being zero is a fact about the layout and not about the input.

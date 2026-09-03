@@ -240,12 +240,14 @@ func (h Header) PoWSeed() Hash {
 // PoWSeed's zeroing does not reach, since the gap is written here rather than
 // derived from the header. There is no header field that can reach these
 // bytes, so nothing constructs a non-zero one; the rule binds *implementations
-// of this function*, which is exactly the kind of rule a golden vector over
-// the blob has to carry. **No such vector exists yet**: the corpus in spec/
-// covers folds over blocks, and a block cannot express this gap, so until a
-// vector fixes the 43 bytes themselves against a known-good digest the layout
-// is binding on this tree and on nothing else. docs/ARCHITECTURE.md §12 is the
-// normative statement in the meantime.
+// of this function*, which is exactly the kind of rule no corpus of blocks can
+// carry: spec/ folds blocks, and a block cannot express this gap. What binds it
+// instead is a cross-check against the miner —
+// core/pow/randomx.TestTheBlobThisTreeBuildsIsTheBlobXMRigSearches assembles
+// these same 43 bytes from XMRig's own published offsets, importing no constant
+// from this package, and requires the two byte strings to be identical. That is
+// the check to run after touching anything below, and the file it lives in
+// lists the mutations it was confirmed to fail under.
 //
 // The construction here starts from a zeroed array rather than appending, so
 // that the gap is zero because the buffer is zero and not because a caller
