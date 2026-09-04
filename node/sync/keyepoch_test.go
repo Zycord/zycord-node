@@ -71,17 +71,34 @@ func newFarCitingPeer(t *testing.T, base *peer, p *params.Params) *farCitingPeer
 		// epoch and would measure nothing at all.
 		h := i * 7 * p.RandomXKeyInterval
 		epochs[pow.SeedEpochFor(h, p)] = true
-		body.Cites = append(body.Cites, &types.Header{
+		c := &types.Header{
 			Version:  types.HeaderVersion,
 			Height:   h,
 			ParentID: types.Hash{byte(i)},
 			Time:     p.GenesisTime + h*p.TargetBlockSeconds,
-			// The attacker's own declaration, so these citations cost their
-			// sender zero hashes. Nothing on this path bounds a cited header's
-			// declared target.
+			// The attacker's own declaration. Nothing on this path bounds a
+			// cited header's declared target, so at u256.Max no commitment can
+			// exceed it and the sender searches no nonces.
 			Target: u256.Max,
 			PoW:    types.PoWSeal{Nonce: uint32(i)},
-		})
+		}
+		// **The digest is no longer free, and this line is the change.**
+		//
+		// Under the commitment rule a header carries the RandomX digest of its
+		// own blob, and CheckWork verifies that it does. So a forged citation
+		// at u256.Max costs its sender ONE evaluation — it no longer costs
+		// zero, as this fixture's comment used to say and as the rule used to
+		// allow. The amplification this test measures is unchanged in shape,
+		// because the victim is still asked for one key epoch per citation
+		// while the sender pays for one evaluation per citation, and the whole
+		// point is that the victim's epoch is the expensive side; what changed
+		// is that the sender's side is no longer literally nothing.
+		//
+		// It is written with a bare pow.Dev rather than through any instrument,
+		// for the same reason the anti-vacuity check below is: seeding the
+		// counting engine here would spend the measurement before it started.
+		c.PoWHash = pow.Dev{}.Hash(pow.KeyFor(c.Height, p), c.PoWInput())
+		body.Cites = append(body.Cites, c)
 	}
 	body.Header.CitesRoot = body.ComputeCitesRoot(p)
 	// CitesRoot is a proof-of-work input, so the honest tip's nonce no longer
@@ -155,7 +172,8 @@ func TestASyncedBodyCannotBuyManyKeyEpochsThroughItsCitations(t *testing.T) {
 	for i, h := range liar.body.Cites {
 		if err := pow.CheckWork(pow.Dev{}, *h, p); err != nil {
 			t.Fatalf("setup: forged citation %d does not pass CheckWork (%v); at "+
-				"u256.Max no digest can exceed the target and it must", i, err)
+				"u256.Max no commitment can exceed the target, and the fixture "+
+				"fills PoWHash so the digest-identity half passes too", i, err)
 		}
 	}
 

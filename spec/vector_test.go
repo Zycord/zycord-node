@@ -534,8 +534,8 @@ func TestEveryEmbeddedNetworkHasAPinnedGenesis(t *testing.T) {
 			// consensus root, the genesis id and the state root all derive from them,
 			// so moving either regenerates that network's golden vectors and moves
 			// its hash below with them. Devnet is reset freely and pins nothing.
-			"mainnet": "0x0cdab31d391541c66a25510715bd3cea35f619e58fe45b1594b624e28ded1775",
-			"testnet": "0x196b736a71b36bb3e943519a8da816a9d6edf072d7f7847b21b95a683ff07021",
+			"mainnet": "0xc34a1a62f11c09e04b027d94f79fd2ec4518c66cb42010c8021331a244e4c93d",
+			"testnet": "0x4e03918d3dcce5a9bc762819e1fc8b3f055bf4c64ad4dd4fd8d559faba74d66b",
 			"devnet":  "0xf1425bab784a24c737c61e95e99f0bb657ba3847936771fb7fa9e8969023d08a",
 		}
 		want, ok := announced[name]

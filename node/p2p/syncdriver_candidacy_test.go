@@ -324,6 +324,11 @@ func TestAnUnplaceableBlockAboveOurTipStillMakesItsHolderACandidate(t *testing.T
 	// the announce path checks before candidacy is considered at all.
 	ahead := losing.Header
 	ahead.Height = victim.chain.Height() + 2
+	// Re-sealed after the height moves: the height feeds PoWSeed and selects
+	// the key, so the digest the miner left is the digest of a different blob
+	// and the work rule's identity half would refuse this ahead of the
+	// candidacy clause under test.
+	sealDevBlock(&ahead)
 	if _, err := victim.chain.CanonicalHeader(ahead.ID()); err == nil {
 		t.Fatal("setup: the fabricated header is already canonical")
 	}

@@ -32,9 +32,20 @@ func unheldParentGhost(tb testing.TB, c *chain.Chain, salt uint64) types.Header 
 		Target:   u256.Max,
 		PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p), Nonce: uint32(salt) | 1<<31},
 	}
+	// The ghost carries the digest of its own blob, as an honest header does.
+	//
+	// It still costs its sender essentially nothing — one evaluation at
+	// u256.Max, where every commitment passes, rather than the search a real
+	// target demands — so the finding this fixture exists for is unchanged: a
+	// header with no work behind it in any meaningful sense is accepted by the
+	// work check and must be stopped by the forward rule instead. What changed
+	// is that "no work" is now one hash rather than zero, and saying so is
+	// cheaper than leaving the fixture failing.
+	sealDev(&h, p)
 	if err := pow.CheckWork(pow.Dev{}, h, p); err != nil {
-		tb.Fatalf("the ghost does not pass CheckWork (%v); at u256.Max no digest "+
-			"can exceed the target and the whole finding is that it passes", err)
+		tb.Fatalf("the ghost does not pass CheckWork (%v); at u256.Max no "+
+			"commitment can exceed the target and the whole finding is that it "+
+			"passes", err)
 	}
 	return h
 }

@@ -663,6 +663,11 @@ func TestAnAnsweredAnnouncementIsNotAlsoChargedAsUnserved(t *testing.T) {
 	}
 	blk.Cites = []*types.Header{&cited}
 	blk.Header.CitesRoot = blk.ComputeCitesRoot(p)
+	// The carrier is re-sealed after CitesRoot, which PoWSeed covers. The cited
+	// header is deliberately left unsealed: it is at height 0, which CheckWork
+	// exempts outright, and that exemption is the free pass this scenario is
+	// built on — sealing it would hide the thing being exercised.
+	sealDevBlock(&blk.Header)
 
 	const addr = "10.9.9.22:1"
 	handshake(t, victim, addr)

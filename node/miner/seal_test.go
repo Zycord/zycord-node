@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"zycord/core/crypto/blake2b"
 	"zycord/core/pow"
 	"zycord/core/types"
 	"zycord/core/u256"
@@ -201,7 +202,8 @@ func TestMiningAcrossAKeyBoundary(t *testing.T) {
 }
 
 // driftingEngine answers one hash and then changes its mind: the first
-// evaluation meets any target, every later one meets none.
+// evaluation is the honest digest of whatever it was handed, every later one is
+// a fixed value that is not the digest of anything.
 //
 // It is a caricature, but of a real shape rather than an invented one. The
 // wrong-key seal (see ErrSealDoesNotVerify in miner.go) came from a
@@ -211,19 +213,57 @@ func TestMiningAcrossAKeyBoundary(t *testing.T) {
 // nobody having passed it anything different. The block that node sealed at the
 // transition met the target under neither key, and it was applied, announced
 // and built on regardless.
-type driftingEngine struct{ answered atomic.Bool }
+//
+// **The shape had to change with the work rule and the reason is worth
+// recording.** It used to return a ZERO digest first — below every target — and
+// an all-ones digest afterwards. Under the commitment rule the target is
+// compared against `blake2b(blob ‖ digest)`, and the commitment of a zero
+// digest is a uniform value like any other, so "return zero" no longer means
+// "meets any target"; the miner would simply not find a solution and the test
+// would fail for a reason unrelated to drift. Delegating the FIRST answer to
+// pow.Dev keeps the seal reachable — the miner searches nonces exactly as it
+// would against an honest engine and finds one — while every subsequent
+// evaluation returns a constant, so the re-check in SealWhile asks about the
+// same header and is told something different. That is the drift, and it is now
+// caught by the digest-identity half of CheckWork rather than by the target
+// half, which is a strictly louder failure: ErrHashMismatch names what is
+// wrong, where ErrWorkTooLow would only have said the number was too big.
+type driftingEngine struct {
+	target u256.U256 // the target the miner is searching against
+	solved atomic.Bool
+}
 
 func (*driftingEngine) Name() string { return pow.Dev{}.Name() }
 
-func (d *driftingEngine) Hash(types.Hash, []byte) types.Hash {
-	if !d.answered.Swap(true) {
-		return types.Hash{} // zero: below every target the chain can declare
+func (d *driftingEngine) Hash(key types.Hash, in []byte) types.Hash {
+	if d.solved.Load() {
+		// After the seal: a fixed value that is not the digest of anything, so
+		// the re-check is answered differently from the search.
+		var max types.Hash
+		for i := range max {
+			max[i] = 0xff
+		}
+		return max
 	}
-	var max types.Hash
-	for i := range max {
-		max[i] = 0xff
+	// During the search: the honest answer, so a nonce is actually found.
+	out := pow.Dev{}.Hash(key, in)
+
+	// Flip at the moment this answer WOULD be a solution — not after a fixed
+	// number of calls, which is how a count-based version of this type would
+	// break the next time the miner's call pattern changed. The engine has now
+	// accepted a nonce, and every question asked about that nonce from here on
+	// gets a different answer. That is the drift.
+	//
+	// The predicate is the solver's own, recomputed from the blob because this
+	// engine has no header to read: commitment = blake2b(blob ‖ digest),
+	// compared little-endian.
+	buf := make([]byte, 0, len(in)+32)
+	buf = append(buf, in...)
+	buf = append(buf, out[:]...)
+	if !u256.FromLEBytes(types.Hash(blake2b.Sum256(buf))).Gt(d.target) {
+		d.solved.Store(true)
 	}
-	return max
+	return out
 }
 
 // TestAMinerChecksItsOwnBlockBeforeApplyingIt.
@@ -247,7 +287,7 @@ func (d *driftingEngine) Hash(types.Hash, []byte) types.Hash {
 // mid-rebuild, the first poisoned block of the 1112.
 func TestAMinerChecksItsOwnBlockBeforeApplyingIt(t *testing.T) {
 	m := sealHarness(t)
-	m.Engine = &driftingEngine{}
+	m.Engine = &driftingEngine{target: m.Chain.Params().GenesisTarget}
 	m.Threads = 1
 
 	before := m.Chain.Height()

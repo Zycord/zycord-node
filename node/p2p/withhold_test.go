@@ -26,9 +26,18 @@ import (
 // retime returns a copy of a block dated at t. Work is free in this harness, so
 // changing the timestamp — which changes the id — leaves the block otherwise
 // valid, and only the rule under test can refuse it.
+//
+// "Otherwise valid" now takes a re-seal. The time is part of PoWSeed and so of
+// PoWInput, so a copy dated differently is a different blob, and the digest the
+// original carried is no longer the digest of its own bytes — the work rule's
+// identity half refuses it, ahead of every rule these tests are named for. So
+// the copy is re-sealed the way a miner would seal a block it had just retimed.
+// At this harness's u256.Max target every commitment passes, so it is one
+// evaluation and work stays free.
 func retime(b *types.Block, t uint64) *types.Block {
 	cp := *b
 	cp.Header.Time = t
+	sealDevBlock(&cp.Header)
 	return &cp
 }
 
@@ -194,6 +203,9 @@ func TestWithholdQueueIsBoundedAndKeepsTheSoonestBlocks(t *testing.T) {
 		for i := 0; i < n; i++ {
 			blk := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, uint64(i))
 			blk.Header.Time = now + offset + uint64(i)
+			// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+			// (or the miner) left is the digest of a different blob now.
+			sealDevBlock(&blk.Header)
 			ids = append(ids, blk.Header.ID())
 			a.engine.Handle("flooder:1", p2p.KindBlock, deliver(blk))
 		}
@@ -263,6 +275,9 @@ func TestBlocksBeyondTheHorizonAreNotHeld(t *testing.T) {
 	// whose retention the attacker chose.
 	blk := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, 7)
 	blk.Header.Time = now + 1_000_000_000
+	// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+	// (or the miner) left is the digest of a different blob now.
+	sealDevBlock(&blk.Header)
 	v := a.engine.Handle("attacker:1", p2p.KindBlock, deliver(blk))
 	if !errors.Is(v.Err, p2p.ErrBlockBeyondHorizon) {
 		t.Fatalf("got %v, want a beyond-horizon drop", v.Err)
@@ -279,6 +294,9 @@ func TestBlocksBeyondTheHorizonAreNotHeld(t *testing.T) {
 	// refusal of everything future-dated.
 	near := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, 8)
 	near.Header.Time = now + p.FutureTimeLimitSeconds + 5
+	// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+	// (or the miner) left is the digest of a different blob now.
+	sealDevBlock(&near.Header)
 	a.engine.Handle("peer:1", p2p.KindBlock, deliver(near))
 	if a.engine.WithheldCount() != 1 {
 		t.Fatal("a block just past the limit was not held")
@@ -527,6 +545,9 @@ func TestAnInvalidBlockCannotDodgeScoringByDatingItselfAhead(t *testing.T) {
 		cp := *blocks[len(blocks)-1]
 		cp.Header.Time = t
 		cp.Header.StateRoot = types.Hash{0xff}
+		// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+		// (or the miner) left is the digest of a different blob now.
+		sealDevBlock(&cp.Header)
 		return &cp
 	}
 
@@ -705,6 +726,9 @@ func TestBeyondHorizonDropsAreObservable(t *testing.T) {
 	for i, ahead := range []uint64{horizon + 60, horizon + 600} {
 		blk := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, uint64(20+i))
 		blk.Header.Time = now + ahead
+		// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+		// (or the miner) left is the digest of a different blob now.
+		sealDevBlock(&blk.Header)
 		if v := a.engine.Handle(senders[i], p2p.KindBlock, deliver(blk)); !errors.Is(v.Err, p2p.ErrBlockBeyondHorizon) {
 			t.Fatalf("block %d: got %v, want a beyond-horizon drop", i, v.Err)
 		}
@@ -730,6 +754,9 @@ func TestBeyondHorizonDropsAreObservable(t *testing.T) {
 	// has to say which: the three bounds cost the node different things.
 	inside := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, 99)
 	inside.Header.Time = now + horizon/2
+	// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+	// (or the miner) left is the digest of a different blob now.
+	sealDevBlock(&inside.Header)
 	if v := a.engine.Handle(senders[0], p2p.KindBlock, deliver(inside)); !errors.Is(v.Err, p2p.ErrBlockWithheld) {
 		t.Fatalf("a block inside the horizon: got %v, want it withheld", v.Err)
 	}
@@ -770,6 +797,9 @@ func TestQueueSaturationIsCountedAndKeptApart(t *testing.T) {
 	for i := 0; i < limits.MaxBlocks; i++ {
 		blk := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, uint64(1000+i))
 		blk.Header.Time = now + horizon - uint64(i)
+		// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+		// (or the miner) left is the digest of a different blob now.
+		sealDevBlock(&blk.Header)
 		if v := a.engine.Handle("198.51.100.7:5000", p2p.KindBlock, deliver(blk)); !errors.Is(v.Err, p2p.ErrBlockWithheld) {
 			t.Fatalf("filling the queue at %d: %v", i, v.Err)
 		}
@@ -787,6 +817,9 @@ func TestQueueSaturationIsCountedAndKeptApart(t *testing.T) {
 	// from a second group. Eviction refuses and the block is dropped.
 	late := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, 2000)
 	late.Header.Time = now + horizon
+	// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+	// (or the miner) left is the digest of a different blob now.
+	sealDevBlock(&late.Header)
 	if v := a.engine.Handle("203.0.113.9:5000", p2p.KindBlock, deliver(late)); !errors.Is(v.Err, p2p.ErrBlockBeyondHorizon) {
 		t.Fatalf("a block the full queue cannot admit: got %v, want it dropped", v.Err)
 	}
@@ -845,6 +878,9 @@ func TestASlowClockIsVisibleBelowTheHorizon(t *testing.T) {
 		// An honest block, dated at the network's time, which this node's clock
 		// reads as skew seconds in the future.
 		blk.Header.Time = now + skew
+		// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+		// (or the miner) left is the digest of a different blob now.
+		sealDevBlock(&blk.Header)
 		if v := a.engine.Handle(senders[i%len(senders)], p2p.KindBlock, deliver(blk)); errors.Is(v.Err, p2p.ErrBlockWithheld) {
 			withheld++
 		}
@@ -916,6 +952,9 @@ func TestEveryDelivererOfTheSameBlockIsEvidence(t *testing.T) {
 	// One block, delivered by everybody, as the flood delivers it.
 	blk := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, 7)
 	blk.Header.Time = now + p.FutureTimeLimitSeconds + 60
+	// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+	// (or the miner) left is the digest of a different blob now.
+	sealDevBlock(&blk.Header)
 	for _, s := range senders {
 		if v := a.engine.Handle(s, p2p.KindBlock, deliver(blk)); !errors.Is(v.Err, p2p.ErrBlockWithheld) {
 			t.Fatalf("delivery from %s: got %v, want it withheld", s, v.Err)
@@ -1084,6 +1123,9 @@ func TestTheWithholdQueueCountsEverythingItRetains(t *testing.T) {
 		}
 		blk.Header.CertRoot = blk.ComputeCertRoot(p)
 		blk.Header.Time = now + p.FutureTimeLimitSeconds + 10 + uint64(i)
+		// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+		// (or the miner) left is the digest of a different blob now.
+		sealDevBlock(&blk.Header)
 		raw += len(blk.MarshalSSZ())
 		a.engine.Handle("flooder:1", p2p.KindBlock, deliver(blk))
 	}
@@ -1169,6 +1211,9 @@ func TestARejectedReleaseIsReturnedButNotMarkedForRelay(t *testing.T) {
 	bad := fakeOrphan(t, p, a.chain.Height()+1, a.chain.Tip().Target, 7)
 	bad.Header.Height = 999_999
 	bad.Header.Time = now + p.FutureTimeLimitSeconds + 5
+	// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+	// (or the miner) left is the digest of a different blob now.
+	sealDevBlock(&bad.Header)
 	if v := a.engine.Handle("attacker:1", p2p.KindBlock, deliver(bad)); !errors.Is(v.Err, p2p.ErrBlockWithheld) {
 		t.Fatalf("the block was not withheld, so the release path is not under "+
 			"test: %v", v.Err)
@@ -1266,6 +1311,9 @@ func TestWithholdLoopDoesNotRelayABlockTheOrdinaryPathRefused(t *testing.T) {
 	bad := retime(blocks[len(blocks)-1], now+p.FutureTimeLimitSeconds+30)
 	bad.Header.Height = 999_999
 	bad.Header.CertRoot = bad.ComputeCertRoot(p)
+	// Re-sealed: the fields above feed PoWSeed, so the seal fakeOrphan
+	// (or the miner) left is the digest of a different blob now.
+	sealDevBlock(&bad.Header)
 	if v := a.engine.Handle("attacker:1", p2p.KindBlock, deliver(bad)); !errors.Is(v.Err, p2p.ErrBlockWithheld) {
 		t.Fatalf("setup: the block was not withheld by a, so the release path "+
 			"is not under test: %v", v.Err)

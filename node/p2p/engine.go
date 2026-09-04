@@ -3517,7 +3517,7 @@ func (e *Engine) OrphanCount() int {
 // That burst has to clear the largest single reply either budgeted kind can
 // produce, or a transfer exists that the budget can never afford and the price
 // becomes a rejection. It does, with room: BlockChunkBytes is 4,194,304 and
-// MaxHeadersPerResponse × types.HeaderSize is 512 × 228 = 116,736, both under
+// MaxHeadersPerResponse × types.HeaderSize is 512 × 260 = 133,120, both under
 // BlockByteCapacity's 8,000,000. TestBlockByteCapacityFitsChunkedTransfer
 // already pins the same pair from the other side.
 //

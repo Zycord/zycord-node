@@ -45,6 +45,13 @@ func (h *budgetHarness) bodyAtEpoch(t *testing.T, epoch, nonce uint64, target u2
 	blk := &types.Block{Header: hd}
 	blk.Header.CertRoot = blk.ComputeCertRoot(p)
 	blk.Header.CitesRoot = blk.ComputeCitesRoot(p)
+	// Re-sealed AFTER the roots are written, and the order is the whole point.
+	// Both roots feed PoWSeed and therefore PoWInput, so the seal headerAtEpoch
+	// applied is the digest of a different blob the moment they change, and the
+	// body is refused for a digest mismatch rather than judged on its target —
+	// which is not what any caller here is measuring. An honest miner seals
+	// last for the same reason.
+	sealDev(&blk.Header, p)
 	return blk.MarshalSSZ()
 }
 

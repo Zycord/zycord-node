@@ -141,6 +141,41 @@ func TestTheAggregateServedIsBoundedOverIdentityChurnAndNotOnlyPerIdentity(t *te
 	}
 }
 
+// servedAWholeWindow reports whether an identity that drew `got` bytes in
+// replies of at most `max` bytes each got its whole budget, given that `prior`
+// identities were served ahead of it out of the same node-wide ceiling.
+//
+// **The tolerance is one reply PER IDENTITY SERVED, and it used to be one reply
+// flat.** That is the whole content of this helper and it is a real property of
+// the ceiling rather than a fudge for a test.
+//
+// The per-identity budget admits a reply that STARTS under budget, so an
+// identity is served until it crosses its budget and therefore overruns by up
+// to one reply. Those overruns come out of the shared node-wide ceiling and
+// they ACCUMULATE: after `prior` identities the ceiling is short by up to
+// `prior` replies, so the next identity stops up to `prior + 1` replies below
+// its own budget while still having been served everything the ceiling could
+// give it.
+//
+// The old form, `got + max >= budget`, allowed exactly one reply of slack and
+// so encoded "the overrun never accumulates past one". That held at
+// HeaderSize 228, where a 512-header reply is 116,740 bytes and one identity
+// overruns by 55,060 — two identities' overruns still under one reply. It stops
+// holding at HeaderSize 260, where the reply is 133,124 bytes and the overrun
+// is 120,564: by the third identity the ceiling is short 241,128, which is more
+// than a reply, and the third identity lands 145,684 below its budget having
+// drawn everything there was.
+//
+// **So the test was measuring a rounding artefact of one particular header
+// width, not the ceiling's liveness.** Nothing about the ceiling changed; the
+// header grew 32 bytes for the commitment rule and the artefact grew with it.
+// Stating the tolerance in replies-per-identity makes the assertion a claim
+// about the ceiling — every identity in the connection set is served everything
+// the ceiling can give — at any header width.
+func servedAWholeWindow(got, max, budget uint64, prior int) bool {
+	return got+max*uint64(prior+1) >= budget
+}
+
 // TestTheNodeWideCeilingRefusesNothingTheConnectionSetCouldReachAtAnInstant is
 // the liveness half, and it is what keeps the ceiling from being a throttle.
 //
@@ -163,10 +198,10 @@ func TestTheNodeWideCeilingRefusesNothingTheConnectionSetCouldReachAtAnInstant(t
 				if got > 0 {
 					any++
 				}
-				// "Its whole budget" is budget minus at most one reply: the last
-				// reply of a window is served whole, so a peer stops one reply
-				// short of the budget rather than exactly on it.
-				if got+max >= budget {
+				// "Its whole budget" is budget minus at most one reply per
+				// identity already served out of the shared ceiling — see
+				// servedAWholeWindow for why the tolerance accumulates.
+				if servedAWholeWindow(got, max, budget, full) {
 					full++
 				}
 			}
@@ -209,7 +244,7 @@ func TestTheNodeWideEgressCeilingComesBackInOneWindow(t *testing.T) {
 				for n := byte(0); n < byte(set); n++ {
 					got, max := c.serveFreshIdentity(first + n)
 					total += got
-					if got+max >= budget {
+					if servedAWholeWindow(got, max, budget, full) {
 						full++
 					}
 				}

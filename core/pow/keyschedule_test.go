@@ -278,11 +278,26 @@ func TestTheSolverAgreesWithCheckWork(t *testing.T) {
 		var solved int
 		for _, nonce := range nonces {
 			h.PoW.Nonce = nonce
+			// The solver returns the digest as well as the verdict, because
+			// the digest is a header field now. Writing it into the header
+			// before calling CheckWork is what an honest miner does, and it is
+			// what keeps this a comparison of the TARGET rule on both routes
+			// rather than a comparison of "did the miner fill the field in".
+			//
+			// It is taken from the solver deliberately, even though CheckWork
+			// would recompute it: the whole hazard this test guards is the two
+			// routes drifting, and re-deriving the digest here with a third
+			// call would hide a solver that computed the commitment over the
+			// wrong digest. If the solver's digest is wrong, CheckWork's
+			// identity half rejects the header and the verdicts disagree —
+			// which is exactly the signal wanted.
+			digest, viaSolver := s.TryHash(nonce)
+			h.PoWHash = digest
 			viaRule := pow.CheckWork(pow.Dev{}, h, p) == nil
 			if viaRule {
 				solved++
 			}
-			if viaSolver := s.Try(nonce); viaSolver != viaRule {
+			if viaSolver != viaRule {
 				t.Fatalf("%s, nonce %d: solver says %v, CheckWork says %v",
 					target.name, nonce, viaSolver, viaRule)
 			}
@@ -336,10 +351,19 @@ func TestACloneSolvesIndependently(t *testing.T) {
 				// onto region zero and the test would pass while measuring
 				// nothing.
 				nonce := uint32(w)<<20 | i
-				got := s.Try(nonce)
+				digest, got := s.TryHash(nonce)
 
 				hh := h
 				hh.PoW.Nonce = nonce
+				// The digest the clone computed, written into the header the
+				// rule is then asked about — see TestTheSolverAgreesWithCheckWork
+				// for why it is taken from the solver rather than re-derived.
+				// Here it carries a second load: a Clone that shared its
+				// buffer with the base solver would compute the digest of some
+				// other worker's nonce, and the rule would refuse the header
+				// for a mismatch rather than merely disagreeing about the
+				// target — a louder failure for the same defect.
+				hh.PoWHash = digest
 				if want := pow.CheckWork(pow.Dev{}, hh, p) == nil; got != want {
 					errs <- fmt.Errorf("worker %d nonce %d: solver %v, rule %v", w, nonce, got, want)
 					return

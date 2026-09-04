@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"zycord/core/types"
+	"zycord/core/u256"
 )
 
 // blobHeader is a header with every field non-zero and distinctive, so that a
@@ -173,27 +174,116 @@ func TestExtraNonceIsInsideTheSeedAndTheNonceIsNot(t *testing.T) {
 	}
 }
 
-// TestTheSealStillFitsTheHeaderWidth is the invariant the whole seal split was
-// drawn around: two uint32s where there was one uint64, so the encoding does
-// not move.
+// TestPoWHashIsOutsideTheSeedAndEveryOtherFieldIsInside is the companion claim
+// for the field the commitment rule added, and it is two properties that are
+// wrong in opposite directions if either is dropped.
 //
-// It is not a courtesy check. HeaderSize is the fixed frame node/p2p builds its
-// header batches, its announce sizing and its egress ceilings on; a header that
-// changed width would move every one of those offsets and turn a blob-layout
-// change into a wire change. The number is asserted as a literal for the same
-// reason the blob offsets are: reading HeaderSize to check HeaderSize proves
-// nothing.
+// **PoWHash is OUT of the seed, and without that the definition does not
+// exist.** The seed is hashed to make the blob, the blob is hashed to make
+// PoWHash — so a PoWHash inside the seed's preimage would make the seed a
+// function of itself. Not merely awkward: there would be no value a miner could
+// write into the field that satisfies it, every header would be invalid, and
+// the chain would not start.
+//
+// **Every OTHER field is IN, and this is the half a reader is likely to assume
+// rather than check.** PoWSeed zeroes exactly two fields — Nonce and PoWHash —
+// and a third zeroing added by symmetry would be grinding space: a field the
+// miner can vary without changing the seed is a field it can search for free,
+// outside the 2^32 the nonce gives it. Sweeping every field is what makes this
+// a claim about the whole header rather than about the two lines somebody
+// happened to look at.
+//
+// **The ordering consequence is what a test author trips over**, so it is
+// stated here where the property is: PoWSeed covers CertRoot, CitesRoot,
+// StateRoot, Target, Time and the rest, so a header sealed BEFORE any of those
+// is written carries a stale digest and fails CheckWork's identity half. Seal
+// last.
+func TestPoWHashIsOutsideTheSeedAndEveryOtherFieldIsInside(t *testing.T) {
+	base := blobHeader()
+	base.PoW.Nonce = 0
+	base.PoWHash = types.Hash{}
+	want := base.PoWSeed()
+
+	// Out: changing the digest must not move the seed.
+	moved := base
+	for i := range moved.PoWHash {
+		moved.PoWHash[i] = 0xA5
+	}
+	if moved.PoWSeed() != want {
+		t.Fatal("the seed changed with PoWHash: the seed would then be a function " +
+			"of the digest that is a function of the seed, no value would satisfy " +
+			"it, and no header could ever be valid")
+	}
+
+	// In: every other field must move the seed. Each mutation is applied to a
+	// fresh copy of the base, so a field that is silently ignored cannot be
+	// masked by an earlier one.
+	for _, m := range []struct {
+		name string
+		set  func(*types.Header)
+	}{
+		{"Version", func(h *types.Header) { h.Version ^= 1 }},
+		{"Height", func(h *types.Header) { h.Height ^= 1 }},
+		{"ParentID", func(h *types.Header) { h.ParentID[0] ^= 1 }},
+		{"Time", func(h *types.Header) { h.Time ^= 1 }},
+		{"CertRoot", func(h *types.Header) { h.CertRoot[0] ^= 1 }},
+		{"CitesRoot", func(h *types.Header) { h.CitesRoot[0] ^= 1 }},
+		{"StateRoot", func(h *types.Header) { h.StateRoot[0] ^= 1 }},
+		{"EmissionAddr", func(h *types.Header) { h.EmissionAddr[0] ^= 1 }},
+		{"PoW.ExtraNonce", func(h *types.Header) { h.PoW.ExtraNonce ^= 1 }},
+		{"PoW.SeedEpoch", func(h *types.Header) { h.PoW.SeedEpoch ^= 1 }},
+		// Target is ADDED to rather than subtracted from, because blobHeader
+		// leaves it zero and a saturating subtraction from zero is a no-op —
+		// which reports "Target is outside the seed" for a header that never
+		// varied it. The first run of this test said exactly that, and the
+		// field was innocent.
+		{"Target", func(h *types.Header) { h.Target, _ = h.Target.Add(u256.One) }},
+	} {
+		h := base
+		m.set(&h)
+		if h.PoWSeed() == want {
+			t.Errorf("the seed did not change with %s: that field is outside the "+
+				"seed's preimage, so a miner can vary it for free — grinding space "+
+				"beyond the 2^32 the nonce gives it, at no cost in hashes", m.name)
+		}
+	}
+}
+
+// TestTheSealStillFitsTheHeaderWidth pins the seal's width and the header's.
+//
+// The seal half is the invariant the seal split was drawn around: two uint32s
+// where there was one uint64, so splitting Nonce from ExtraNonce moved nothing.
+// That still holds and is still worth asserting on its own — it is a different
+// claim from the header's total width, and it is the one the split was about.
+//
+// **The header width itself moved, from 228 to 260, and this test is where that
+// is recorded as intended rather than discovered as a symptom.** The commitment
+// work rule needs the RandomX digest present in the header (types.Header's
+// PoWHash), because a verifier forms the commitment from it and the whole point
+// is to do that without evaluating RandomX. 32 bytes is the price and there is
+// no smaller one: the commitment is BLAKE2b over the full digest, so a
+// truncated field would not reproduce it.
+//
+// What that costs is real and is not hidden. HeaderSize is the fixed frame
+// node/p2p builds its header batches, its announce sizing and its egress
+// ceilings on, so every one of those is 14% larger — a 512-header response goes
+// from 116,736 to 133,120 bytes. It stays far under the wire ceilings, and the
+// arithmetic is re-derived where it is quoted rather than left to drift.
+//
+// Both numbers are asserted as literals for the same reason the blob offsets
+// are: reading HeaderSize to check HeaderSize proves nothing.
 func TestTheSealStillFitsTheHeaderWidth(t *testing.T) {
 	if types.PoWSealSize != 16 {
 		t.Fatalf("PoWSealSize is %d, want 16: Nonce(4) + ExtraNonce(4) + SeedEpoch(8)",
 			types.PoWSealSize)
 	}
-	if types.HeaderSize != 228 {
-		t.Fatalf("HeaderSize is %d, want 228; the seal split must not move the header",
+	if types.HeaderSize != 260 {
+		t.Fatalf("HeaderSize is %d, want 260 (228 + the 32-byte PoWHash the "+
+			"commitment rule needs); if this moved for any other reason, say why",
 			types.HeaderSize)
 	}
-	if got := len(blobHeader().MarshalSSZ()); got != 228 {
-		t.Fatalf("a marshalled header is %d bytes, want 228", got)
+	if got := len(blobHeader().MarshalSSZ()); got != 260 {
+		t.Fatalf("a marshalled header is %d bytes, want 260", got)
 	}
 }
 

@@ -109,8 +109,37 @@ func TestHashFirstRelayVerifiesAHeaderOnce(t *testing.T) {
 
 	// Anti-vacuity: a header the engine has not seen must still cost a full
 	// evaluation, or the counter is measuring nothing.
-	other := blk.Header
-	other.Time++
+	// **Re-SOLVED, not merely re-stamped, and the difference is the whole
+	// anti-vacuity here.**
+	//
+	// This used to be `other := blk.Header; other.Time++`, which under the old
+	// rule was a header the engine had never seen and therefore had to hash.
+	// Under the commitment rule a bumped timestamp is a different PoWInput, so
+	// the digest the miner left no longer beats the target and CheckWork
+	// refuses it from its own bytes — costing ZERO evaluations, which is
+	// exactly the reading this assertion exists to reject. Simply filling in
+	// PoWHash does not help either: at devnet's real target an arbitrary
+	// digest's commitment misses, and the refusal is still free.
+	//
+	// So the variant is mined the way the original was, through the miner's own
+	// Seal, which searches for a nonce whose commitment meets the target. That
+	// yields a header that is genuinely distinct from the cached one AND
+	// genuinely expensive to judge — the only shape in which "0 evaluations"
+	// can mean what this test needs it to mean: that the cache answered for a
+	// header it had never been shown.
+	variant, err := m.Assemble()
+	if err != nil {
+		t.Fatal(err)
+	}
+	variant.Header.Time++
+	if err := m.Seal(variant, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	other := variant.Header
+	if other.ID() == blk.Header.ID() {
+		t.Fatal("setup: the variant is the same header as the cached one, so " +
+			"a cache hit here would be correct and this proves nothing")
+	}
 	mid = work.count()
 	_ = e.work.Check(e.Engine, other, p)
 	if got := work.count() - mid; got == 0 {

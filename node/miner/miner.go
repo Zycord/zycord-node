@@ -629,6 +629,12 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 		wg     sync.WaitGroup
 		found  atomic.Bool
 		winner atomic.Uint32
+		// The winning digest, which is a header field now that the work rule
+		// compares the commitment. Guarded by the same CompareAndSwap that
+		// picks the winning nonce, so the pair cannot be torn: a header
+		// carrying one worker's nonce and another's digest would fail its own
+		// network's check.
+		winnerHash atomic.Pointer[types.Hash]
 	)
 	for w := 0; w < threads; w++ {
 		wg.Add(1)
@@ -653,11 +659,18 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 						return
 					}
 				}
-				if s.Try(uint32(i)) {
+				if digest, ok := s.TryHash(uint32(i)); ok {
 					// A concurrent winner is possible and harmless: both
 					// nonces satisfy the target, so either is a valid seal.
 					// CompareAndSwap only decides which one the block carries.
+					//
+					// The digest is stored BEFORE the flag, so that a reader
+					// which observes `found` also observes the matching hash.
+					// Storing it after would leave a window in which the
+					// header takes a nonce with no digest.
 					if found.CompareAndSwap(false, true) {
+						d := digest
+						winnerHash.Store(&d)
 						winner.Store(uint32(i))
 					}
 					return
@@ -673,6 +686,12 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 	// Written after every worker has stopped, so the header this returns is
 	// the one the winning nonce was tested against.
 	b.Header.PoW.Nonce = winner.Load()
+	// The digest the winning nonce produced. Carried rather than recomputed:
+	// re-deriving it here would pay a second full RandomX evaluation, and would
+	// be a second route to a consensus value — see pow.Solver.TryHash.
+	if d := winnerHash.Load(); d != nil {
+		b.Header.PoWHash = *d
+	}
 	return nil
 }
 

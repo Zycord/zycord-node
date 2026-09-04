@@ -10,7 +10,7 @@ package randomx
 // without something like this, editing the vendored C++ leaves a stale object
 // in the cache and every test measures the code you replaced.
 const (
-	UpstreamTag      = "v1.2.3"
-	UpstreamCommit   = "12f2c2ffe2108d6cf54c391fee33c8bc3646cdab"
-	UpstreamTreeHash = "4830868f9369ba7fc64c0be8f4fabee1a18c626009cb85d942aa8a1be6b61225"
+	UpstreamTag      = "v2.0.1"
+	UpstreamCommit   = "aaafe71322df6602c21a5c72937ac284724ae561"
+	UpstreamTreeHash = "822401d806b4b8c172527c3fb2c1397d3d57e6dee2b7d753ef3e038610c9ab90"
 )

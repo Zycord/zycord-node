@@ -54,6 +54,11 @@ func workingAnnounce(p *params.Params, tip types.Header, nonce uint32, when int6
 		CertRoot: certRoot(nil, p),
 		PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p), Nonce: nonce | 1<<31},
 	}
+	// The digest of this header's own blob. At u256.Max every commitment
+	// passes, so this is one evaluation rather than a search — which is what
+	// makes these announcements "honest" in the sense this test needs: they
+	// satisfy the work rule and must not be throttled away.
+	sealDev(&h, p)
 	return BlockAnnounce{Header: h, CertExemplars: nil}.MarshalAnnounce()
 }
 

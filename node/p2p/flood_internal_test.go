@@ -63,17 +63,25 @@ const (
 //
 // The cache makes a REPEATED header free. It does nothing for DISTINCT ones,
 // and distinct ones are cheap to make: copy the target the rule computes — so
-// the cheap NextTarget check passes — and put garbage in the nonce. Every such
-// header costs the receiver one full work evaluation before CheckWork refuses
-// it. Against the BLAKE3 stand-in that was microseconds. Against RandomX it is
-// 15–55 ms across the three readings core/pow/randomx carries, so the question
-// is whether per-peer scoring
-// bans the sender before the CPU bill matters.
+// the cheap NextTarget check passes — and put garbage in the nonce. Under the
+// old rule every such header cost the receiver one full work evaluation before
+// CheckWork refused it: 15–55 ms of RandomX across the three readings
+// core/pow/randomx carries, against microseconds for the BLAKE3 stand-in. The
+// question was whether per-peer scoring banned the sender before the CPU bill
+// mattered, and this test answered it with a bound rather than an opinion.
 //
-// This test answers it with a number rather than an opinion, and the number is
-// the point: it fails if the cost per peer ever stops being bounded, and it
-// prints what the bound is so a reader does not have to re-derive it from two
-// constants in another file.
+// **The commitment rule has removed the bill entirely, and the assertion at
+// the foot of this test now says so.** Garbage in the nonce changes the
+// commitment, the commitment misses the declared target, and CheckWork refuses
+// the header from its own bytes without asking the engine for anything. The
+// count below is zero.
+//
+// What the test still measures is that the flood TERMINATES: the headers reach
+// the work gate, are refused, are charged ScoreInvalidMessage, and the sender
+// is banned inside the budget the scoring constants imply. That bound is
+// derived here rather than copied, so a reader does not have to re-derive it
+// from two constants in another file, and it is what keeps the zero above from
+// meaning "nothing was checked".
 func TestAUniqueInvalidHeaderFloodIsSelfLimiting(t *testing.T) {
 	p := spec.Devnet()
 	c, err := chain.Open(t.TempDir(), p)
@@ -123,8 +131,9 @@ func TestAUniqueInvalidHeaderFloodIsSelfLimiting(t *testing.T) {
 
 	evals := work.count()
 	t.Logf("the peer was banned after %d unique invalid headers costing %d work "+
-		"evaluations (%d per header); at %.0f ms each that is %.1f s of CPU "+
-		"bought per peer identity", sent, evals, evals/sent,
+		"evaluations; at %.0f ms each that is %.1f s of CPU bought per peer "+
+		"identity — the commitment refuses each of these before the engine is "+
+		"asked, so the figure is zero rather than bounded", sent, evals,
 		secondsPerHeldEpochHash*1000, float64(evals)*secondsPerHeldEpochHash)
 
 	if !banned {
@@ -157,12 +166,34 @@ func TestAUniqueInvalidHeaderFloodIsSelfLimiting(t *testing.T) {
 			sent, ScoreInvalidMessage, ScoreBanThreshold, budget)
 	}
 
-	// Anti-vacuity: if the headers had been cheap to refuse — a wrong target,
-	// say — the work function would never have run, and this test would be
-	// measuring the NextTarget check rather than the flood it names.
-	if evals == 0 {
-		t.Fatal("no work evaluation happened; the headers were refused before " +
-			"the work check, so this measures the wrong guard")
+	// **Zero, and the attack this test was written for no longer exists.**
+	//
+	// This assertion used to demand a positive count, on the reasoning that a
+	// header refused cheaply would mean the test was measuring the NextTarget
+	// check rather than the flood it names. That reasoning was right under the
+	// old rule and is wrong under this one. These headers carry the rule's own
+	// target and garbage in the nonce — no work behind them at all — so their
+	// commitment misses that target and pow.CheckWork answers from the header's
+	// own bytes. The headers still REACH the work gate; the gate no longer
+	// costs an evaluation to say no.
+	//
+	// So the attack in this test's doc comment above — "every such header costs
+	// the receiver one full work evaluation" — has been priced out rather than
+	// merely bounded. The cost per peer identity is not 5 evaluations bounded
+	// by a ban; it is none, and the ban is now a second line of defence behind
+	// a free refusal rather than the only one.
+	//
+	// The assertion is inverted rather than deleted, and the anti-vacuity it
+	// carried is now carried by the `banned` check and the `sent > budget`
+	// bound above: the flood was judged, charged ScoreInvalidMessage per
+	// message, and terminated in a ban inside the budget the scoring constants
+	// imply. "0 evaluations" therefore cannot be read as "these headers were
+	// never looked at" — they were looked at, refused, and paid for.
+	if evals != 0 {
+		t.Fatalf("the flood cost %d work evaluations, want 0: a header whose "+
+			"commitment misses its declared target is refused from its own "+
+			"bytes, and an evaluation here means that cheap refusal is not "+
+			"being taken and the flood is buying CPU again", evals)
 	}
 }
 
@@ -201,17 +232,31 @@ func TestAUniqueInvalidHeaderFloodIsSelfLimiting(t *testing.T) {
 // The attacker has no reason to make that mistake, and the document this test
 // backs states a WORST case. So the heights are the first height OF each
 // epoch, `RandomXKeyLag + n*RandomXKeyInterval`, walking upward from the epoch
-// after the tip's: every message then forces an epoch the node does not hold,
-// and the bound below is tight rather than slack.
+// after the tip's: every message NAMES an epoch the node does not hold. Under
+// the commitment rule none of them is built, because none of these headers gets
+// past the target comparison — but the heights stay aligned so that a
+// regression which restored the evaluation would force a fresh epoch per
+// message and be caught, rather than being masked by heights that collide.
 //
 // What it defends, and the scope is the whole of it: for headers the work check
 // REFUSES, the number of distinct never-held epochs one identity can force is
-// bounded by the same scoring budget as the number of evaluations, AND that
-// budget is reachable — a peer really can spend every charged message on a
-// fresh 256 MiB cache initialisation. If a change ever lets a peer force more
-// refused-header epochs than messages, or stops charging for these at all, or
-// quietly makes the heights stop selecting fresh epochs, the bound moves and
-// this fails.
+// bounded by the same scoring budget as the number of evaluations. If a change
+// ever lets a peer force epochs with headers like these, or stops charging for
+// them at all, the bound moves and this fails.
+//
+// **Under the commitment rule that bound has collapsed to zero, and the
+// reachability arm at the foot of this test asserts zero rather than the
+// budget.** These headers carry no work, so their commitment misses the target
+// they declare and CheckWork refuses them from their own bytes; the engine is
+// never asked for a key, so no cache is ever initialised. The worst case this
+// test was written to publish — every charged message spent on a fresh 256 MiB
+// initialisation — is no longer reachable at all, which is why the arm that
+// demanded it be reachable had to be inverted rather than kept.
+//
+// The height alignment described below still matters, and is kept for that
+// reason: it is what would make the count non-zero again if the cheap refusal
+// ever stopped being taken, so it is the difference between this test failing
+// loudly on a regression and quietly reporting zero for the wrong reason.
 //
 // **"For headers the work check refuses" is load-bearing and it is not a
 // hedge.** Every header here carries the target the rule itself computes, so
@@ -355,18 +400,35 @@ func TestAHeightVaryingFloodIsBoundedInEpochsToo(t *testing.T) {
 			forced, budget)
 	}
 
-	// And the other direction, which is what stops this test drifting back into
-	// measuring the cheap case wearing an expensive name. The budget is
-	// REACHABLE: every charged message can be spent on a fresh epoch. A count
-	// below it means the heights stopped selecting one epoch each — which is
-	// what a step of exactly one interval from `tip.Height+1` does, because of
-	// the lag — and the worst case this test exists to publish would be
-	// under-reported rather than failing.
-	if forced < budget {
-		t.Fatalf("%d headers forced only %d never-held epochs against a budget "+
-			"of %d; the heights no longer select one fresh epoch each, so this "+
-			"measures less than an attacker can buy and the figure it backs "+
-			"understates the cost", sent, forced, budget)
+	// **Zero, and the expensive half of the flood has been priced out.**
+	//
+	// This arm used to demand that the budget be REACHABLE — `forced` equal to
+	// it — so that the test could not drift back into measuring the cheap case
+	// wearing an expensive name. Under the commitment rule the premise is gone.
+	// These headers declare the rule's own target and carry no work at all, so
+	// their commitment misses that target and pow.CheckWork answers from the
+	// header's own bytes. The engine is never asked for a key, so no epoch is
+	// instantiated and none can be forced.
+	//
+	// That is the strongest possible answer to the question this test asks. The
+	// worst case it exists to publish — a height-varying flood buying
+	// never-held key epochs at ~0.5 s of cache initialisation each — is no
+	// longer bounded at the scoring budget; it is zero, because the sender must
+	// now do the work before the receiver spends any. The ~30x figure
+	// testnet-measurements §2 draws from this test is a cost that a flood of
+	// unsolved headers can no longer impose at all.
+	//
+	// The assertion is inverted rather than deleted, and its anti-vacuity is
+	// carried by what stands above it: `banned` says the flood was judged,
+	// charged and terminated, and the `forced > budget` bound still fires if
+	// any epoch is ever forced again. Together they make "0 never-held epochs"
+	// mean "refused before the engine was asked" rather than "never looked at".
+	if forced != 0 {
+		t.Fatalf("%d headers forced %d never-held key epochs, want 0: a header "+
+			"whose commitment misses its declared target is refused from its "+
+			"own bytes, so no key is ever built for one, and a non-zero count "+
+			"means that cheap refusal is not being taken and the flood is "+
+			"buying cache initialisations again", sent, forced)
 	}
 }
 
@@ -501,6 +563,12 @@ func TestAnAnnouncersOwnTargetBuysABoundedNumberOfKeyEpochs(t *testing.T) {
 				PoW:      types.PoWSeal{SeedEpoch: pow.SeedEpochFor(height, p)},
 			}
 			h.PoW.Nonce = uint32(i) | 1<<31
+			// The digest of this header's own blob, which the work rule now
+			// requires. At u256.Max every commitment passes, so this is one
+			// evaluation rather than a search — the announcement is still as
+			// cheap to make as the finding says, and it still PASSES the work
+			// check, which is the whole premise below.
+			sealDev(&h, p)
 
 			// Anti-vacuity, on the first header and asked of a bare pow.Dev so
 			// that the instrument is not seeded with the answer: the work check
@@ -510,7 +578,7 @@ func TestAnAnnouncersOwnTargetBuysABoundedNumberOfKeyEpochs(t *testing.T) {
 			if i == 0 {
 				if err := pow.CheckWork(pow.Dev{}, h, p); err != nil {
 					t.Fatalf("setup: the declared-target header does not pass "+
-						"CheckWork (%v); at u256.Max no digest can exceed the "+
+						"CheckWork (%v); at u256.Max no commitment can exceed the "+
 						"target and the whole finding is that it passes", err)
 				}
 			}

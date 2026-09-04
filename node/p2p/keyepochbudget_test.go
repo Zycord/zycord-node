@@ -68,6 +68,10 @@ func TestTheFreeKeyEpochsFollowThisNodesOwnTip(t *testing.T) {
 			CertRoot: emptyRoot,
 			PoW:      types.PoWSeal{Nonce: uint32(nonce) | 1<<31, SeedEpoch: pow.SeedEpochFor(height, p)},
 		}
+		// Sealed: the header carries the digest of its own blob, which the work
+		// rule's identity half requires. At u256.Max every commitment passes,
+		// so this is one evaluation rather than a search.
+		hd.PoWHash = pow.Dev{}.Hash(pow.KeyFor(hd.Height, p), hd.PoWInput())
 		// Anti-vacuity: a header that the work check refuses would be refused
 		// below for a reason that is not the budget's.
 		if err := pow.CheckWork(pow.Dev{}, hd, p); err != nil {

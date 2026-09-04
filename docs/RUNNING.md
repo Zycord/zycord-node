@@ -146,7 +146,7 @@ It must be a **persistent (`0x02`) address** — `zcd wallet address` prints one
 The work function is a **consensus parameter**, not a setting. `zcd params` prints it:
 
 ```
-proof of work    randomx-v1 (re-keyed every 2048 blocks, 64-block lag)
+proof of work    randomx-v2 (re-keyed every 2048 blocks, 64-block lag)
 ```
 
 **From a release, that is the archive with `-randomx` in its name.** The plain

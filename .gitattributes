@@ -50,3 +50,28 @@
 # they have written a line, which is a poor first five minutes and says nothing
 # true about their checkout.
 * text=auto eol=lf
+
+# The vendored RandomX tree is byte-pinned, so git must not normalise it.
+#
+# `* text=auto eol=lf` above is right for every file this project writes and
+# WRONG for the one directory whose bytes are somebody else's. RandomX v2.0.1
+# added `src/jit_compiler_rv64_vector_static.h` with CRLF line endings — the
+# only such file in the tree, upstream's own — and the rule above rewrote it to
+# LF on the way into the index. The consequence is not cosmetic: `PINNED` and
+# `pinned.go` carry a SHA-256 over the vendored files, so a fresh clone (LF,
+# from the index) and a re-run of vendor.sh (CRLF, from tevador's tag) compute
+# two different tree hashes, and `TestVendoredTreeMatchesPinned` fails for
+# whichever side did not write the file last.
+#
+# That is exactly the failure the byte-pinning exists to prevent, arriving
+# through the mechanism meant to make checkouts uniform. `-text` turns
+# normalisation off for this subtree only: git stores and restores these bytes
+# verbatim on every platform, the audit stays a `diff` against the upstream tag,
+# and the tree hash is a property of upstream's release rather than of whose
+# machine ran the clone.
+#
+# It does not weaken the rule it exempts. The reasons in the block above —
+# gofmt on Windows CI, //go:embed reproducibility — are about files this project
+# writes and formats. Nothing here is gofmt'd, nothing here is embedded, and
+# nothing here is edited: vendor.sh's own header says DO NOT PATCH IT.
+core/pow/randomx/upstream/** -text

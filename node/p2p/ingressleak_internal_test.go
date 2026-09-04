@@ -40,6 +40,14 @@ func solveMaxTarget(tb testing.TB, h types.Header, start uint32) types.Header {
 	// caller's window already claimed.
 	for n := uint64(start); n < uint64(start)+(1<<floodWindowBits) && n <= math.MaxUint32; n++ {
 		h.PoW.Nonce = uint32(n)
+		// Sealed per candidate, because the nonce is part of the blob: each
+		// attempt carries the digest of its OWN blob, which is what the work
+		// rule's identity half requires and what an honest miner does once per
+		// attempt. Without it every candidate is refused for a digest mismatch
+		// before its commitment is ever compared, and this search walks its
+		// whole window and reports "no solution" — a message about the target,
+		// for a cause that has nothing to do with it.
+		sealDev(&h, p)
 		if pow.CheckWork(pow.Dev{}, h, p) == nil {
 			return h
 		}

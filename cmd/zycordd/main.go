@@ -1131,6 +1131,18 @@ func selectEngine(p *params.Params, mining bool) (pow.Engine, error) {
 		// magnitude faster per hash. A verifying node must not pay it, and
 		// TestLightAndFastAgree is what says the two cannot disagree.
 		e, err = randomx.New(randomx.Options{FullMemory: mining})
+	case randomx.NameV2:
+		// rx/2, which is what mainnet and the public testnet declare. The
+		// SAME vendored library and the same binary: RANDOMX_FLAG_V2 selects
+		// the function at VM creation, and the allocation sizes are identical,
+		// so a v2 node costs a v1 node's memory exactly.
+		//
+		// V2 is set from the network's declared engine and from nothing else.
+		// It changes the digest, so it is consensus rather than configuration
+		// — see randomx.Options.V2 — and the check below is what makes the
+		// selection visible: the engine reports the function it was built with,
+		// and a v1 engine handed to a v2 network is refused by name.
+		e, err = randomx.New(randomx.Options{FullMemory: mining, V2: true})
 	default:
 		return nil, fmt.Errorf(
 			"this build has no engine for pow_engine %q, which %s requires",

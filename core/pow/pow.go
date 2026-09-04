@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"zycord/core/crypto"
+	"zycord/core/crypto/blake2b"
 	"zycord/core/params"
 	"zycord/core/ssz"
 	"zycord/core/types"
@@ -71,7 +72,8 @@ func (Dev) Hash(key types.Hash, input []byte) types.Hash {
 
 // Errors returned by header checks.
 var (
-	ErrWorkTooLow    = errors.New("pow: hash does not meet the target")
+	ErrWorkTooLow    = errors.New("pow: commitment does not meet the target")
+	ErrHashMismatch  = errors.New("pow: the header's declared RandomX digest is not the digest of its own blob")
 	ErrTargetMissing = errors.New("pow: header declares a zero target")
 	ErrTimeTooEarly  = errors.New("pow: header time is at or below the median of recent blocks")
 )
@@ -136,14 +138,127 @@ func CheckWork(e Engine, h types.Header, p *params.Params) error {
 // is the practical statement of "no proxy can translate between them".
 // docs/ARCHITECTURE.md §12 is normative and states both halves.
 func checkWorkWith(e Engine, h types.Header, key types.Hash) error {
+	if err := CheckCommitment(h); err != nil {
+		return err
+	}
+	if h.Height == 0 {
+		return nil
+	}
+	// The expensive half, and the half that makes the cheap one sound: the
+	// digest the header CLAIMS must be the digest of the header's own blob.
+	// Without this, PoWHash is an arbitrary 32 bytes and the commitment proves
+	// only that somebody hashed a number, not that they hashed this header.
+	if got := e.Hash(key, h.PoWInput()); got != h.PoWHash {
+		return ErrHashMismatch
+	}
+	return nil
+}
+
+// Commitment is the value compared against the target: `blake2b(PoWInput ‖
+// PoWHash)`, 32 bytes.
+//
+// **This is not a scheme this project designed, and the details are not
+// negotiable.** RandomX v2's `randomx_calculate_commitment` is
+// `blake2b-256(input ‖ H)` over the job blob that produced H, and stock XMRig
+// computes it for every rx/2 nonce and filters its shares on it — see
+// CheckCommitment for why the miner's own variable names say otherwise. The
+// function, the operand order and the digest width are all upstream's. What
+// this function decides is only which bytes play the role of `input`, and the
+// answer is PoWInput: the same 43 bytes the work function was evaluated over,
+// which is what the miner passes as `prev_job`.
+func Commitment(h types.Header) types.Hash {
+	in := h.PoWInput()
+	buf := make([]byte, 0, len(in)+len(h.PoWHash))
+	buf = append(buf, in...)
+	buf = append(buf, h.PoWHash[:]...)
+	return types.Hash(blake2b.Sum256(buf))
+}
+
+// CheckCommitment is the CHEAP half of the work rule: it tests the header's
+// commitment against its target and evaluates no work function at all.
+//
+// Cost is a BLAKE3 over the header (PoWSeed) plus a BLAKE2b over 75 bytes —
+// call it a microsecond, against ~55 ms for the light-mode RandomX verify
+// CheckWork also pays. That ratio is the whole reason the header grew 32 bytes,
+// and the paths that spend it are the ones an attacker can aim: cited headers,
+// flood handling, and any light rejection where the answer is almost always
+// "no".
+//
+// # What it proves, and what it does not
+//
+// It proves that whoever built this header did the work: producing a commitment
+// under the target requires producing the PoWHash that goes into it, and the
+// only way to produce a PoWHash that lands anywhere in particular is to run
+// RandomX. So a header passing this has had the full expected number of
+// evaluations spent on it.
+//
+// It does NOT prove that PoWHash is the digest of THIS header's blob. A header
+// could carry a digest that beats the target and was computed for something
+// else entirely. That is what CheckWork's second half is for, and the ordering
+// is deliberate: the forgery still costs an attacker a full proof of work to
+// construct, so it buys no amplification — it is refused a microsecond later
+// than an honest header would be, having cost its author what an honest header
+// costs. **A caller that uses only this function is choosing to defer a check,
+// not to skip one**, and every such caller in the tree says so at its call
+// site.
+//
+// # The target is compared against the COMMITMENT, and this inverts the rule
+//
+// Under rx/0 the target was compared against the RandomX digest. Under rx/2 it
+// is compared against the commitment, and that is not a choice either: it is
+// what stock XMRig does, established from its source rather than from its
+// documentation, and the two disagree.
+//
+// `CpuWorker.cpp` at v6.26.0 computes, per nonce:
+//
+//	memcpy(m_commitment, m_hash, RANDOMX_HASH_SIZE);
+//	randomx_calculate_commitment(prev_job, prev_job_size, m_hash, m_hash);
+//
+// `randomx_calculate_commitment` writes its output over `m_hash` IN PLACE,
+// reading the same buffer as its input. So from that line onward `m_hash` holds
+// the commitment and `m_commitment` holds the raw digest — **the two names are
+// inverted relative to their contents.** The share filter twelve lines later,
+//
+//	const uint64_t value = *reinterpret_cast<uint64_t*>(m_hash + (i * 32) + 24);
+//	if (value < job.target())
+//
+// reads `m_hash`, which is the commitment. The Stratum submission inverts them
+// again in the same direction: the wire field named `result` carries the
+// commitment and the field named `commitment` carries the raw digest.
+//
+// `Tweak_V2_COMMITMENT` is set to 1 by `RandomX_ConfigurationMoneroV2`'s
+// constructor and `RxAlgo::base()` returns that configuration for every rx/2
+// job. There is no pool-protocol field, no command-line flag and no
+// configuration that yields rx/2 with the commitment off, so this is not a mode
+// to detect — it is what rx/2 means to every miner that exists.
+//
+// A chain that kept comparing the raw digest under rx/2 would therefore be
+// evaluating a number no miner filters on. Stock XMRig would discard the nonces
+// that win and submit the ones that lose, at a healthy reported hashrate with
+// every share refused and no error naming the cause — the same silent,
+// total failure mode docs/decisions/xmrig.md exists to prevent, arriving
+// through the change meant to be invisible.
+//
+// # The little-endian rule is unchanged, and still applies
+//
+// XMRig's comparison reads eight bytes at offset 24 of the 32-byte value as a
+// native little-endian uint64. That is the top limb of `le256(value)`, exactly
+// as before; what moved is WHICH 32 bytes it reads. So the reading is still
+// little-endian, a Stratum 64-bit job target is still the clean truncation
+// `t64 = max(1, floor((TARGET + 1) / 2^192))` of the consensus target, and
+// every argument in docs/decisions/xmrig.md §4 about target encodability
+// survives intact. The commitment is uniform for the same reason the digest is,
+// so difficulty is unaffected.
+//
+// Genesis is exempt for the same reason CheckWork exempts it.
+func CheckCommitment(h types.Header) error {
 	if h.Height == 0 {
 		return nil
 	}
 	if h.Target.IsZero() {
 		return ErrTargetMissing
 	}
-	digest := e.Hash(key, h.PoWInput())
-	if u256.FromLEBytes(digest).Gt(h.Target) {
+	if u256.FromLEBytes(Commitment(h)).Gt(h.Target) {
 		return ErrWorkTooLow
 	}
 	return nil
@@ -254,15 +369,44 @@ func NewSolver(e Engine, h types.Header, p *params.Params) Solver {
 // it had already rejected and reported hashrate it was not converting into
 // coverage. Making the width a compile error was the point.
 func (s *Solver) Try(nonce uint32) bool {
+	_, ok := s.TryHash(nonce)
+	return ok
+}
+
+// TryHash is Try, additionally returning the digest it computed.
+//
+// It exists because the winning digest is now a HEADER FIELD: a caller that
+// found a nonce has to write types.Header.PoWHash, and recomputing the digest
+// to obtain it would pay a second full RandomX evaluation for a value the
+// solver just held. Worse than slow, it would be a second route to the same
+// number — the class of duplication NewSolver's comment describes as "exactly
+// how a miner comes to hash something its own verifier does not".
+//
+// Try remains for callers that only want the verdict, and is this function.
+func (s *Solver) TryHash(nonce uint32) (types.Hash, bool) {
 	copy(s.input[types.PoWInputNonceOffset:], ssz.Uint32(nonce))
-	// FromLEBytes, not FromBytes, and for the reason checkWorkWith gives at
-	// length: this is the same comparison by a second route, and the two
-	// routes not sharing code is the hazard TestTheSolverAgreesWithCheckWork
-	// exists to cover. A Try that read the digest the other way round would
-	// find nonces the rule refuses — a miner rejected by its own network —
-	// and every test in the tree that mines a block would still pass, because
-	// they all mine through this function.
-	return !u256.FromLEBytes(s.engine.Hash(s.key, s.input)).Gt(s.target)
+	digest := s.engine.Hash(s.key, s.input)
+
+	// The commitment, formed exactly as pow.Commitment forms it and as
+	// stock XMRig's randomx_calculate_commitment forms it: BLAKE2b over the
+	// blob that produced the digest, then the digest.
+	//
+	// It is assembled here from s.input rather than by calling Commitment(h),
+	// because the solver has no header — that is the whole reason Solver
+	// exists — and building one per attempt would pay a full SSZ marshal and a
+	// BLAKE3 pass inside the nonce loop. The duplication is real and it is the
+	// hazard TestTheSolverAgreesWithCheckWork covers, now over both halves.
+	buf := make([]byte, 0, len(s.input)+len(digest))
+	buf = append(buf, s.input...)
+	buf = append(buf, digest[:]...)
+	commitment := types.Hash(blake2b.Sum256(buf))
+
+	// FromLEBytes, not FromBytes, and for the reason CheckCommitment gives at
+	// length. A Try that read the value the other way round would find nonces
+	// the rule refuses — a miner rejected by its own network — and every test
+	// in the tree that mines a block would still pass, because they all mine
+	// through this function.
+	return digest, !u256.FromLEBytes(commitment).Gt(s.target)
 }
 
 // Clone returns an independent Solver over the same candidate, for one more
@@ -293,8 +437,13 @@ func Solve(e Engine, h *types.Header, p *params.Params, limit uint64) bool {
 		limit = nonceSpace
 	}
 	for i := uint64(0); i < limit; i++ {
-		if s.Try(uint32(i)) {
+		if digest, ok := s.TryHash(uint32(i)); ok {
 			h.PoW.Nonce = uint32(i)
+			// The digest goes into the header, because the verifier compares
+			// the commitment and cannot form one without it. Written from the
+			// value the solver just computed rather than re-derived: see
+			// TryHash.
+			h.PoWHash = digest
 			return true
 		}
 	}

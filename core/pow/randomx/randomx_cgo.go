@@ -432,6 +432,14 @@ func New(o Options) (pow.Engine, error) {
 	if o.LargePages {
 		flags |= C.RANDOMX_FLAG_LARGE_PAGES
 	}
+	// rx/2. Set on `flags` rather than only on `fastFlags`, so that light
+	// verification and full-memory mining bind the SAME function: the whole
+	// point of TestLightAndFastAgree is that a header sealed by the miner is a
+	// header the verifier accepts, and a v2 dataset read by a v1 VM would break
+	// that in the one direction nothing else in the tree checks.
+	if o.V2 {
+		flags |= C.RANDOMX_FLAG_V2
+	}
 	// FULL_MEM is deliberately NOT folded into flags. It goes on fastFlags
 	// alone, so that the only VMs which can read the dataset are the ones this
 	// engine hands out under fmu.
@@ -468,7 +476,18 @@ func New(o Options) (pow.Engine, error) {
 }
 
 // Name identifies the engine, and is what Params.PoWEngine must equal.
-func (e *Engine) Name() string { return Name }
+//
+// It reports the function this engine was CONSTRUCTED with rather than a
+// package constant, which is what lets selectEngine's second check — "the
+// engine that came back answers to the name the network asked for" — see a
+// v1/v2 mix-up at all. A constant here would make that check tautological for
+// the one axis on which it now matters.
+func (e *Engine) Name() string {
+	if e.opts.V2 {
+		return NameV2
+	}
+	return Name
+}
 
 // Hash evaluates RandomX over input, keyed for key.
 func (e *Engine) Hash(key types.Hash, input []byte) types.Hash {

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"zycord/core/params"
 	"zycord/core/pow"
 	"zycord/core/types"
 	"zycord/core/u256"
@@ -85,14 +86,37 @@ func tipHeaderAt(tb testing.TB, c *chain.Chain, target u256.U256, salt uint32) t
 	// (types.PoWSeal), and a 40-bit shift would truncate every salt to zero,
 	// silently handing every caller the same header — a defect that would look
 	// like a dedupe bug in whatever test noticed it first.
+	// Each candidate is SEALED before it is offered to the rule: the header
+	// carries the digest of its own blob, which is what an honest miner writes
+	// and what CheckWork's identity half requires. Without it every candidate
+	// is refused for a mismatch rather than judged on its target, and the
+	// search runs the whole window and finds nothing — which is how this helper
+	// failed when the commitment rule landed, in seven tests at once, with a
+	// message about targets that had nothing to do with the cause.
 	for n := uint32(0); n < nonceSearchWindow; n++ {
 		h.PoW.Nonce = n ^ (salt << nonceSearchBits)
+		sealDev(&h, p)
 		if pow.CheckWork(pow.Dev{}, h, p) == nil {
 			return h
 		}
 	}
 	tb.Fatalf("no solution for target %s", target.String())
 	return h
+}
+
+// sealDev fills a header's PoWHash the way an honest miner does, so that the
+// digest-identity half of pow.CheckWork passes and the target half is what a
+// nonce search is actually measuring.
+//
+// It exists because four separate search loops in this file each had to grow
+// the same line, and a fifth would have been written without it. Under the
+// commitment rule a header carries the digest of its own blob; a header built
+// by a literal carries a zero digest, which is the digest of nothing, so
+// CheckWork refuses it before looking at the target and every such search runs
+// its whole window and reports "no solution for target ..." — a message about
+// the target, for a cause that has nothing to do with it.
+func sealDev(h *types.Header, p *params.Params) {
+	h.PoWHash = pow.Dev{}.Hash(pow.KeyFor(h.Height, p), h.PoWInput())
 }
 
 func ruleTarget(c *chain.Chain) u256.U256 {
@@ -260,6 +284,7 @@ func TestAnAnnouncementNamingAParentThisNodeDoesNotHoldIsStillAccepted(t *testin
 	}
 	for n := uint32(0); n < nonceSearchWindow; n++ {
 		h.PoW.Nonce = n
+		sealDev(&h, p)
 		if pow.CheckWork(pow.Dev{}, h, p) == nil {
 			break
 		}
@@ -395,6 +420,7 @@ func TestAnAnnouncementOnThisNodesTipAtAnyHeightButItsSuccessorIsRefused(t *test
 	solved := false
 	for n := uint32(0); n < nonceSearchWindow && !solved; n++ {
 		h.PoW.Nonce = n
+		sealDev(&h, p)
 		solved = pow.CheckWork(pow.Dev{}, h, p) == nil
 	}
 	if !solved {
@@ -468,6 +494,7 @@ func TestTheSuccessorHeightIsWhatThatCheckReadsAndNotMerelyBeingAbove(t *testing
 		}
 		for n := uint32(0); n < nonceSearchWindow; n++ {
 			h.PoW.Nonce = n ^ (nonceSalt << nonceSearchBits)
+			sealDev(&h, p)
 			if pow.CheckWork(pow.Dev{}, h, p) == nil {
 				return h
 			}

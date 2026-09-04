@@ -745,6 +745,15 @@ func measureOneGroupsConcurrentShare(t *testing.T, ln *Listener, give int) int {
 // identity by the ban however many connections that identity opens, and its
 // aggregate over identities really is that bound times a Sybil count.
 //
+// Under the commitment rule that per-identity bound has collapsed to ZERO, and
+// the arm below asserts zero. A header at the rule's own target with no work
+// behind it never reaches the engine: its commitment misses the target and
+// CheckWork answers from the header's own bytes. The charged half therefore
+// still terminates in a ban — the flood is judged and refused — but it buys no
+// key epochs on the way, so the Sybil multiplication above is over a bound of
+// zero. The measurement this test was built to make is unchanged in meaning;
+// its answer got better.
+//
 // This test measures both arms so that no number in this file can be read as
 // applying to the other half.
 func TestTheChargedHalfsAggregateIsStillBoundedPerIdentityByTheBan(t *testing.T) {
@@ -839,9 +848,34 @@ func TestTheChargedHalfsAggregateIsStillBoundedPerIdentityByTheBan(t *testing.T)
 			"about a bounded quantity — delete this test and state that",
 			bannedZero, bannedCeiling, full)
 	}
-	if fromZero != MaxUnheldKeyEpochsPerPeer {
+	// **Zero, and the charged half now costs the node nothing to refuse.**
+	//
+	// This row used to demand MaxUnheldKeyEpochsPerPeer forced epochs, because
+	// under the old rule a header at the rule's own target reached the engine,
+	// was hashed, and was refused on the digest it produced — one never-held
+	// key epoch built per message until the ban. The commitment rule answers
+	// that header from its own bytes: these headers carry no work at all, so
+	// their commitment misses the honest target and CheckWork refuses before it
+	// asks the engine for anything. No key is instantiated, so distinctKeys()
+	// reports none.
+	//
+	// That is an improvement in exactly the quantity this test exists to bound,
+	// not a loss of coverage. The charged half's per-identity cost was the
+	// worry; it is now zero rather than bounded, and the sentence about a Sybil
+	// count multiplying a per-identity bound is about a bound of zero.
+	//
+	// The assertion is inverted rather than deleted, and the anti-vacuity is
+	// carried by what stands around it: bannedZero and bannedCeiling above say
+	// the flood was judged and refused all the way to a ban, so "0 epochs"
+	// cannot be read as "these messages were never looked at". The separation
+	// check below still requires the uncharged half to sit strictly above this
+	// one, which is what every other count in this file rests on.
+	if fromZero != 0 {
 		t.Fatalf("the charged flood from score 0 forced %d never-held key "+
-			"epochs before the ban, want %d", fromZero, MaxUnheldKeyEpochsPerPeer)
+			"epochs before the ban, want 0: a header carrying no work misses "+
+			"its declared target on the commitment and is refused without an "+
+			"evaluation, so any epoch built here means that cheap refusal is "+
+			"not being taken", fromZero)
 	}
 	// The two starting scores now force the SAME number of epochs, and that
 	// equality is the score conjunct's doing rather than a weakening of this
@@ -851,6 +885,10 @@ func TestTheChargedHalfsAggregateIsStillBoundedPerIdentityByTheBan(t *testing.T)
 	// charged ScoreInvalidMessage for an identity the work check has already
 	// refused, so goodwill buys MESSAGES — sentCeiling above sentZero, which is
 	// the ban absorbing the goodwill — and buys no additional epochs at all.
+	// Both rows are now zero, so this equality holds for a second reason on top
+	// of the score conjunct's: neither row can build an epoch at all. It is
+	// kept because it is still the statement that goodwill buys no epochs, and
+	// it would catch a regression that made either row cost an evaluation.
 	if fromCeiling != fromZero {
 		t.Fatalf("the charged flood forced %d never-held key epochs from the "+
 			"ceiling against %d from score zero. Past the budget a header never "+
@@ -867,6 +905,10 @@ func TestTheChargedHalfsAggregateIsStillBoundedPerIdentityByTheBan(t *testing.T)
 	// And the two halves are still separated by the declared target, which is
 	// what every other count in this file rests on: the uncharged half reaches
 	// the node-wide ceiling because no ban is reachable on it.
+	// With the charged row at zero this is the trivial direction of the same
+	// statement, and it is kept as the guard it always was: if a change ever
+	// made the charged half cost evaluations again, this is the line that says
+	// the two halves stopped being separated by the declared target.
 	if fromZero >= uncharged {
 		t.Fatalf("the charged flood forced %d and the uncharged one %d: the two "+
 			"halves are no longer separated by the declared target",

@@ -1466,7 +1466,27 @@ func fakeOrphan(t *testing.T, p *params.Params, height uint64, target u256.U256,
 		PoW:          types.PoWSeal{Nonce: uint32(nonce)},
 	}}
 	b.Header.CertRoot = b.ComputeCertRoot(p)
+	// Sealed last, after CertRoot, because PoWSeed hashes the whole header with
+	// only Nonce and PoWHash zeroed — so every field written after a seal, this
+	// root included, stales it and the work rule's identity half then refuses
+	// the block ahead of whatever rule a caller is testing. Callers that mutate
+	// the block further must re-seal for the same reason.
+	sealDevBlock(&b.Header)
 	return b
+}
+
+// sealDevBlock is the external-package twin of the p2p package's own sealDev:
+// it fills a header's PoWHash with the digest of that header's own blob, which
+// is what pow.CheckWork's identity half requires and what an honest miner
+// writes. At the u256.Max target devnetEasy sets, every commitment passes, so
+// this is one evaluation rather than a search and work stays free.
+//
+// It reads the devnet key schedule rather than a caller's parameters: KeyFor
+// consults only the height, RandomXKeyLag and RandomXKeyInterval, and
+// devnetEasy changes none of those — it moves the targets only — so this is the
+// same key the engine will derive.
+func sealDevBlock(h *types.Header) {
+	h.PoWHash = pow.Dev{}.Hash(pow.KeyFor(h.Height, spec.Devnet()), h.PoWInput())
 }
 
 func TestOrphanPoolIsBounded(t *testing.T) {
@@ -1902,8 +1922,15 @@ func TestABlockCitingAGenesisHeightHeaderIsRefused(t *testing.T) {
 		EmissionAddr: key(t, 4).Persistent(),
 		Target:       victim.chain.Tip().Target,
 	}
+	// The sibling is sealed and the carrier re-sealed after CitesRoot, which
+	// PoWSeed covers. The sibling MUST be sealed: unlike the genesis-height
+	// citation above, it is at a height CheckWork does not exempt, so an
+	// unsealed one is refused on its own work and this case would stop being
+	// the "well-formed citation" it is named for.
+	sealDevBlock(&sibling)
 	good.Cites = []*types.Header{&sibling}
 	good.Header.CitesRoot = good.ComputeCitesRoot(p)
+	sealDevBlock(&good.Header)
 	if v := victim.engine.Handle("attacker:1", p2p.KindBlock, deliver(good)); v.Score < 0 {
 		t.Fatalf("a block citing a well-formed header one height below its own was "+
 			"refused (%v): the guard is refusing citations rather than "+

@@ -74,39 +74,61 @@ elapsed time.
 
 ### 1.1 The proof-of-work encoding is stock-miner-compatible, and it is consensus
 
-⬜ **Not started.** Four changes, all consensus-visible, all of which must land
-before the freeze because after block 0 each one is a hard fork.
+✅ **Done, and it moved twice.** Every item below is consensus-visible, so after
+block 0 each one is a hard fork.
 
-The finding behind them: the vendored RandomX is a byte-identical
-tevador/RandomX v1.2.3 with stock constants — the same function stock miners
-already compute. What stops a stock miner joining is not the algorithm but two
-encoding conventions, and they are cheaper to change now than they will ever be
-again, because there is no mainnet and no checkpoint to carry the change across.
+The finding behind the first round: the vendored RandomX is a byte-identical
+tevador tree with stock constants — the same function stock miners already
+compute. What stopped a stock miner joining was not the algorithm but the
+encoding conventions around it, and they were cheaper to change before genesis
+than they will ever be again.
 
-- **The digest is compared little-endian.** `checkWorkWith` in
-  [`core/pow/pow.go`](../core/pow/pow.go) currently reads the RandomX digest
-  big-endian through `u256.FromBytes`. The Monero-family convention reads the
-  other end of the same digest, so the two cannot be translated between: a share
-  a stock miner finds is noise to a node reading it the other way. **State: not
-  changed — `core/u256` has `FromBytes` and no little-endian constructor.**
-- **The hashing blob is 43 bytes with a 4-byte nonce at offset 39.**
-  `Header.PoWInput()` in [`core/types/block.go`](../core/types/block.go) is 40
-  bytes today, nonce at offset 32. The new layout reserves bytes 32–38 as
-  must-be-zero and splits the seal's `Nonce u64` into `Nonce u32` +
-  `ExtraNonce u32`, which is what lets a pool hand each connected miner a
-  disjoint search space. **State: not changed — `PoWInput` is still
-  `seed ‖ le64(Nonce)`.**
-- **The built-in miner searches the new layout.** The solver rewrites the tail of
-  the hashing buffer, and the tail moves. **State: not changed.**
-- **The spec and the golden vectors say so, cross-checked against the published
-  rx/0 test vectors.** An encoding is only real when the vectors enforce it;
-  until then "our RandomX is exactly rx/0" is prose. This also carries the
-  decision record for why native compatibility was chosen over shipping a
-  patched miner. **State: not written —
-  [`docs/decisions/`](decisions/) holds no proof-of-work encoding record, and
-  [`spec/vectors/`](../spec/vectors/) carries no rx/0 cross-vector.**
+- **The digest is compared little-endian.** ✅ `u256.FromLEBytes` exists and the
+  work check uses it. The Monero-family convention reads the other end of the
+  same 32 bytes, so the two cannot be translated between: a share a stock miner
+  finds is noise to a node reading it the other way. **The rule now applies to
+  the commitment rather than to the digest — see below — and the endianness is
+  unchanged.**
+- **The hashing blob is 43 bytes with a 4-byte nonce at offset 39.** ✅
+  `Header.PoWInput()` builds it, bytes 32–38 are reserved must-be-zero, and the
+  seal is `Nonce u32` + `ExtraNonce u32`, which is what lets a pool hand each
+  connected miner a disjoint search space.
+- **The built-in miner searches that layout.** ✅ Through `pow.Solver`, which
+  builds its buffer from `PoWInput` rather than from a second copy of the rules.
+- **The spec and the golden vectors say so, cross-checked against upstream's
+  published test vectors.** ✅
+  [`core/pow/randomx/xmrig_cross_vector_test.go`](../core/pow/randomx/xmrig_cross_vector_test.go)
+  rebuilds the blob from XMRig's own offsets and runs XMRig's own share test
+  against `CheckWork`, and
+  [`docs/decisions/xmrig.md`](decisions/xmrig.md) is the record for why native
+  compatibility was chosen over shipping a patched miner.
 
-Tracked under the **XMRig consensus compatibility** milestone, due 2026-09-08.
+**Then the work function itself moved, and that is the second round.** Mainnet
+and the relaunched testnet declare `pow_engine: "randomx-v2"`, and the testnet
+is *born* on rx/2 rather than forking onto it. Two things follow, both frozen at
+block 0:
+
+- **The target is compared against the COMMITMENT, `blake2b(pow_input ‖
+  pow_hash)`, not against the RandomX digest.** ✅ This is not a choice: rx/2
+  sets `Tweak_V2_COMMITMENT` unconditionally, and stock XMRig's share filter
+  reads the commitment — the buffer named `m_hash` holds it, because
+  `randomx_calculate_commitment` overwrites its input in place, and the Stratum
+  field names are inverted to match. A chain comparing the raw digest under rx/2
+  would have every stock miner discard its winning nonces and submit losing
+  ones, silently. [`docs/decisions/randomx-v2.md`](decisions/randomx-v2.md) §8.1
+  is the derivation from source.
+- **The header carries the digest, and `HeaderSize` is 260.** ✅ Up from 228. The
+  field is what lets a verifier form the commitment without evaluating RandomX,
+  which is a microsecond against ~21 ms — the asymmetry cited headers, flood
+  handling and light verification are priced on.
+
+**What is NOT done, and it is the standing risk this section must not hide.**
+The adversarial pass over the ~800-line upstream JIT and assembly delta has not
+happened; nothing has run on arm64; no epoch boundary has been crossed on rx/2
+on any network; and Monero has neither activated rx/2 nor vendored it, so this
+chain would be its first production user. `docs/decisions/randomx-v2.md` §8.6
+carries all four, and the go/no-go rule in this document applies to them: **if a
+genesis value is wrong the date moves.**
 
 ### 1.2 The public testnet is relaunched under those rules
 

@@ -14,8 +14,8 @@
 set -eu
 
 REPO=https://github.com/tevador/RandomX.git
-TAG=v1.2.3
-COMMIT=12f2c2ffe2108d6cf54c391fee33c8bc3646cdab
+TAG=v2.0.1
+COMMIT=aaafe71322df6602c21a5c72937ac284724ae561
 
 cd "$(dirname "$0")"
 here=$(pwd)
@@ -70,7 +70,25 @@ printf '%s\n#include "upstream/jit_compiler_x86_static.S"\n' "$banner" > shim_ji
 printf '%s\n#include "upstream/jit_compiler_a64.cpp"\n' "$banner" > shim_jit_a64_arm64.cc
 printf '%s\n#include "upstream/jit_compiler_a64_static.S"\n' "$banner" > shim_jit_a64_static_arm64.S
 
-tree=$(cd upstream && find . -type f ! -name LICENSE -print0 | sort -z \
+# LC_ALL=C IS LOAD-BEARING AND ITS ABSENCE WAS A LATENT REPRODUCIBILITY BUG.
+#
+# `sort` collates according to the caller's locale. Under en_US.UTF-8 glibc
+# ignores punctuation when comparing, so `jit_compiler_rv64.cpp` sorts AFTER
+# `jit_compiler_rv64_vector.cpp`; under the C locale it sorts before, because
+# `.` (0x2e) is below `_` (0x5f). Different order, different concatenation,
+# different tree hash for byte-identical files.
+#
+# pinned_test.go recomputes this hash in Go with sort.Strings, which is
+# byte-wise and has no locale — so the two implementations agreed only for as
+# long as no two vendored filenames differed in a way locale collation treats
+# specially. v1.2.3 had no such pair. v2.0.1 does, and the mismatch surfaced as
+# TestVendoredTreeMatchesPinned failing on a tree vendor.sh had just written.
+#
+# So this is pinned to C rather than left to the environment: the tree hash must
+# be a property of upstream's release, not of the locale of whoever ran the
+# script. The Go side is the reference because it is the side that runs in CI on
+# every contributor's machine.
+tree=$(cd upstream && find . -type f ! -name LICENSE -print0 | LC_ALL=C sort -z \
   | xargs -0 shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
 
 {

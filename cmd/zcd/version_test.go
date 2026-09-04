@@ -42,8 +42,18 @@ func TestVersionNamesTheEngineThisBinaryCarries(t *testing.T) {
 
 	// Either way the engine mainnet requires is named, because a warning that
 	// does not name what is missing cannot be matched against `zcd params`.
-	if !strings.Contains(out, randomx.Name) {
-		t.Errorf("the output never names %q:\n%s", randomx.Name, out)
+	//
+	// **That engine is NameV2, not Name, and the distinction is the whole
+	// value of this assertion now.** Both networks declare randomx-v2, so a
+	// binary that named randomx-v1 here would be telling an operator to look
+	// for a string `zcd params` never prints — a warning that names the wrong
+	// missing thing is worse than one that names nothing, because it sends the
+	// reader somewhere. The tagged build carries both functions from one
+	// library and may name both; what neither build may do is omit the one the
+	// networks actually require.
+	if !strings.Contains(out, randomx.NameV2) {
+		t.Errorf("the output never names %q, which is what mainnet and the "+
+			"public testnet declare:\n%s", randomx.NameV2, out)
 	}
 
 	if randomx.Available() {

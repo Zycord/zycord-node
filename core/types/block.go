@@ -96,7 +96,13 @@ func UnmarshalPoWSeal(b []byte) (PoWSeal, error) {
 
 // HeaderSize is the encoded width of a Header. Headers are fixed-size, which
 // is what makes headers-first sync a fixed-cost operation per block.
-const HeaderSize = 4 + 8 + 32 + 8 + 32 + 32 + 32 + 32 + PoWSealSize + 32
+//
+// It grew from 228 to 260 when the work check became commitment-based: the
+// header now carries the RandomX digest itself (PoWHash), because the target is
+// compared against `blake2b(PoWInput ‖ PoWHash)` and a verifier that had to
+// recompute the digest to obtain the commitment would gain nothing from the
+// scheme. See Header.PoWHash and pow.CheckWork.
+const HeaderSize = 4 + 8 + 32 + 8 + 32 + 32 + 32 + 32 + PoWSealSize + 32 + 32
 
 // HeaderVersion is the Era-0 header version.
 const HeaderVersion uint32 = 1
@@ -128,9 +134,42 @@ type Header struct {
 	EmissionAddr Address
 	PoW          PoWSeal
 	Target       u256.U256
+	// PoWHash is the full RandomX digest of PoWInput under the height's key —
+	// the value the work function actually produced, carried rather than
+	// recomputed.
+	//
+	// **It is not itself compared against the target.** rx/2's work check is
+	// over the COMMITMENT, `blake2b(PoWInput ‖ PoWHash)`, and this field exists
+	// so that the commitment can be formed from the header alone, in about a
+	// microsecond, without evaluating RandomX. Full validation still recomputes
+	// the digest and requires it to equal this field, so the field is a claim a
+	// miner makes and not a value anybody trusts; what changes is WHEN that
+	// claim is checked.
+	//
+	// The asymmetry is the entire point and it is the same one the work-memo
+	// cache in node/verify was built for. A light-mode RandomX verify costs
+	// ~55 ms on the machine core/pow/randomx's doc comment measures, so a
+	// thousand cited headers is a minute of one core — a cost an attacker
+	// imposes for free. Forming a commitment costs a BLAKE2b over 75 bytes.
+	// A header whose commitment misses the target is refused at that price and
+	// never reaches RandomX at all, and a header whose commitment passes has
+	// had ~2^n work done on it before the node spends 55 ms, because producing
+	// a passing commitment requires producing the digest that goes into it.
+	//
+	// **A forged PoWHash cannot buy anything.** Changing it changes the
+	// commitment, so a miner cannot pick a PoWHash that both misses the real
+	// digest and lands under the target without doing the same search that
+	// finding an honest one costs; and full validation refuses it regardless.
+	// The cheap path therefore never accepts a header the expensive path would
+	// reject — it only DEFERS the expensive check behind a proof of work.
+	//
+	// It is a consensus field: it is inside the SSZ encoding and therefore
+	// inside ID(), and — this is the part worth stating — inside PoWSeed's
+	// preimage, which is what makes it unforgeable-for-free. See PoWSeed.
+	PoWHash Hash
 }
 
-var headerLayout = []int{4, 8, 32, 8, 32, 32, 32, 32, PoWSealSize, 32}
+var headerLayout = []int{4, 8, 32, 8, 32, 32, 32, 32, PoWSealSize, 32, 32}
 
 // MarshalSSZ returns the canonical encoding.
 func (h Header) MarshalSSZ() []byte {
@@ -146,6 +185,7 @@ func (h Header) MarshalSSZ() []byte {
 		h.EmissionAddr[:],
 		h.PoW.MarshalSSZ(),
 		target[:],
+		h.PoWHash[:],
 	})
 }
 
@@ -173,6 +213,7 @@ func UnmarshalHeader(b []byte) (*Header, error) {
 	var target [32]byte
 	copy(target[:], fields[9])
 	h.Target = u256.FromBytes(target)
+	copy(h.PoWHash[:], fields[10])
 	return h, nil
 }
 
@@ -200,16 +241,42 @@ const (
 // miner iterates nonces. Separating it is what lets a miner hash the header
 // once per candidate block instead of once per attempt.
 //
-// **It zeroes Nonce and only Nonce.** ExtraNonce stays in the preimage on
-// purpose: that is the entire mechanism by which a pool gives two miners
-// disjoint search spaces, and PoWSeal's comment has the argument. Zeroing it
-// here would collapse every ExtraNonce onto one seed and silently un-shard
-// every pool on the network — a change that breaks nothing a test would
-// notice, which is why the omission is stated rather than left to be read out
-// of the absence of a line.
+// **It zeroes Nonce and PoWHash, and nothing else.** The two zeroings are
+// there for opposite reasons and neither generalises to the other fields, so
+// both are stated.
+//
+// ExtraNonce stays in the preimage on purpose: that is the entire mechanism by
+// which a pool gives two miners disjoint search spaces, and PoWSeal's comment
+// has the argument. Zeroing it would collapse every ExtraNonce onto one seed
+// and silently un-shard every pool on the network — a change that breaks
+// nothing a test would notice, which is why the omission is stated rather than
+// left to be read out of the absence of a line.
+//
+// **PoWHash is zeroed because otherwise the definition does not exist.** The
+// seed is hashed to make the blob; the blob is hashed to make PoWHash; so a
+// PoWHash inside the seed's preimage would make the seed a function of itself.
+// Not merely awkward — there is no value a miner could write into the field
+// that satisfies it, so every header would be invalid and the chain would not
+// start. Zeroing it here is what breaks the cycle, and it is the same
+// construction the field's own comment relies on: the miner computes the seed
+// with PoWHash zero, searches nonces, and writes the winning digest into the
+// field afterwards.
+//
+// **Zeroing it costs nothing in grinding terms, which is the question to ask
+// about any field removed from the preimage.** ExtraNonce's absence would
+// matter because ExtraNonce is free for a miner to vary; PoWHash is not free —
+// its value is determined by the rest of the header and the nonce, so there is
+// no search a miner gains by it being outside the preimage. What the field
+// does bind is the COMMITMENT, which is the number the target is actually
+// compared against, and the commitment is formed over PoWInput ‖ PoWHash
+// (pow.Commitment) rather than over the seed. So the digest is inside the
+// value that must beat the target even though it is outside the value that
+// feeds the work function, and a header carrying somebody else's digest fails
+// the target test rather than passing it cheaply.
 func (h Header) PoWSeed() Hash {
 	sansNonce := h
 	sansNonce.PoW.Nonce = 0
+	sansNonce.PoWHash = Hash{}
 	return crypto.Sum(crypto.TagPoW, sansNonce.MarshalSSZ())
 }
 

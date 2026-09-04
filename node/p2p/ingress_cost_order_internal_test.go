@@ -174,10 +174,27 @@ func TestAnAnnouncementThatFailsItsWorkCheckMutatesNothing(t *testing.T) {
 		t.Fatalf("score %d: a header carrying no work is a claim about the "+
 			"block, and wire.md §10.3 prices it Scored(invalid)", v.Score)
 	}
-	if got := work.count() - before; got != 1 {
-		t.Fatalf("the forged announcement cost %d work evaluations, want exactly "+
-			"1; 0 would mean this input never reached the gate it is here to "+
-			"separate", got)
+	// **Zero, and that is the answer the commitment rule gives.**
+	//
+	// This assertion used to demand exactly one evaluation, on the reasoning
+	// that "0 would mean this input never reached the gate it is here to
+	// separate". That reasoning was correct under the old rule and is wrong
+	// under this one: flipping a nonce bit changes the commitment, the
+	// commitment misses the target, and pow.CheckWork answers from the header's
+	// own bytes without calling the engine. The input DID reach the work gate;
+	// the gate simply no longer costs a hash to answer.
+	//
+	// So the assertion is inverted rather than relaxed, and the anti-vacuity it
+	// carried is preserved by the checks above and below: v.Err is non-nil and
+	// v.Score is negative, so the header was judged and refused, and the state
+	// assertions that follow say nothing was written. A test that merely
+	// dropped the count would lose the claim; this one makes the stronger claim
+	// the change earned.
+	if got := work.count() - before; got != 0 {
+		t.Fatalf("the forged announcement cost %d work evaluations, want 0: a "+
+			"header whose commitment misses its declared target is refused from "+
+			"its own bytes, and an evaluation here means the cheap rejection path "+
+			"is not being taken", got)
 	}
 
 	e.mu.Lock()

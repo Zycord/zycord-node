@@ -132,9 +132,17 @@ func (h *budgetHarness) headerAtEpoch(t *testing.T, epoch, nonce uint64, target 
 		CertRoot: certRoot(nil, p),
 		PoW:      types.PoWSeal{Nonce: uint32(nonce) | 1<<31, SeedEpoch: pow.SeedEpochFor(height, p)},
 	}
+	// Sealed: the header carries the digest of its own blob, which is what the
+	// work rule's identity half requires and what an honest miner writes. It is
+	// one evaluation, not a search — at u256.Max every commitment passes — and
+	// without it every header built here is refused for a digest mismatch, so
+	// both branches below would fire on the wrong cause.
+	sealDev(&hd, p)
 	// Anti-vacuity for every call: at the maximal target the header must PASS
 	// the work check, or a refusal downstream is the work check's and not the
-	// budget's. Asked of a bare pow.Dev so the instrument is not seeded with
+	// budget's. Sealing is what makes the target the thing being tested: with
+	// the identity half satisfied, the commitment against the target is the
+	// only line left that can decide either branch. Asked of a bare pow.Dev so the instrument is not seeded with
 	// the answer. A caller that deliberately builds an unmeetable target is
 	// asking for the opposite and is checked for the opposite.
 	err := pow.CheckWork(pow.Dev{}, hd, p)

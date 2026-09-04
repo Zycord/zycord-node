@@ -124,6 +124,13 @@ func TestAppearingInTheCandidateSetDoesNotPreemptTheRotation(t *testing.T) {
 				ghost.PoW.Nonce = 1 << 31
 				blk := &types.Block{Header: ghost}
 				blk.Header.CertRoot = blk.ComputeCertRoot(p)
+				// Sealed after the root, which PoWSeed covers. The ghost still
+				// costs its sender essentially nothing — one evaluation at
+				// MaxTarget, where every commitment passes, rather than a
+				// search — so "a header nobody paid for" is unchanged; it just
+				// has to carry the digest of its own blob to reach the rule
+				// this test is about.
+				sealDevBlock(&blk.Header)
 				ann := p2p.BlockAnnounce{Header: blk.Header}
 				if v := victim.engine.Handle(conn, p2p.KindBlockAnnounce, ann.MarshalAnnounce()); v.Err != nil {
 					t.Fatalf("the forged announcement was refused (%v), so this "+

@@ -105,22 +105,90 @@ func TestTheCacheIsBounded(t *testing.T) {
 
 // TestDistinctHeadersAreEachHashed is the anti-vacuity twin of the first test,
 // and the honesty check on what this type does NOT do. A flood of DISTINCT
-// invalid headers pays in full, every time; the cache is not a defence against
-// it and nothing here should let a reader believe otherwise.
+// headers that reach the work function pays in full, every time; the cache is
+// not a defence against it and nothing here should let a reader believe
+// otherwise.
+//
+// **The target is u256.Max and that is now load-bearing rather than
+// incidental.** Under the commitment rule, pow.CheckWork answers a header whose
+// commitment misses the target WITHOUT evaluating the work function at all —
+// that is the whole point of the 32 bytes the header grew. At GenesisTarget
+// essentially every header here misses, so this loop would count zero
+// evaluations and the test would fail for a reason that is a feature. At
+// u256.Max every commitment passes, every header reaches the engine, and the
+// count means what the assertion says it means.
+//
+// The property that moved is worth naming because it changes what this type is
+// for. A flood of distinct headers used to cost one full evaluation each,
+// unavoidably; it now costs one BLAKE2b each unless the sender did the work,
+// and the cache's job has narrowed to REPEATS of headers that pass the
+// commitment. TestAFloodOfDistinctJunkCostsNoEvaluations below is the other
+// half of that statement.
 func TestDistinctHeadersAreEachHashed(t *testing.T) {
 	p := spec.Devnet()
 	ce := &countingEngine{e: pow.Dev{}}
 	c := verify.NewWorkCache(1024)
 
+	// The headers are sealed FIRST, with an engine the count does not watch,
+	// so that the loop below measures only what Check spends. An honest header
+	// carries the digest of its own blob; without it the identity half refuses
+	// and the count would be right for the wrong reason.
 	const n = 32
+	headers := make([]types.Header, 0, n)
 	for i := uint64(1); i <= n; i++ {
 		h := types.Header{Version: types.HeaderVersion, Height: 1, Time: 1000 + i,
-			Target: p.GenesisTarget}
-		c.Check(ce, h, p)
+			Target: u256.Max}
+		h.PoWHash = pow.Dev{}.Hash(pow.KeyFor(h.Height, p), h.PoWInput())
+		headers = append(headers, h)
+	}
+	for _, h := range headers {
+		if err := c.Check(ce, h, p); err != nil {
+			t.Fatalf("a header sealed against u256.Max was refused: %v", err)
+		}
 	}
 	if got := ce.count(); got != n {
 		t.Fatalf("%d distinct headers cost %d evaluations; they must each cost "+
 			"one, or this test is measuring collisions rather than caching",
+			n, got)
+	}
+}
+
+// TestAFloodOfDistinctJunkCostsNoEvaluations states the asymmetry the header's
+// 32-byte growth was traded for, as an executable claim rather than as prose in
+// a decision record.
+//
+// Distinct headers with no work done on them — the cheapest thing an attacker
+// can generate, and the case the work-memo cache explicitly does NOT defend
+// against — must now cost ZERO evaluations of the work function, because their
+// commitments miss the target and pow.CheckWork answers from the header alone.
+//
+// The contrast with the test above is the measurement: same count, same cache,
+// same engine, and the only difference is whether the target admits them.
+func TestAFloodOfDistinctJunkCostsNoEvaluations(t *testing.T) {
+	p := spec.Devnet()
+	ce := &countingEngine{e: pow.Dev{}}
+	c := verify.NewWorkCache(1024)
+
+	const n = 32
+	var refused int
+	for i := uint64(1); i <= n; i++ {
+		h := types.Header{Version: types.HeaderVersion, Height: 1, Time: 1000 + i,
+			Target: p.GenesisTarget}
+		if c.Check(ce, h, p) != nil {
+			refused++
+		}
+	}
+	// ANTI-VACUITY: if the headers had been accepted, "no evaluations" would
+	// mean the rule was not being applied rather than that it was applied
+	// cheaply.
+	if refused != n {
+		t.Fatalf("%d of %d junk headers were accepted; the zero-evaluation claim "+
+			"below would then be a claim that nothing was checked", n-refused, n)
+	}
+	if got := ce.count(); got != 0 {
+		t.Fatalf("%d distinct headers with no work done on them cost %d "+
+			"evaluations of the work function, want 0: the commitment rule is not "+
+			"short-circuiting, and the 32 bytes the header grew bought nothing",
 			n, got)
 	}
 }

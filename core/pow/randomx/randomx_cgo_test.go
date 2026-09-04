@@ -70,6 +70,33 @@ var officialVectors = []struct{ key, input, want string }{
 		"e9ff4503201c0c2cca26d285c93ae883f9b1d30c9eb240b820756f2d5a7905fc"},
 }
 
+// officialVectorsV2 are the SAME four (key, input) pairs under
+// RANDOMX_FLAG_V2, with upstream's own published rx/2 digests — from
+// src/tests/tests.cpp at v2.0.1, where test_a through test_e each carry a
+// ternary on the VM's flags and are run twice, once per version.
+//
+// Sharing the inputs with officialVectors is the point rather than laziness:
+// the two tables differ in every single digest, so a build where the V2 option
+// did nothing would reproduce the v1 column here and fail loudly, and a build
+// where v1 had silently become v2 would fail the other table. Two tables over
+// one set of inputs is what makes the pair a differential rather than two
+// independent checks.
+//
+// test_e is omitted only because its input is a 76-byte hex blob rather than a
+// string and officialVectors does not carry it either; test_f has NO v2
+// variant upstream, which is the fact that forced the tier-1 anchor in
+// xmrig_cross_vector_test.go to be re-designed.
+var officialVectorsV2 = []struct{ key, input, want string }{
+	{"test key 000", "This is a test",
+		"22ec6b861b3eb23686b2efbad69513c967ecfce80983df66c9c5b4fbfb4cdb6f"},
+	{"test key 000", "Lorem ipsum dolor sit amet",
+		"9e2c772c12fd48f93c14c97fdc89d556264d9100597023f44d9163e279012ecf"},
+	{"test key 000", "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua",
+		"4d6b063a1a603751d525f18a171336a4002f2f06df6c17e4b25fe17e17796e42"},
+	{"test key 001", "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua",
+		"97024134686ce27d362ea8d86d8ef16483ac272abdabd46ef13359400777fe5e"},
+}
+
 // TestOfficialVectors is the anchor. If this passes, this build computes the
 // same function every other RandomX implementation computes; if it fails,
 // nothing else in this file is worth reading.
@@ -80,6 +107,24 @@ func TestOfficialVectors(t *testing.T) {
 		got := hex.EncodeToString(sum[:])
 		if got != v.want {
 			t.Errorf("key %q input %q:\n got  %s\n want %s", v.key, v.input, got, v.want)
+		}
+	}
+}
+
+// TestOfficialVectorsV2 is TestOfficialVectors for rx/2, and it is the anchor
+// for the function mainnet and the public testnet actually run.
+//
+// It is a separate test rather than a table column so that a failure names the
+// version: "this build does not compute rx/2" and "this build does not compute
+// rx/0" are different problems with different causes, and one build now
+// computes both.
+func TestOfficialVectorsV2(t *testing.T) {
+	e := mustEngine(t, Options{Keys: 2, MaxVMs: 2, V2: true})
+	for _, v := range officialVectorsV2 {
+		sum := e.hashRaw(v.key, []byte(v.input))
+		got := hex.EncodeToString(sum[:])
+		if got != v.want {
+			t.Errorf("V2 key %q input %q:\n got  %s\n want %s", v.key, v.input, got, v.want)
 		}
 	}
 }
@@ -277,6 +322,60 @@ func TestLightAndFastAgree(t *testing.T) {
 			t.Fatalf("input %x: light %x, fast %x — miners and verifiers would "+
 				"disagree about every block", in, a, b)
 		}
+	}
+}
+
+// TestLightAndFastAgreeUnderV2 is TestLightAndFastAgree for rx/2, and it is the
+// one that guards the networks that ship.
+//
+// It is a separate test rather than a parameter on the one above because the
+// gap it closes was real and was found by mutation. Options.V2 sets
+// RANDOMX_FLAG_V2 on `flags`, from which `fastFlags` is derived — so light and
+// fast necessarily bind the same function. Setting it on `fastFlags` ALONE
+// compiles, passes every vector test that uses a light engine, and produces a
+// miner whose dataset computes rx/2 while its verifier computes rx/0: every
+// block it seals is rejected by every node including itself, which is the
+// prefetch/mining-key incident's failure mode with a different cause.
+//
+// Nothing caught that. TestLightAndFastAgree constructs two default engines,
+// both v1, so it never reaches the v2 flag at all; the vector tests use light
+// engines only. This is what sees it, and the mutation is recorded in
+// xmrig_cross_vector_test.go's table as V2.
+func TestLightAndFastAgreeUnderV2(t *testing.T) {
+	light := mustEngine(t, Options{Keys: 1, MaxVMs: 1, V2: true})
+	fast := fastEngine(t, Options{Keys: 1, MaxVMs: 1, V2: true})
+
+	var key types.Hash
+	copy(key[:], "zycord light vs fast v2")
+	fast.MineOn(key)
+	if boundKey(fast) != string(key[:]) {
+		t.Fatal("the dataset is not bound to the key under test, so both sides of " +
+			"this comparison are the light path and it can no longer fail")
+	}
+
+	// Both engines must report the v2 name, or one of them is silently the
+	// other function and the agreement below is between two copies of it.
+	if light.Name() != NameV2 || fast.Name() != NameV2 {
+		t.Fatalf("light reports %q and fast reports %q, want %q for both",
+			light.Name(), fast.Name(), NameV2)
+	}
+
+	for i := 0; i < 4; i++ {
+		in := []byte{byte(i), 0x77}
+		if a, b := light.Hash(key, in), fast.Hash(key, in); a != b {
+			t.Fatalf("input %x: light %x, fast %x — under rx/2 the miner's dataset "+
+				"and the verifier's cache compute different functions, so every "+
+				"block this node sealed would be rejected by every node including "+
+				"itself", in, a, b)
+		}
+	}
+
+	// And the light path still reproduces upstream's published rx/2 digest, so
+	// "they agree" cannot be satisfied by both being wrong in the same way.
+	sum := light.hashRaw("test key 000", []byte("This is a test"))
+	const want = "22ec6b861b3eb23686b2efbad69513c967ecfce80983df66c9c5b4fbfb4cdb6f"
+	if got := hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("the v2 light engine does not compute rx/2:\n got  %s\n want %s", got, want)
 	}
 }
 

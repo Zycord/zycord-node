@@ -104,13 +104,37 @@ package randomx
 
 import "errors"
 
-// Name is what Params.PoWEngine must say for a network this engine may run.
+// Name is what Params.PoWEngine must say for a network running rx/0, the
+// original RandomX work function.
 //
 // It names the *hash function*, not the library's patch version: v1.2.1 through
 // v1.2.3 differ in ARM64 and RISC-V JIT correctness and in cmake, and not in a
 // single bit of output. A name carrying the patch version would make a bug fix
 // look like a chain split.
+//
+// **This engine is no longer what any shipped network selects**, and the name
+// is kept rather than deleted because it is a consensus string: a devnet or a
+// third-party network may still declare it, and `selectEngine` must be able to
+// answer. The vendored library computes both functions — see NameV2.
 const Name = "randomx-v1"
+
+// NameV2 is what Params.PoWEngine must say for a network running rx/2, and it
+// is what mainnet and the public testnet declare.
+//
+// rx/2 is a different work function, not a different build of the same one: a
+// v1 VM and a v2 VM over the same cache and the same input produce different
+// digests, which upstream asserts directly in its own switch test. So the two
+// are distinct engine names under the same rule Name's comment states — the
+// name tracks the function, and here the function genuinely changed.
+//
+// **One vendored library serves both.** RANDOMX_FLAG_V2 is a runtime flag on
+// randomx_create_vm, every consumer of it inside the library tests it at run
+// time rather than under the preprocessor, and src/configuration.h is
+// byte-identical between v1.2.3 and v2.0.1 in cache size, dataset size and all
+// three scratchpad sizes. So selecting v2 costs no second build, no second
+// binary, and not one byte of additional memory; what it changes is the
+// program size (256 -> 384 instructions) and three VM-level tweaks.
+const NameV2 = "randomx-v2"
 
 // Options configures an engine. The zero value is the verification
 // configuration every node needs: light mode, the JIT and hardware AES if the
@@ -169,6 +193,19 @@ type Options struct {
 	// dropped silently where the OS refuses, and it never changes a digest.
 	LargePages bool
 
+	// V2 selects rx/2 — RANDOMX_FLAG_V2 — instead of rx/0.
+	//
+	// It changes the DIGEST, which makes it the one field in this struct that
+	// is consensus rather than configuration. Every other option here is a
+	// promise that the answer is the same and only the cost differs
+	// (Interpreted, SoftAES, LargePages, FullMemory all have a test asserting
+	// exactly that). This one is the opposite: flipping it turns every header
+	// the engine has ever judged into a header it now rejects. It is therefore
+	// never set from a flag or an environment variable — `selectEngine` sets
+	// it from Params.PoWEngine and nothing else does — and Name() reports
+	// which function is bound so the mismatch check can see it.
+	V2 bool
+
 	// Insecure skips RANDOMX_FLAG_SECURE, which is the W^X discipline the JIT
 	// needs on macOS and on hardened kernels. It is opt-out rather than opt-in
 	// because a node that fails to allocate executable memory should be slow,
@@ -196,4 +233,4 @@ var ErrNotBuilt = errors.New(
 	"randomx: this binary was built without the randomx build tag; " +
 		"rebuild with `make build-randomx` and run the separate binaries it writes " +
 		"(bin/zcd-randomx, bin/zycordd-randomx — not bin/zcd or bin/zycordd) to run " +
-		"a network whose pow_engine is " + Name)
+		"a network whose pow_engine is " + Name + " or " + NameV2)

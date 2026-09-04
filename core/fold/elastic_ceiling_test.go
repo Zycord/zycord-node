@@ -580,8 +580,8 @@ func TestBurstValveAtGenesisParameters(t *testing.T) {
 		t.Fatalf("block is %d bytes, want %d = HeaderSize + 8 + %d x (%d + 4): the framing is part of the ceiling",
 			size, want, len(certs), certs[0].SizeBytes())
 	}
-	if size != 1_118_344 {
-		t.Fatalf("block is %d bytes; §21's decisions log says 1,118,344 — restate it or explain the move", size)
+	if size != 1_118_376 {
+		t.Fatalf("block is %d bytes; §21's decisions log says 1,118,376 — restate it or explain the move", size)
 	}
 	// And the reason it is a Go test rather than a vector: it fits the block,
 	// but the vector carrying it is hex plus two state snapshots.

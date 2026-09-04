@@ -110,7 +110,7 @@ var ErrUndialable = fmt.Errorf("%w: the address this peer advertised did not ans
 //
 // The value is sized off real data volumes, not guessed:
 //
-//   - A header batch (syncBatch=128 * types.HeaderSize=228B ≈ 28.5 KiB) is
+//   - A header batch (syncBatch=128 * types.HeaderSize=260B ≈ 32.5 KiB) is
 //     negligible next to everything below it, at any link speed this project
 //     assumes.
 //   - A block body is capped by spec/params.json's block_byte_capacity

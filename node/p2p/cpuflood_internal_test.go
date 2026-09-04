@@ -53,8 +53,8 @@ func workingEpochFlood(t *testing.T, conn string, send int) (evals int, banned b
 			// non-tip parent walks straight past it to the work check.
 			ParentID: types.Hash{0xab},
 			Time:     tip.Time + p.TargetBlockSeconds,
-			// The announcer's own target: at u256.Max no digest can exceed it,
-			// so CheckWork passes and the announcement is accepted with a
+			// The announcer's own target: at u256.Max no commitment can exceed
+			// it, so CheckWork passes and the announcement is accepted with a
 			// non-negative score — it accrues no ban.
 			Target:   u256.Max,
 			CertRoot: certRoot(nil, p),
@@ -63,6 +63,12 @@ func workingEpochFlood(t *testing.T, conn string, send int) (evals int, banned b
 		// Distinct every message, so ann.Header.ID() differs and the seen-set
 		// dedup read never hits.
 		h.PoW.Nonce = uint32(i) | 1<<31
+		// The digest of this header's own blob, which is what the work rule now
+		// requires. At u256.Max every commitment passes, so the attacker's cost
+		// is one evaluation per announcement rather than a search — still cheap
+		// enough that the flood this test reproduces is a flood, but no longer
+		// literally free. See the note on the property below.
+		sealDev(&h, p)
 
 		if i == 0 {
 			// Anti-vacuity: the header must reach and pass the work check, and

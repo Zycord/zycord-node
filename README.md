@@ -286,6 +286,7 @@ Full policy in [CONTRIBUTING.md](CONTRIBUTING.md). Vulnerability disclosure in [
 - [Mempool admission and eviction](docs/adversarial/mempool.md) — the censorship vector a full pool creates, and the price-eviction that closes it
 - [Decision: the networking stack](docs/decisions/networking.md) — 141 modules weighed against auditability, and what would reverse the answer
 - [Decision: stock XMRig mines this chain](docs/decisions/xmrig.md) — the two encoding rules that changed to make it true, and why a patched miner was refused
+- [Decision: RandomX v2 at genesis](docs/decisions/randomx-v2.md) — four gates against upstream source, the one that failed, and what shipping anyway cost the header
 - [The public testnet](docs/TESTNET.md) — joining, bootstrapping, mining, scraping, and what a reset is
 - [What the testnet must measure before genesis](docs/decisions/testnet-measurements.md) — the numbers a wrong value makes a fork, separated from the ones it makes a release
 - [Wire protocol specification](docs/spec/wire.md) — the peer protocol, written so a second implementation can be built from it alone

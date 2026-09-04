@@ -139,6 +139,18 @@ func TestOneBlockBodyCannotBuyManyKeyEpochs(t *testing.T) {
 	}
 	blk.Header.CertRoot = blk.ComputeCertRoot(p)
 	blk.Header.CitesRoot = blk.ComputeCitesRoot(p)
+	// Sealed here, after the roots, and after them because both feed PoWSeed
+	// and so PoWInput: a seal written before them is the digest of a different
+	// blob. Each header carries the digest of its own blob, which is what the
+	// work rule's identity half requires; at u256.Max every commitment passes,
+	// so this is one evaluation apiece rather than a search, and it is what an
+	// honest miner writes. The citations are sealed too — the property below is
+	// that they are never REACHED, which is only a finding if they would have
+	// passed had they been.
+	sealDev(&blk.Header, p)
+	for _, c := range blk.Cites {
+		sealDev(c, p)
+	}
 
 	// Anti-vacuity 1: the scenario is only interesting if the citations really
 	// do name distinct epochs. If the parameters ever make them collide, this
@@ -157,7 +169,7 @@ func TestOneBlockBodyCannotBuyManyKeyEpochs(t *testing.T) {
 	for i, h := range append([]*types.Header{&blk.Header}, blk.Cites...) {
 		if err := pow.CheckWork(pow.Dev{}, *h, p); err != nil {
 			t.Fatalf("setup: forged header %d does not pass CheckWork (%v); at "+
-				"u256.Max no digest can exceed the target and it must", i, err)
+				"u256.Max no commitment can exceed the target and it must", i, err)
 		}
 	}
 	if n := work.distinctKeys(); n != 0 {
@@ -265,6 +277,13 @@ func TestABlockAtHeightOneStillMayNotCiteGenesis(t *testing.T) {
 	})
 	blk.Header.CertRoot = blk.ComputeCertRoot(p)
 	blk.Header.CitesRoot = blk.ComputeCitesRoot(p)
+	// The carrier carries the digest of its own blob, sealed after the roots
+	// that feed it. Without this the carrier is refused for a digest mismatch
+	// and the refusal below is the work check's, not the may-not-cite rule the
+	// test names. The citation is left unsealed on purpose: it is at height 0,
+	// which CheckWork exempts, and that free pass is precisely what the rule
+	// under test exists to close.
+	sealDev(&blk.Header, p)
 
 	// Anti-vacuity: the citation must satisfy the height rule in this scenario,
 	// or the may-not-cite rule is not the thing being measured.

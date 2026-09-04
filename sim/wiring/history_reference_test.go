@@ -187,6 +187,50 @@ var commitRef = regexp.MustCompile("`[0-9a-f]{7,40}`")
 // the pattern.
 var linkTarget = regexp.MustCompile(`\]\([^)]*\)`)
 
+// notOurs is the one subtree the sweep steps over, and it is not an excuse in
+// the sense `frozen` is.
+//
+// core/pow/randomx/upstream/ is a byte-identical copy of a tevador/RandomX tag.
+// vendor.sh's own header says DO NOT PATCH IT, PINNED and pinned.go carry a
+// SHA-256 over its bytes, and TestVendoredTreeMatchesPinned fails the build if
+// one of them moves — so a finding here could not be acted on without breaking
+// the property that makes auditing the work function a `diff` against upstream
+// rather than a review of somebody's copy.
+//
+// What it actually contains is not a tracker reference at all. RandomX v2.0.1
+// added RISC-V assembly whose comments cite upstream's own specification by URL
+// fragment — a link to `doc/specs.md` ending in a hash sign, a section number
+// and a slug — and a numbered fragment has exactly issueRef's shape. It
+// resolves for any reader, which is the opposite of dangling; `linkTarget` does
+// not strip it only because this is assembly rather than markdown. (The tokens
+// are described rather than quoted here, because quoting them would make this
+// comment fail the guard it is explaining.)
+//
+// **The exclusion is by subtree and not by pattern**, deliberately. Teaching
+// issueRef to ignore a numbered fragment after `specs.md` would weaken the
+// guard everywhere
+// to accommodate one directory, and this guard's whole value is that it is
+// blunt. Nothing outside upstream/ is excluded, and the vendored tree is
+// covered instead by the tree hash, which is a stronger check than a text scan.
+const vendoredUpstream = "core/pow/randomx/upstream/"
+
+// notOurs reports whether a path is somebody else's bytes, held here verbatim.
+//
+// It is a THIRD category beside `swept` and `frozen`, and the distinction from
+// each is what justifies it. `swept` is "this guard asserts over it"; `frozen`
+// is "this guard would assert over it but the bytes shipped"; this is "these
+// are not our words, and the sentence the guard enforces — write what you mean
+// inline, because the reader has only these files — is not addressed to their
+// author."
+//
+// **It is excluded from BOTH guards, not moved from one to the other.** Merely
+// dropping it out of `swept` would push it into TestTheUnsweptRemainderIsRecorded's
+// remainder, which would then demand a deferral record saying the sweep is
+// unfinished. It is not unfinished: there is no edit that would finish it,
+// because editing upstream/ is forbidden by vendor.sh, pinned.go and
+// TestVendoredTreeMatchesPinned. A record claiming otherwise would be false.
+func notOurs(rel string) bool { return strings.HasPrefix(rel, vendoredUpstream) }
+
 // covered reports whether a repository-relative path is in the swept set.
 func covered(rel string) bool {
 	for _, entry := range swept {
@@ -228,7 +272,7 @@ func TestNoDanglingHistoryReferenceIsPublished(t *testing.T) {
 	var findings []string
 	sweptFiles := 0
 	for _, f := range trackedFiles(t, root) {
-		if !covered(f.path) || f.symlink() || f.gitlink() {
+		if !covered(f.path) || notOurs(f.path) || f.symlink() || f.gitlink() {
 			continue
 		}
 		if _, ok := frozen[f.path]; ok {
@@ -268,6 +312,63 @@ func TestNoDanglingHistoryReferenceIsPublished(t *testing.T) {
 // below is what deleted the file that used to be here.
 const deferralRecord = "docs/deferred/self-containment-sweep.md"
 
+// TestTheVendoredExclusionReachesNothingOfOurs pins how far `notOurs` reaches.
+//
+// **It exists because a mutation survived.** Widening `vendoredUpstream` from
+// `core/pow/randomx/upstream/` to `core/pow/randomx/` — one path segment, the
+// kind of edit that looks like tidying — silently drops the binding, the
+// engine, the pinning test and the cross-vector file out of both guards, and
+// every test in this package still passes. An exclusion nothing constrains is
+// an exclusion that grows.
+//
+// The property asserted is the one that matters and it is checkable without
+// naming a file list: everything `notOurs` excludes must be a file vendor.sh
+// wrote, and the tree hash in pinned.go is what says which those are. So the
+// prefix must name a directory that (a) exists, (b) contains no Go source —
+// every Go file under core/pow/randomx belongs to this project, and upstream
+// ships none — and (c) is strictly inside the package directory rather than
+// equal to it.
+func TestTheVendoredExclusionReachesNothingOfOurs(t *testing.T) {
+	root := filepath.Join("..", "..")
+
+	const pkg = "core/pow/randomx/"
+	if vendoredUpstream == pkg || !strings.HasPrefix(vendoredUpstream, pkg) {
+		t.Fatalf("the vendored-upstream prefix is %q; it must be strictly inside "+
+			"%q. Widening it to the package directory would drop the binding, the "+
+			"engine and the cross-vector file out of both guards at once.",
+			vendoredUpstream, pkg)
+	}
+
+	dir := filepath.Join(root, filepath.FromSlash(vendoredUpstream))
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("%q is not a directory in this tree; an exclusion that names "+
+			"nothing excludes nothing and hides that it does", vendoredUpstream)
+	}
+
+	// No Go source may be excluded. Upstream ships C, C++ and assembly and no
+	// Go at all, so a .go file under this prefix means the prefix has moved.
+	var goFiles, total int
+	for _, f := range trackedFiles(t, root) {
+		if !notOurs(f.path) {
+			continue
+		}
+		total++
+		if strings.HasSuffix(f.path, ".go") {
+			goFiles++
+			t.Errorf("%s is excluded from the history guards, but it is Go source "+
+				"and therefore ours", f.path)
+		}
+	}
+	if total == 0 {
+		t.Fatal("the exclusion reached no tracked file, so it is either stale or " +
+			"pointed at nothing; either way it should be deleted rather than kept")
+	}
+	if goFiles > 0 {
+		t.Fatalf("%d Go file(s) of %d excluded: the prefix has grown past the "+
+			"vendored tree", goFiles, total)
+	}
+}
+
 // TestTheUnsweptRemainderIsRecorded keeps the ratchet from stalling quietly.
 //
 // A partial sweep is defensible; a partial sweep nobody can see is not. While
@@ -287,7 +388,7 @@ func TestTheUnsweptRemainderIsRecorded(t *testing.T) {
 
 	remaining := 0
 	for _, f := range trackedFiles(t, root) {
-		if covered(f.path) || f.symlink() || f.gitlink() {
+		if covered(f.path) || notOurs(f.path) || f.symlink() || f.gitlink() {
 			continue
 		}
 		if _, ok := frozen[f.path]; ok {
@@ -350,7 +451,7 @@ func TestTheHistoryReferenceGuardActuallyFires(t *testing.T) {
 		"## 14. Launch: Three Eras, Zero Premine",
 		"### 12.3 The cost of saying no",
 		"see [the rotation rule](sync.md#4-rotation-not-ranking) for the guarantee",
-		"a block of 4000 floor certificates is 2,248,236 bytes",
+		"a block of 4000 floor certificates is 2,248,268 bytes",
 		"the params hash is `0xdf140a7a` and not the genesis id",
 		"`#!/bin/sh` is not a reference",
 		"the colour token #123456 is six digits and is not one either",

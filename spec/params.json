@@ -43,7 +43,7 @@
   "median_time_blocks": 11,
   "future_time_limit_seconds": 180,
   "undo_depth": 1024,
-  "pow_engine": "randomx-v1",
+  "pow_engine": "randomx-v2",
   "randomx_key_interval": 2048,
   "randomx_key_lag": 64,
   "genesis_target": "441711766194596082395824375185729628956870974218904739530401550323154944",

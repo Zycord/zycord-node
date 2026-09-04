@@ -887,7 +887,7 @@ func TestTheCountRuleFiresAtEveryReachableT(t *testing.T) {
 	// and hands back whichever came first rather than the true extremum.
 	// Parts per million is computed only for the message and the pinned
 	// interval.
-	const wantLo, wantHi = 899_070, 899_294
+	const wantLo, wantHi = 899_083, 899_307
 	loN, loD := 1, 0 // a sentinel ratio above anything real (1/0 is treated as +inf below)
 	hiN, hiD := 0, 1
 	var loT, hiT uint64
@@ -925,9 +925,9 @@ func TestTheCountRuleFiresAtEveryReachableT(t *testing.T) {
 			"ceiling (slack %d bytes): the byte rule rejects it first, so the count rule is "+
 			"inert there", worstT, worstSlack)
 	}
-	if worstSlack != 251_202 || worstT != t0 {
+	if worstSlack != 251_170 || worstT != t0 {
 		t.Fatalf("the tightest a ceiling+1 floor block ever gets is %d bytes of slack at T=%d, "+
-			"not the 251,202 at T₀ that spec/params.json's note records", worstSlack, worstT)
+			"not the 251,170 at T₀ that spec/params.json's note records", worstSlack, worstT)
 	}
 	if lo != wantLo || hi != wantHi || loT != 1_600_399 || hiT != t0 {
 		t.Fatalf("byte-ceiling utilisation of a count-bound floor block is [%d, %d] ppm "+
@@ -940,9 +940,9 @@ func TestTheCountRuleFiresAtEveryReachableT(t *testing.T) {
 	// which is the concrete form of "not constant in T" the note quotes: this
 	// is the path a healthy chain actually takes, not a pathological T.
 	rung1 := t0 + t0/p.CeilingGrowthDivisor
-	if u := (minCost*p.MaxCertsPerBlock(rung1) + base) * 1_000_000 / p.BlockByteLimit(rung1); u != 899_112 {
+	if u := (minCost*p.MaxCertsPerBlock(rung1) + base) * 1_000_000 / p.BlockByteLimit(rung1); u != 899_124 {
 		t.Fatalf("one epoch of maximal growth past genesis (T=%d) gives %d ppm utilisation, "+
-			"not the 899,112 (89.9112%%) spec/params.json's note records", rung1, u)
+			"not the 899,124 (89.9124%%) spec/params.json's note records", rung1, u)
 	}
 	if p.MaxCertsPerBlock(p.SeqGasCapacity) >= p.CertListCapacity {
 		t.Fatalf("MaxCertsPerBlock at the gas capacity is %d, at or above cert_list_capacity %d: "+
@@ -973,8 +973,8 @@ func TestTheCertCountCeilingIsReachableWithOrdinaryPayments(t *testing.T) {
 	if size := allRetire.SizeBytes(); size > byteCeiling {
 		t.Fatalf("a block of %d floor certificates is %d bytes against a byte ceiling of %d: "+
 			"max_certs_per_block_genesis is not reachable at all", ceiling, size, byteCeiling)
-	} else if size != 2_248_236 {
-		t.Fatalf("a block of %d floor certificates measures %d bytes, not the 2,248,236 "+
+	} else if size != 2_248_268 {
+		t.Fatalf("a block of %d floor certificates measures %d bytes, not the 2,248,268 "+
 			"spec/params.json's note and spec/README.md quote", ceiling, size)
 	}
 
@@ -1153,9 +1153,9 @@ func TestMaxCertsPerBlockGenesisSitsInsideItsReachableBand(t *testing.T) {
 	if ok, firstT := inert(upper + 1); ok {
 		t.Fatalf("max_certs_per_block_genesis = %d is inert at every T; the all-T threshold is "+
 			"the T₀ edge after all, and the note's separate figure is redundant", upper+1)
-	} else if firstT != 1_687_410 {
+	} else if firstT != 1_916_187 {
 		t.Fatalf("max_certs_per_block_genesis = %d first becomes violable at T=%d, not the "+
-			"1,687,410 recorded in spec/params.json's note and docs/ARCHITECTURE.md",
+			"1,916,187 recorded in spec/params.json's note and docs/ARCHITECTURE.md",
 			upper+1, firstT)
 	}
 	if ok, firstT := inert(upper + 2); !ok {
@@ -1193,25 +1193,25 @@ func TestMaxCertsPerBlockGenesisSitsInsideItsReachableBand(t *testing.T) {
 			}
 		}
 	}
-	if viol != 1_469_202 || total != 3_520_001 {
+	if viol != 1_280_152 || total != 3_520_001 {
 		t.Fatalf("at max_certs_per_block_genesis = %d, %d of %d reachable T are violable, not the "+
-			"1,469,202 of 3,520,001 recorded in spec/params.json's note", upper+1, viol, total)
+			"1,280,152 of 3,520,001 recorded in spec/params.json's note", upper+1, viol, total)
 	}
-	if multViol != 7_316 || mult != 17_601 || firstMult != 1_744_600 {
-		t.Fatalf("%d of %d multiples of 200 are violable (first at T=%d), not the 7,316 of 17,601 "+
-			"first at T=1,744,600 that spec/params.json's note records", multViol, mult, firstMult)
+	if multViol != 6_376 || mult != 17_601 || firstMult != 1_946_400 {
+		t.Fatalf("%d of %d multiples of 200 are violable (first at T=%d), not the 6,376 of 17,601 "+
+			"first at T=1,946,400 that spec/params.json's note records", multViol, mult, firstMult)
 	}
 
 	// And the trap that sentence exists to keep shut. The maximal growth
-	// ladder T ← T + T/Γ *passes* the first violable T at rung 28 and is not
+	// ladder T ← T + T/Γ *passes* the first violable T at rung 93 and is not
 	// violable there — it steps over the band — while its first violable rung
 	// is 77. An earlier revision quoted the passing rung as though it answered
-	// "when can the rule first fire", which is the question rung 77 answers. Both
+	// "when can the rule first fire", which is the question rung 134 answers. Both
 	// are asserted so neither can be attached to the other's claim again.
 	tv, rung := t0, 0
 	passRung, firstViolRung := -1, -1
 	for tv <= over.SeqGasCapacity {
-		if passRung < 0 && tv >= 1_687_410 {
+		if passRung < 0 && tv >= 1_916_187 {
 			passRung = rung
 		}
 		if firstViolRung < 0 && violableAt(tv) {
@@ -1223,19 +1223,19 @@ func TestMaxCertsPerBlockGenesisSitsInsideItsReachableBand(t *testing.T) {
 		tv += tv / over.CeilingGrowthDivisor
 		rung++
 	}
-	if passRung != 28 || firstViolRung != 77 {
-		t.Fatalf("the maximal growth ladder passes T=1,687,410 at rung %d and is first violable at "+
-			"rung %d, not the 28 and 77 spec/params.json's note and docs/ARCHITECTURE.md record",
+	if passRung != 93 || firstViolRung != 134 {
+		t.Fatalf("the maximal growth ladder passes T=1,916,187 at rung %d and is first violable at "+
+			"rung %d, not the 93 and 134 spec/params.json's note and docs/ARCHITECTURE.md record",
 			passRung, firstViolRung)
 	}
 	if ladder28 := func() uint64 {
 		v := t0
-		for i := 0; i < 28; i++ {
+		for i := 0; i < 93; i++ {
 			v += v / over.CeilingGrowthDivisor
 		}
 		return v
 	}(); violableAt(ladder28) {
-		t.Fatalf("ladder rung 28 (T=%d) is violable after all; the note's whole point is that "+
+		t.Fatalf("ladder rung 93 (T=%d) is violable after all; the note's whole point is that "+
 			"passing the threshold and being able to fire are different things", ladder28)
 	}
 }

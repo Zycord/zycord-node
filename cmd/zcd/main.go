@@ -119,13 +119,17 @@ is scamming you.
 func cmdVersion(w io.Writer) {
 	fmt.Fprintln(w, "zcd", version)
 	if randomx.Available() {
-		fmt.Fprintf(w, "proof of work: %s — this binary can join mainnet and the public testnet\n", randomx.Name)
+		// NameV2 is what mainnet and the public testnet declare. The same
+		// build serves rx/0 too — RANDOMX_FLAG_V2 is a runtime flag — so both
+		// are named, but the one an operator is trying to join is named first.
+		fmt.Fprintf(w, "proof of work: %s (and %s) — this binary can join mainnet and the public testnet\n",
+			randomx.NameV2, randomx.Name)
 		fmt.Fprintln(w, "  It is a cgo build, so it is NOT byte-identical across machines and is")
 		fmt.Fprintln(w, "  not covered by SHA256SUMS.binaries. See docs/INSTALL.md, \"Two tiers\".")
 		return
 	}
 	fmt.Fprintf(w, "proof of work: %s only — built without the randomx build tag\n", pow.Dev{}.Name())
-	fmt.Fprintf(w, "  This binary refuses to start on any network whose pow_engine is %s,\n", randomx.Name)
+	fmt.Fprintf(w, "  This binary refuses to start on any network whose pow_engine is %s,\n", randomx.NameV2)
 	fmt.Fprintln(w, "  which is both mainnet and the public testnet. Only --devnet runs here.")
 	fmt.Fprintln(w, "  For a binary that joins those, take a -randomx archive from the release")
 	fmt.Fprintln(w, "  page or run `make build-randomx`. See docs/INSTALL.md, \"Two tiers\".")

@@ -15,6 +15,26 @@ func header(height, time uint64, target u256.U256) types.Header {
 	return types.Header{Version: types.HeaderVersion, Height: height, Time: time, Target: target}
 }
 
+// sealed is `header` with PoWHash filled in the way an honest miner fills it:
+// evaluate the work function over the header's own blob and write the answer
+// into the field.
+//
+// It exists because CheckWork now has TWO halves — the commitment must beat the
+// target, and the declared digest must be the digest of this header's blob —
+// and a test that only wants to exercise the first half must not trip the
+// second by accident. A `types.Header{}` literal carries a zero PoWHash, which
+// is a digest no engine produces, so before this helper every such literal
+// failed with ErrHashMismatch and said nothing about the target rule.
+//
+// It deliberately does NOT loop over nonces: it seals whatever nonce the header
+// already carries. Tests that want a *passing* header mine; tests that want to
+// pin the comparison hand it a chosen value and must not have the answer
+// depend on which nonce happened to win.
+func sealed(e pow.Engine, h types.Header, p *params.Params) types.Header {
+	h.PoWHash = e.Hash(pow.KeyFor(h.Height, p), h.PoWInput())
+	return h
+}
+
 // TestWorkIsCheckedAgainstTheDeclaredTarget.
 func TestWorkIsCheckedAgainstTheDeclaredTarget(t *testing.T) {
 	e := pow.Dev{}
@@ -27,15 +47,34 @@ func TestWorkIsCheckedAgainstTheDeclaredTarget(t *testing.T) {
 		t.Fatal("a header with no work satisfied a near-impossible target")
 	}
 
-	// A trivial target: every nonce satisfies it.
-	easy := header(1, 100, u256.Max)
+	// A trivial target: every nonce satisfies it. Sealed, because the target
+	// rule is what is under test here and an unsealed header would be refused
+	// by the digest-identity half before the target was ever compared.
+	easy := sealed(e, header(1, 100, u256.Max), p)
 	if err := pow.CheckWork(e, easy, p); err != nil {
 		t.Fatalf("a trivial target rejected a header: %v", err)
 	}
 
-	// A zero target is not "impossible", it is malformed.
+	// A zero target is not "impossible", it is malformed — and it is refused
+	// BEFORE the digest is looked at, which is why this case needs no seal.
 	if err := pow.CheckWork(e, header(1, 100, u256.Zero), p); err != pow.ErrTargetMissing {
 		t.Fatalf("a zero target gave %v", err)
+	}
+
+	// The second half of the rule, which did not exist before the commitment
+	// scheme: a header whose declared digest is not the digest of its own blob
+	// is refused even when its commitment beats the target.
+	//
+	// It is checked here, against a target nothing can fail, so that the
+	// refusal can only be coming from the identity check. `easy` with its
+	// PoWHash perturbed by one bit is a header whose commitment is a different
+	// uniform value — overwhelmingly likely to still beat u256.Max, which is
+	// every value — so the only thing left to reject it is the mismatch.
+	forged := easy
+	forged.PoWHash[0] ^= 0x01
+	if err := pow.CheckWork(e, forged, p); err != pow.ErrHashMismatch {
+		t.Fatalf("a header carrying a digest that is not its own gave %v, want %v",
+			err, pow.ErrHashMismatch)
 	}
 }
 
@@ -552,79 +591,224 @@ type fixedEngine struct{ digest types.Hash }
 func (fixedEngine) Name() string                         { return "fixed" }
 func (e fixedEngine) Hash(types.Hash, []byte) types.Hash { return e.digest }
 
-// TestTheDigestIsReadLittleEndian pins the consensus rule that the
-// work-function digest is compared against the target as a LITTLE-endian
-// 256-bit integer, byte 0 least significant — the one 256-bit quantity in this
-// protocol that is not big-endian. checkWorkWith carries the full argument and
-// docs/ARCHITECTURE.md §12 is normative; the short form is that RandomX is a
-// Monero-family work function, the whole Monero-family ecosystem reads its
-// digest little-endian, and the two conventions read opposite ends of an
-// independent 32 bytes, so a big-endian node shares no valid nonce with any
-// miner that exists.
+// commitmentStraddling searches for a header whose COMMITMENT is decided
+// OPPOSITELY by the two byte-order conventions against `target`: below it read
+// little-endian and above it read big-endian, or the mirror of that.
+//
+// It exists because the value the rule compares is no longer something a test
+// can hand it directly. Under rx/0 the compared value was the engine's output,
+// so a `fixedEngine` could put an exact 32-byte string in front of the
+// comparison and the test chose the answer. Under rx/2 the compared value is
+// `blake2b(PoWInput ‖ PoWHash)`, and BLAKE2b is not invertible: no digest an
+// engine can return makes the commitment come out as 1.
+//
+// **Searching on the predicate itself is what keeps the test non-vacuous, and
+// searching on a proxy is what does not.** The first version of this helper
+// searched for a chosen top byte and then SKIPPED when the resulting value did
+// not straddle the target — which is a test that reports success without
+// having compared anything, the exact shape this repository has been bitten by
+// twice. The condition below is the condition the assertion needs, so a header
+// that comes back is a header that discriminates, and a failure to find one is
+// a hard failure rather than a skip.
+//
+// Cheap: BLAKE2b over 75 bytes plus a BLAKE3 over the header is microseconds,
+// and against a target of 2^128 roughly half of all commitments straddle it in
+// one direction or the other, so this returns almost immediately.
+func commitmentStraddling(t *testing.T, e pow.Engine, h types.Header, p *params.Params, target u256.U256, leBelow bool) types.Header {
+	t.Helper()
+	for i := uint32(0); i < 1<<22; i++ {
+		h.PoW.ExtraNonce = i
+		sh := sealed(e, h, p)
+		c := pow.Commitment(sh)
+		le := !u256.FromLEBytes(c).Gt(target) // "passes" little-endian
+		be := !u256.FromBytes(c).Gt(target)   // "passes" big-endian
+		if le == leBelow && be != leBelow {
+			return sh
+		}
+	}
+	t.Fatalf("no ExtraNonce in 2^22 produced a commitment the two conventions "+
+		"judge differently against %s", target.String())
+	return h
+}
+
+// TestTheCommitmentIsReadLittleEndian pins the consensus rule that the value
+// compared against the target is read as a LITTLE-endian 256-bit integer, byte
+// 0 least significant — the one 256-bit quantity in this protocol that is not
+// big-endian.
+//
+// **The rule moved from the digest to the commitment and the endianness did
+// not.** That is the whole content of this test and it is worth being precise
+// about, because the two facts are easy to confuse. Stock rx/2 XMRig compares
+// `commitment[24:32]` as a native little-endian uint64 against the job target —
+// CpuWorker.cpp:354 reads `m_hash`, which holds the COMMITMENT from the moment
+// `randomx_calculate_commitment(prev_job, size, m_hash, m_hash)` overwrites it
+// in place. Same eight bytes, same end, a different 32-byte value.
+// pow.CheckCommitment carries the full argument and docs/ARCHITECTURE.md §12 is
+// normative.
 //
 // Every other proof-of-work test in this tree mines: it asks the engine for
 // nonces until one passes and then asserts that it passes. Such a test is
 // invariant under the endianness of the comparison — flip the rule and a
 // different nonce wins, and the test still goes green. That is exactly how a
-// convention mismatch with the entire Monero-family mining ecosystem survives
-// a full suite, so this test does not mine at all. It hands the rule a chosen
-// digest and a chosen target and asserts the verdict.
-//
-// The digest below is a "one-sided" string: it is small when read
-// little-endian (the high-order bytes, at the END under LE, are zero) and
-// enormous when read big-endian. A target between the two readings therefore
-// separates them completely — the LE rule accepts, the BE rule rejects — and
-// the second case is its mirror image. Neither can pass under the wrong rule
-// by luck.
-func TestTheDigestIsReadLittleEndian(t *testing.T) {
+// convention mismatch with the entire Monero-family mining ecosystem survives a
+// full suite. So this test does not mine. It searches for headers whose
+// commitment the two conventions judge OPPOSITELY, and asserts which way the
+// rule goes on each — an assertion that cannot be satisfied by both readings.
+func TestTheCommitmentIsReadLittleEndian(t *testing.T) {
+	e := pow.Dev{}
 	p := spec.Mainnet()
+	// 2^255, and the exponent is chosen rather than round.
+	//
+	// The straddle this test needs is "one convention passes, the other does
+	// not", and its frequency is the product of two nearly independent
+	// coin-flips only when each convention passes about half the time. A small
+	// target — 2^128, say — is passed by essentially no random 256-bit value
+	// under EITHER reading, so straddles never occur and the search runs out;
+	// measured, 2^22 ExtraNonces produced none. At 2^255 each reading passes
+	// about half the time and roughly 49% of commitments straddle, so the
+	// search returns on its first or second try.
+	target := u256.MustFromDecimal(
+		"57896044618658097711785492504343953926634992332820282019728792003956564819968")
 
-	// leSmall reads as 0x01 little-endian and as 2^248 big-endian.
-	var leSmall types.Hash
-	leSmall[0] = 0x01
-	// leHuge is the mirror: 2^248 little-endian, 0x01 big-endian.
-	var leHuge types.Hash
-	leHuge[31] = 0x01
-
-	// A target of 2^128 sits strictly between 1 and 2^248, so it decides
-	// both cases and decides them oppositely under the two conventions.
-	target := u256.MustFromDecimal("340282366920938463463374607431768211456") // 2^128
-
-	h := header(1, 100, target)
-
-	if err := pow.CheckWork(fixedEngine{leSmall}, h, p); err != nil {
-		t.Fatalf("a digest that is 1 little-endian was refused against 2^128: %v "+
-			"(the rule is reading the digest big-endian, where it is 2^248)", err)
+	// Passes little-endian, fails big-endian. The rule must accept it.
+	small := commitmentStraddling(t, e, header(1, 100, target), p, target, true)
+	if err := pow.CheckWork(e, small, p); err != nil {
+		t.Fatalf("a commitment below the target little-endian and above it "+
+			"big-endian was REFUSED: %v — the rule is reading it big-endian", err)
 	}
-	if err := pow.CheckWork(fixedEngine{leHuge}, h, p); err != pow.ErrWorkTooLow {
-		t.Fatalf("a digest that is 2^248 little-endian was accepted against 2^128: %v "+
-			"(the rule is reading the digest big-endian, where it is 1)", err)
+
+	// Fails little-endian, passes big-endian. The rule must refuse it.
+	huge := commitmentStraddling(t, e, header(1, 100, target), p, target, false)
+	if err := pow.CheckWork(e, huge, p); err != pow.ErrWorkTooLow {
+		t.Fatalf("a commitment above the target little-endian and below it "+
+			"big-endian was ACCEPTED: %v — the rule is reading it big-endian", err)
 	}
 }
 
-// TestTheSolverReadsTheDigestLittleEndianToo covers the second route to the
-// same comparison. Solver.Try and checkWorkWith share no code — deliberately,
-// see the Solver doc comment — so an endianness change applied to one and not
-// the other produces a miner whose every block its own network rejects, and
-// TestTheSolverAgreesWithCheckWork would not catch it if BOTH were flipped
-// together into the wrong convention. This pins the absolute answer, not the
-// agreement.
-func TestTheSolverReadsTheDigestLittleEndianToo(t *testing.T) {
+// TestTheSolverReadsTheCommitmentLittleEndianToo covers the second route to the
+// same comparison. Solver.TryHash and checkWorkWith share no code —
+// deliberately, see the Solver doc comment — so an endianness change applied to
+// one and not the other produces a miner whose every block its own network
+// rejects, and TestTheSolverAgreesWithCheckWork would not catch it if BOTH were
+// flipped together into the wrong convention. This pins the absolute answer,
+// not the agreement.
+func TestTheSolverReadsTheCommitmentLittleEndianToo(t *testing.T) {
+	e := pow.Dev{}
 	p := spec.Mainnet()
-	target := u256.MustFromDecimal("340282366920938463463374607431768211456") // 2^128
+	// 2^255, and the exponent is chosen rather than round.
+	//
+	// The straddle this test needs is "one convention passes, the other does
+	// not", and its frequency is the product of two nearly independent
+	// coin-flips only when each convention passes about half the time. A small
+	// target — 2^128, say — is passed by essentially no random 256-bit value
+	// under EITHER reading, so straddles never occur and the search runs out;
+	// measured, 2^22 ExtraNonces produced none. At 2^255 each reading passes
+	// about half the time and roughly 49% of commitments straddle, so the
+	// search returns on its first or second try.
+	target := u256.MustFromDecimal(
+		"57896044618658097711785492504343953926634992332820282019728792003956564819968")
 
-	var leSmall types.Hash
-	leSmall[0] = 0x01
-	var leHuge types.Hash
-	leHuge[31] = 0x01
-
-	s := pow.NewSolver(fixedEngine{leSmall}, header(1, 100, target), p)
-	if !s.Try(0) {
-		t.Fatal("the solver refused a digest that is 1 little-endian against 2^128")
+	small := commitmentStraddling(t, e, header(1, 100, target), p, target, true)
+	s := pow.NewSolver(e, small, p)
+	if !s.Try(small.PoW.Nonce) {
+		t.Fatal("the solver refused a commitment below the target little-endian " +
+			"and above it big-endian — it is reading the commitment big-endian")
 	}
-	s = pow.NewSolver(fixedEngine{leHuge}, header(1, 100, target), p)
-	if s.Try(0) {
-		t.Fatal("the solver accepted a digest that is 2^248 little-endian against 2^128")
+
+	huge := commitmentStraddling(t, e, header(1, 100, target), p, target, false)
+	s = pow.NewSolver(e, huge, p)
+	if s.Try(huge.PoW.Nonce) {
+		t.Fatal("the solver accepted a commitment above the target little-endian " +
+			"and below it big-endian — it is reading the commitment big-endian")
+	}
+}
+
+// TestTheCheapPathNeverAcceptsWhatTheFullPathRejects is the soundness property
+// of the two-tier work check, and it is the one a reader should demand before
+// believing that any path may use CheckCommitment alone.
+//
+// The claim is a one-way implication and only one way: **CheckWork(h) == nil
+// implies CheckCommitment(h) == nil.** So a path that runs only the cheap half
+// is *conservative* — it may admit a header the full check would later refuse,
+// and it never refuses one the full check would have admitted. That is what
+// makes deferring the expensive half safe on a rejection path: nothing valid is
+// lost, and what is admitted still has to survive full validation before it
+// reaches the chain.
+//
+// **The converse is deliberately NOT asserted, because it is false**, and its
+// falseness is the whole point of the second half. A header carrying somebody
+// else's digest can have a commitment under the target and still be refused by
+// CheckWork for ErrHashMismatch. If the converse held, the second half would be
+// dead code.
+//
+// Driven over a target loose enough that both verdicts occur, and asserting
+// that both occurred — a sweep in which every header failed would satisfy the
+// implication vacuously.
+func TestTheCheapPathNeverAcceptsWhatTheFullPathRejects(t *testing.T) {
+	e := pow.Dev{}
+	p := spec.Mainnet()
+	// Half of all commitments pass, so both arms are exercised.
+	target := u256.MustFromDecimal(
+		"57896044618658097711785492504343953926634992332820282019728792003956564819968")
+
+	var fullOK, cheapOK int
+	for i := uint32(0); i < 256; i++ {
+		h := header(1, 100, target)
+		h.PoW.ExtraNonce = i
+		h = sealed(e, h, p)
+
+		full := pow.CheckWork(e, h, p) == nil
+		cheap := pow.CheckCommitment(h) == nil
+		if full && !cheap {
+			t.Fatalf("ExtraNonce %d: the full check accepted a header the cheap "+
+				"check refuses. Every path that runs CheckCommitment alone would "+
+				"then be dropping valid work, and the deferral is unsound.", i)
+		}
+		if full {
+			fullOK++
+		}
+		if cheap {
+			cheapOK++
+		}
+	}
+	if fullOK == 0 || fullOK == 256 {
+		t.Fatalf("the full check accepted %d of 256: the target does not "+
+			"discriminate and the implication above holds vacuously", fullOK)
+	}
+	// On sealed headers the two agree exactly, because the only way they can
+	// differ is a forged digest and none is forged here. Asserting it pins the
+	// cost model: an honest header pays the expensive half, and only an honest
+	// header does.
+	if cheapOK != fullOK {
+		t.Fatalf("on sealed headers the cheap check accepted %d and the full check "+
+			"%d; they must agree exactly, since the only thing that separates them "+
+			"is a digest that is not the header's own", cheapOK, fullOK)
+	}
+
+	// And the converse is false, which is why the second half exists. One
+	// forged header suffices: take one the cheap check admits and swap in a
+	// digest that is not this header's.
+	var forged types.Header
+	for i := uint32(0); i < 256; i++ {
+		h := header(1, 100, target)
+		h.PoW.ExtraNonce = i
+		h = sealed(e, h, p)
+		if pow.CheckCommitment(h) == nil {
+			forged = h
+			break
+		}
+	}
+	if forged.Height == 0 {
+		t.Fatal("no header in the sweep passed the cheap check, so the converse " +
+			"cannot be exercised")
+	}
+	// A digest from a different header, so the field is well-formed and wrong.
+	other := header(1, 200, target)
+	forged.PoWHash = e.Hash(pow.KeyFor(other.Height, p), other.PoWInput())
+	if pow.CheckCommitment(forged) == nil && pow.CheckWork(e, forged, p) == nil {
+		t.Fatal("a header carrying another header's digest passed BOTH checks; " +
+			"the digest-identity half is not running and the cheap path would be " +
+			"the whole rule")
 	}
 }
 
@@ -660,33 +844,54 @@ func TestAStratumJobTargetIsACleanTruncation(t *testing.T) {
 		t64 = 1
 	}
 
-	// A digest whose last eight bytes, read as an LE uint64, are strictly
+	// **The compared value is the COMMITMENT now, and that is why this test no
+	// longer routes through an engine.**
+	//
+	// Under rx/0 the compared value was the engine's output, so a fixedEngine
+	// returning chosen bytes put the exact 32 bytes in front of the rule.
+	// Under rx/2 the compared value is `blake2b(PoWInput ‖ PoWHash)`, which no
+	// engine controls: there is no digest that makes the commitment come out
+	// as a chosen string. Searching for one is infeasible for a value pinned in
+	// all 32 bytes, and unnecessary — the claim here is about the ARITHMETIC
+	// relating a 64-bit job target to a 256-bit consensus target, and that
+	// arithmetic does not care which 32 bytes it is handed.
+	//
+	// So the value is constructed directly and the comparison the rule performs
+	// is applied to it directly, exactly as pow.CheckCommitment applies it. The
+	// substitution this loses is real and worth naming: it no longer proves
+	// that CheckWork uses this comparison, only that this comparison has the
+	// truncation property. **The first half is what
+	// TestTheCommitmentIsReadLittleEndian proves**, against the real rule and
+	// under a fixture the two conventions judge oppositely, and the two
+	// together carry what this test used to carry alone.
+	//
+	// A commitment whose last eight bytes, read as an LE uint64, are strictly
 	// below t64 is a share XMRig would submit. Build the extreme one — every
-	// other digest byte 0xff — and assert the full rule accepts it. If the
-	// full rule accepted only some such digests, a pool would be handing
-	// miners shares the node then rejects.
-	var d types.Hash
+	// other byte 0xff — and assert the 256-bit rule accepts it. If it accepted
+	// only some such values, a pool would be handing miners shares the node
+	// then rejects.
+	var c types.Hash
 	for i := 0; i < 24; i++ {
-		d[i] = 0xff
+		c[i] = 0xff
 	}
 	share := t64 - 1
 	for i := 0; i < 8; i++ {
-		d[24+i] = byte(share >> (8 * i))
+		c[24+i] = byte(share >> (8 * i))
 	}
-	if err := pow.CheckWork(fixedEngine{d}, header(1, 100, target), p); err != nil {
-		t.Fatalf("a share at the very top of the 64-bit job target was refused by "+
-			"the full rule: %v — the truncation is not clean", err)
+	if u256.FromLEBytes(c).Gt(target) {
+		t.Fatalf("a share at the very top of the 64-bit job target is above the "+
+			"256-bit target: %x — the truncation is not clean", c)
 	}
 
-	// And the boundary sliver is on the other side: a digest whose top 64
-	// bits equal t64 exactly is NOT guaranteed to pass, which is why the job
-	// target is a strict-inequality filter and the node re-verifies every
-	// submit. Assert the direction rather than a value.
+	// And the boundary sliver is on the other side: a value whose top 64 bits
+	// equal t64 exactly is NOT guaranteed to pass, which is why the job target
+	// is a strict-inequality filter and the node re-verifies every submit.
+	// Assert the direction rather than a value.
 	for i := 0; i < 8; i++ {
-		d[24+i] = byte(t64 >> (8 * i))
+		c[24+i] = byte(t64 >> (8 * i))
 	}
-	if err := pow.CheckWork(fixedEngine{d}, header(1, 100, target), p); err == nil {
-		t.Fatal("a digest above the truncated job target passed the full rule; " +
-			"the truncation would then not be conservative")
+	if !u256.FromLEBytes(c).Gt(target) {
+		t.Fatalf("a value above the truncated job target is below the 256-bit "+
+			"target: %x — the truncation would then not be conservative", c)
 	}
 }
