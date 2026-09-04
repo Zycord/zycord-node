@@ -712,10 +712,13 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 					// nonces satisfy the target, so either is a valid seal.
 					// CompareAndSwap only decides which one the block carries.
 					//
-					// The digest is stored BEFORE the flag, so that a reader
-					// which observes `found` also observes the matching hash.
-					// Storing it after would leave a window in which the
-					// header takes a nonce with no digest.
+					// The pair cannot tear, and the reason is the join
+					// rather than the order of these two stores. The CAS
+					// admits exactly one writer, and every read of `winner`
+					// and `winnerHash` below happens after wg.Wait(), so a
+					// reader sees both stores or neither. The `found.Load()`
+					// in the loop above is only an early-exit hint: a worker
+					// that observes it returns without reading either value.
 					if found.CompareAndSwap(false, true) {
 						d := digest
 						winnerHash.Store(&d)

@@ -1230,6 +1230,15 @@ func TestANewKeyDoesNotStallTheOldOne(t *testing.T) {
 	// some slowdown is expected and correct; what is not expected is a stop.
 	// Mutation-checked: holding the lock across the build reports ~1 hash for
 	// the whole build and fails here.
+	//
+	// **This ratio is load-sensitive, and a failure here is not automatically a
+	// regression.** Both rates are measured on a busy machine, so anything else
+	// competing for the same cores depresses the DURING rate without touching
+	// the property under test. Observed on a six-core box: 108-123% when
+	// otherwise idle, and 10% -- a failure -- while an unrelated compile
+	// saturated all six. If this fails, re-run it alone before believing it;
+	// if it fails alone, it is real and it means a node stops verifying at a
+	// key boundary.
 	if ratio := duringRate / controlRate; ratio < 0.25 {
 		t.Errorf("hashing on the live key ran at %.0f/s during a %.2fs key build "+
 			"against %.0f/s idle (%.0f%%): the build is holding the engine "+

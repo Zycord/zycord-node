@@ -28,6 +28,7 @@ import (
 
 	"zycord/core/params"
 	"zycord/core/pow"
+	"zycord/spec"
 )
 
 // localnetParamsPath is the recipe, relative to this test's directory.
@@ -61,10 +62,20 @@ func loadLocalnet(t *testing.T) *params.Params {
 // cover, while its README goes on claiming otherwise.
 func TestTheLocalNetRecipeRunsTheRealEngine(t *testing.T) {
 	p := loadLocalnet(t)
-	if p.PoWEngine != "randomx-v2" {
-		t.Errorf("the local-net recipe declares pow_engine %q; it exists to exercise "+
-			"the RandomX path, and on any other engine it is devnet with extra steps",
-			p.PoWEngine)
+	// Read from mainnet rather than from a literal here, and the reason is
+	// that the literal has already drifted once: this file pinned
+	// "randomx-v1" for as long as mainnet declared rx/2, so a soak run on the
+	// recipe crossed its boundaries on a function neither shipped network
+	// runs -- which looks exactly like a soak that covered something. Taking
+	// the value from spec/params.json means the recipe follows the engine it
+	// is supposed to be rehearsing, and a future engine change moves both
+	// together or fails here.
+	want := spec.Mainnet().PoWEngine
+	if p.PoWEngine != want {
+		t.Errorf("the local-net recipe declares pow_engine %q, and mainnet declares "+
+			"%q. It exists to exercise the engine that ships: on dev-blake3 it is "+
+			"devnet with extra steps, and on the other RandomX version it is a soak "+
+			"of a function no network runs.", p.PoWEngine, want)
 	}
 }
 

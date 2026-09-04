@@ -322,11 +322,11 @@ corrected.
 
 ### 8.6 What this work does NOT do, and it is the part that matters most
 
-**The adversarial pass §4 requires over the ~800-line upstream delta has not been done.** The vendoring was mechanical and the tests pass; that is evidence the library computes upstream's published vectors, and it is *not* evidence that two JIT code generators and several hundred lines of hand-written AArch64 and x86 assembly are free of the class of defect that produced v2.0's ~1-in-2²⁸ invalid-hash bug on ARM/RISC-V. **A vector suite catches a code generator that is wrong on the inputs the vectors reach.** The bug v2.0.1 fixed was reached by roughly one input in 268 million.
+**The adversarial pass §4 requires over the ~800-line upstream delta has not been done.** *Partly addressed by section 8.8 below, which is a differential and mutation pass rather than the line-by-line read §4 asks for.* The vendoring was mechanical and the tests pass; that is evidence the library computes upstream's published vectors, and it is *not* evidence that two JIT code generators and several hundred lines of hand-written AArch64 and x86 assembly are free of the class of defect that produced v2.0's ~1-in-2²⁸ invalid-hash bug on ARM/RISC-V. **A vector suite catches a code generator that is wrong on the inputs the vectors reach.** The bug v2.0.1 fixed was reached by roughly one input in 268 million.
 
-**Nothing here has run on arm64.** Gate 2 established that a real AArch64 JIT exists in the released tag and is reached; every measurement in 8.4 is amd64. The architecture where v2's newest code lives, and where v2.0's bug lived, is the one this work has not touched.
+**Nothing here has run on arm64.** Gate 2 established that a real AArch64 JIT exists in the released tag and is reached; every measurement in 8.4 is amd64. The architecture where v2's newest code lives, and where v2.0's bug lived, is the one this work has not touched. *Partly superseded: section 8.8 below runs the a64 JIT under emulation and records what that is and is not worth.*
 
-**No soak has happened.** No epoch boundary has been crossed on rx/2 on any network, on either architecture.
+**No soak has happened.** No epoch boundary has been crossed on rx/2 on any network, on either architecture. *Superseded on amd64: see section 8.8 below.*
 
 **And the standing risk §5 records is unchanged by any of the above.** Monero has not activated rx/2 and `v0.18.5.1` still pins RandomX v1.2.2; a code search of `monero-project/monero` for `RANDOMX_FLAG_V2` and for `randomx_calculate_commitment` returns nothing. **Shipping this at genesis makes this chain the first production user of rx/2, of XMRig's rx/2 client path, and of a commitment-targeted consensus rule that no other chain runs.** That is the decision the owner made with the evidence in front of them; it is recorded here as a risk that was accepted, not as one that was retired.
 
@@ -335,3 +335,236 @@ corrected.
 - **Any disagreement between this engine and a real XMRig binary**, which nothing in this tree can detect: every check here is against published source constants and published vectors, and "a stock miner was pointed at a node and found a block" remains unproven for rx/2 exactly as §5 of [xmrig](xmrig.md) records it for rx/0.
 - **The adversarial pass finding anything in the JIT delta.** It is outstanding, and until it is done the strongest statement available is "upstream's vectors reproduce".
 - **An arm64 result.** Either a measurement or a failure would be new information; there is none.
+
+### 8.8 The adversarial pass: what it closed, and what it did not
+
+A second pass ran against `feat/randomx-v2-commitment` before the freeze,
+in parallel with the merge and with the four gaps in 8.6 as its brief. It is
+recorded here rather than in a competing document so that one section carries
+the residual risk.
+
+**Nothing it found is a consensus defect.** No verifier/miner divergence, no
+path by which a stock miner's valid share is refused or an invalid one
+admitted. The three findings below are a coverage gap, an unreachable unpinned
+rule, and a comment that describes an ordering its code does not implement.
+
+#### What it closed
+
+**arm64 is no longer untested, and the qualifier matters.** `core/pow/randomx/arm64/`
+cross-compiles the vendored sources for aarch64 and runs upstream's own
+published vectors under rx/0 and rx/2, on the interpreter *and* on the a64 JIT,
+plus upstream's Commitment test and a JIT-versus-interpreter sweep. All pass.
+
+**The numbers, and which run each comes from, because they are not all the same
+run.** Measured: **40 vector checks — upstream's four (key, input) pairs under
+rx/0 and rx/2, across interpreter and a64 JIT, across soft AES, hard AES and
+hard AES with `SECURE` — 0 failures**; and upstream's Commitment vector
+reproducing `133be717…` under soft AES and hard AES, on both the interpreter
+and the JIT. The Commitment check sat OUTSIDE the configuration loop for one
+revision, on hoisted soft-AES flags, while this paragraph claimed it as
+hard-AES coverage. It is now inside the loop and the claim is a measurement
+rather than a description.
+
+Two sweep runs, and they are different sizes. The **400-input**
+JIT-versus-interpreter sweep with 0 mismatches was the **soft-AES-only** run
+(418 checks in total). A later run of the full matrix swept **40 inputs under
+soft AES and 40 under hard AES, 0 mismatches on both**, for 125 checks and 0
+failures overall. So hard AES has a sweep, at a tenth of the depth soft AES
+has; the deeper number belongs to soft AES alone and is not claimed for both.
+The hard-AES cells of the full-dataset section are wired but have not been run
+to completion, and remain open below.
+`run.sh` needs no root — the toolchain and `qemu-aarch64` unpack from `.deb`
+files into a user prefix, and the recipe is in the script's own header.
+
+**What that is worth, stated precisely: this is emulation, not hardware.**
+qemu-user translates the a64 instructions the JIT emits; it does not reproduce
+a real core's memory ordering, its instruction-cache coherency, or its
+`__builtin___clear_cache` behaviour, and those are exactly where a
+self-modifying code generator goes wrong. So the result rules out *wrong code
+generation* on arm64, for the configurations listed below, and does not rule
+out *wrong execution* on an arm64 chip. **A run on real hardware is still
+owed**, and it is now one command (`sh core/pow/randomx/arm64/run.sh`, which
+takes the native path on an aarch64 box) rather than a project.
+
+**Which configurations, because "arm64 is covered" was too broad for one
+revision of this section and the correction is the point.** The first version
+of the harness built every VM from `RANDOMX_FLAG_DEFAULT` and therefore never
+set `RANDOMX_FLAG_HARD_AES`. That is not a performance switch on this
+architecture: `jit_compiler_a64.cpp` branches on it at the "Enable RandomX v2
+AES tweak" site in *both* generators — `generateProgram` for the dataset path
+and `generateProgramLight` for the light one — emitting `movi v28.4s, 0` under
+hard AES against a branch into the soft-AES FE mix without it, at the same
+patch address, inside the rx/2 delta. `randomx.cpp`'s `create_vm` switch keys
+on the same flag, so only the `...Default` VM classes were ever instantiated.
+**Every check in the first revision therefore exercised the branch a real arm64
+miner does not take**, since any ARMv8 core with the crypto extensions reports
+hard AES and `randomx_get_flags` sets it.
+
+The harness now runs the vectors under three configurations — soft AES, hard
+AES, and hard AES with `RANDOMX_FLAG_SECURE` — so both branches of both patch
+sites are exercised and the `...HardAes` and `...Secure` classes are
+instantiated alongside `...Default`. The JIT-versus-interpreter sweep is wired to run
+under soft and hard AES, and the full-dataset section under all four cells of
+{rx/0, rx/2} x {soft, hard} — but see the note above on which of those has
+actually been run to completion: the hard-AES sweep and the hard-AES
+full-dataset cells are wired and not yet measured. Everything reported as
+passing reproduces upstream's published digests. Nothing was dropped for being unrunnable under emulation: qemu
+implements the ARMv8 AES instructions, so the hard-AES path executes rather
+than trapping. The interpreter is not re-run under `SECURE`, and that is a
+genuine skip rather than a gap — the flag changes only the JIT buffer's page
+permissions and the interpreted classes are selected by the same switch, so it
+would repeat the row above it.
+
+**What the AES branches are, since two mutations that survived say it plainly.**
+Forcing the hard-AES site to take the soft-AES branch, and forcing the soft-AES
+site to take the hard-AES one, both leave every vector green. That is the
+correct answer rather than missing coverage: the two branches are two
+implementations of the same AES, and upstream's vectors are what require them
+to agree. The branch is a dispatch choice, not a semantic one. What is *not*
+inert is the instruction the hard-AES arm emits, and the mechanism is worth
+stating exactly because a first attempt at this mutation was described wrongly.
+The site's default content is `b v1_FE_mix`, which falls into `FE_store` and
+terminates; the hard-AES arm overwrites that branch with `movi v28.4s, 0`, so
+execution falls through into the `aese`/`aesd` block and mixes against a
+zeroed `v28`. Zeroing that register is therefore semantic, not housekeeping.
+Emitting `movi v29.4s, 0` instead leaves `v28` uncleared and **fails on the
+digest**: every rx/2 hard-AES row and the hard-AES commitment vector are wrong,
+while rx/0 and every soft-AES row stay green. That is the kill, and its
+selectivity is also the proof the site is reached under these runs rather than
+dead. An earlier version of this row reported a kill-by-hang; that was a
+different edit and weaker evidence, since a timeout can mask an unrelated
+failure and says nothing about which bytes changed.
+
+**The consequence of H/I/J/K, since a reader should not have to derive it.**
+Because soft and hard AES compute the same function, the hard-AES column cannot
+catch a wrong hash that the soft-AES column would have missed — anything the
+two branches agree on, they agree on wrongly together. What the hard-AES column
+buys is different and narrower: it exercises code generation and VM
+instantiation that were previously never reached at all (`...HardAes`,
+`...HardAesSecure`, and both patch sites' other arm), so it catches a defect in
+*that* code — as mutation L does — rather than a defect in AES itself. Anyone
+reading "hard AES passes" as independent confirmation of the digests is reading
+more into it than it says.
+
+**The light path and the dataset path are different a64 code, and a light-only
+harness misses half of it.** This was found by mutation, not by reading.
+Swapping the dataset path's v2 tweak
+(`randomx_program_aarch64_vm_instructions_end_v2`) for the v1 one is invisible
+to every vector run in light mode, because light mode reaches a *different*
+symbol (`..._end_light_v2`). The same swap on the light symbol fails eight
+vectors, the Commitment vector and every sweep input, while rx/0 stays green
+throughout — the exact signature of a version-selective codegen fault. The
+harness now runs the full-dataset path too, behind `RX_FAST=1`, and the
+mutation that survived the first version is killed by the second. **A miner
+runs the dataset path**, so this was the half that mattered.
+
+**An epoch-boundary soak has run on rx/2.** On the small-params local net at
+`randomx_key_interval: 16`, `randomx_key_lag: 2`, five-second blocks, engine
+`randomx-v2`, amd64, six threads: **836 blocks, 52 seed-epoch boundaries
+crossed, 0 rejected, 0 reorgs, 0 undone, deepest reorg 0** — a single distinct
+value across every status line of the run. The node was stopped at height 339
+and cold-started against the same directory; it reloaded the chain, re-verified
+it and continued mining, which exercises verification across those boundaries
+from disk rather than from warm caches. The first boundary landed at height 18,
+as [`localnet/README.md`](../localnet/README.md) predicts. Against mainnet's
+`randomx_key_interval: 2048` at a thirty-second block, that many boundaries is
+something over a month of mainnet re-keys.
+
+The status lines are committed at
+[`localnet/soaks/rx2-epoch-boundary.txt`](../localnet/soaks/rx2-epoch-boundary.txt)
+rather than only quoted here — 239 samples over the two runs, every one of them
+`undone=0 rejected=0 reorgs=0 deepest=0`, so the numbers above can be checked
+instead of taken.
+
+**The shipped local-net recipe could not be run at all, which the soak found
+before it could measure anything.** The file declared `randomx-v1` — not the
+function either shipped network declares, so a soak on it would have rehearsed
+the wrong engine — and pinned `genesis_time` to 2026-09-06T00:00:00Z, so a node
+started before that date correctly refuses to date a block before genesis,
+reports how long it will wait, and mines nothing. The soak ran on a copy with
+both corrected. Both were then fixed on `dev` independently and identically
+while this pass was running, so the file in the tree is now right; what
+survives here is the guard. `sim/wiring`'s engine check pinned the literal
+`randomx-v1` for as long as mainnet declared rx/2 — it was enforcing the drift
+rather than catching it — and now reads the value from mainnet, so the two
+cannot separate again without a test saying so.
+
+**Hostile headers now have a test.** `core/pow/hostile_test.go` drives the work
+check with saturated and malformed headers — `height = 2^64 - 1` among them,
+because the key comes from the height and `KeyFor`'s arithmetic is what lets
+`CheckWork` be total — and requires that it never panics and never accepts one.
+The reserved gap gets the same treatment with every field an attacker controls
+saturated. Both fail under mutation; the rows are below.
+
+#### Mutations run, and the survivor
+
+| | mutation | result |
+|---|---|---|
+| A1 | a64 JIT: dataset path takes the **v1** tweak under `RANDOMX_FLAG_V2` | **survived** the light-only harness; killed once `RX_FAST` was added |
+| A2 | a64 JIT: light path takes the **v1** tweak under `RANDOMX_FLAG_V2` | killed — 8 vectors, the Commitment vector and every sweep input, rx/0 green |
+| H/I/J/K | a64 JIT: force either AES branch to take the other, at either generator | **survived, and correctly** — the two branches are two implementations of one AES, and upstream's vectors are what require them to agree |
+| L | a64 JIT: the hard-AES arm zeroes `v29` instead of `v28`, so the fall-through `aese`/`aesd` mix against a key the JIT never cleared | killed on the DIGEST — every rx/2 hard-AES row and the hard-AES commitment vector fail, while rx/0 and every soft-AES row stay green |
+| C | `PoWInput` writes the nonce's high byte into reserved byte 32 | killed |
+| D | `checkWorkWith` drops the digest-identity half | killed |
+| E | `CheckCommitment`: `Gt` → `Gte`, turning `commitment <= target` into `<` | **SURVIVED, and no test was written for it — see below** |
+
+**E is a real unpinned consensus rule and it is recorded as a residual rather
+than covered, because a test that covered it would be vacuous.** The mutation
+changes the rule only where `commitment == target` exactly. `Target` sits inside
+`PoWSeed`'s preimage, so the commitment is a function of the target, and a
+header where the two are equal is a fixed point of BLAKE2b∘BLAKE3 — a 1-in-2²⁵⁶
+search. Measured: five rounds of "set the target to the commitment and re-seal"
+walk to five unrelated values. **No header a test or an attacker can construct
+distinguishes `Gt` from `Gte`**, which is also why the mutation survives
+`go test ./core/... ./spec/...` and the whole `-tags randomx` package including
+the cross-vector tests. A first draft of a test for it was written, found to
+pass under the mutation, and deleted rather than shipped — the failure mode
+8.5a's last paragraph describes, caught this time before the commit.
+
+The rule is unreachable in both directions, so nothing is exploitable by it.
+What it costs is that the `<=` in `CheckCommitment` and the `!...Gt` in
+`Solver.TryHash` are load-bearing text no test defends: a future edit that
+flipped **one** of them would produce a miner disagreeing with its own verifier
+on a set of headers of measure zero, and nothing would say so.
+
+**One inaccurate comment, no defect.** `node/miner.SealWhile` says the winning
+digest "is stored BEFORE the flag, so that a reader which observes `found` also
+observes the matching hash". The code stores it *after* the
+`CompareAndSwap`. The pair cannot actually tear — every consuming read of
+`winner` and `winnerHash` happens after `wg.Wait()`, and the CAS admits one
+writer — so the safety is real but comes from the join, not from the ordering
+the comment claims. The comment should be corrected to say so.
+
+#### What is still open going into the freeze
+
+- **Real arm64 hardware.** Emulation covers code generation, now including the
+  hard-AES branch a real miner takes; it does not cover a real core's cache
+  coherency around self-modifying code, and that is precisely where the JIT is
+  most exposed. One command, no project — but it has not been run on a chip,
+  and the emulator agreeing is not the chip agreeing.
+- **The line-by-line read of the ~800-line delta.** This pass was differential
+  and mutation-driven: it puts pressure on the code generators from outside
+  rather than reading them. §4's ask is not discharged.
+- **The 1-in-2²⁸ class of bug is not excluded by any of this.** The sweep is
+  hundreds of inputs against a defect density of roughly one in 268 million.
+  What the sweep can catch is a generator wrong on a broad class of programs;
+  what it cannot catch is one wrong on a rare one. Only volume closes that, and
+  the relaunched testnet is the volume — it is now live on rx/2, so this is an
+  item being worked off by the network rather than one waiting on a decision.
+- **The hard-AES sweep is a tenth as deep as the soft-AES one, and the
+  hard-AES full-dataset cells have not been run.** Hard AES has 40 swept inputs
+  against soft AES's 400, and `RX_FAST=1` has only ever been run under soft
+  AES. Running `sh core/pow/randomx/arm64/run.sh <n>` with a larger `n` and
+  `RX_FAST=1` closes both and needs nothing but emulator time — the cheapest
+  open item on this list.
+- **No soak on arm64**, and none under emulation either — the soak is a running
+  node, and the node is not cross-compiled. Every soak number here is amd64.
+- **The harness builds `-O2` against the cgo build's `-O3`.** It does not
+  weaken what is checked — the emitted machine code comes from `emit32` with
+  fixed constants rather than from the optimiser, and the interpreter and
+  helpers that the level *could* change are pinned by upstream's vectors in
+  both modes — but no timing from a harness run is a hashrate.
+- **Still the first production user.** §5's standing risk is untouched: Monero
+  has not activated rx/2, and "a stock XMRig binary found a block on this
+  chain" remains unproven for rx/2. Nothing in this pass could prove it, because
+  nothing in this tree can run XMRig.
