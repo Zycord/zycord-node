@@ -133,6 +133,56 @@ versions of this finding were wrong (below). Removing `dropPeerPendingLocked`
 fails the first at −100; stubbing `ForgetUnrequestedBody` to a no-op fails the
 second at −100.
 
+### I8-H1b — The fix for I8-H1 shipped the evasion this package forbids by name ✅ *fixed; found by review, and it is my own defect*
+
+`ForgetUnrequestedBody` took a block id and deleted on it alone. `pending` is
+keyed by block id and nothing else, so that is an unscoped mutation of it from
+a message path — *"lets any peer cancel any other peer's debt"*, in the words
+of `unservedbody_evasion_internal_test.go`, which exists to forbid exactly this
+and has done since before this audit.
+
+**Reachable through the chunk-continuation path.** `OnBlockChunkFrom` answers a
+mid-transfer chunk with a second `KindGetBlock` whose id it read off the
+*sender's own frame*. The call site matched on message kind alone, so a peer
+sending a valid chunk 0 naming somebody else's announced id received a
+`get-block` for an id it did not owe — and when the serve seam discarded that
+reply, it cleared the victim's entry. Confirmed at the engine seam: the
+attacker's chunk 0 returns `Err=nil` with `Reply=get-block(victim's id)`.
+
+Practically it is cheap to defend against and cheap to attack: 4 MiB to cancel
+one −10. It points toward ban **suppression** rather than the amplification
+I8-H1 is about, so it does not undo that fix — but it disarms the reap quietly,
+which is the worse direction to be wrong in silently.
+
+**Fix.** The delete now requires the pending entry to belong to the connection
+the frame arrived on. The check lives beside the map rather than at the call
+site, because the call site holds no lock and cannot read `pending` without
+one, and a guard next to the thing it protects cannot be forgotten by the next
+caller.
+
+**Why the existing guard did not catch it, which is the part worth keeping.**
+`TestAPeerCannotCancelAnotherPeersUnservedBody` drives `OnBlockChunk` and reads
+the returned `Verdict`. `Node.serve` does something the verdict alone does not
+describe: it takes `v.Reply` and, on the branches where it does not hand the
+frame to the connection, tells the engine to forget the entry that reply was
+for. That seam is a *second* mutator of `pending` reachable from a chunk path,
+and the guard had no view of it. **The guard passes against the unscoped
+version.** It is not vacuous — it kills the mutant it was written for — but its
+coverage stopped one call frame short of where the new code lives, which is the
+same shape as the three instruments this tree has already caught measuring
+nothing, arriving as *a guard that cannot see the path it guards*.
+
+`TestAPeerCannotCancelAnotherPeersUnservedBodyThroughTheServeSeam` covers the
+seam and fails against the unscoped version with `charged=[]`. It asserts its
+own setup first — the chunk must be accepted, the continuation must be produced,
+and it must name the victim's id — or the scoping it is about is never
+exercised.
+
+**The general lesson, since this is the second time in one audit.** I8-L1 was a
+test that could not fail; this is a guard that could not see. Both were written
+by someone who had just read the rule they broke: the file naming this evasion
+is the file the new test was added to.
+
 ### I8-H2 — The same charge, aimed by a third party ⚠️ *confirmed reachable, not fixed*
 
 The mechanism above needs no adversary. It also **has** one, and the attacker
@@ -162,11 +212,23 @@ change and wants its own review before a freeze.
 **What is confirmed and what is not.** Confirmed by reading: the refusal path
 returns no reply; there is no retry, the gossip `get-block` being emitted at
 exactly one line; the ceiling is shared and third-party drainable; the charge
-at V is unconditional. **Not measured:** whether one attacker can actually
-drain 48 × `BlockByteCapacity` inside one window, given that `Node.serve`'s
-per-connection read loop is synchronous and the per-identity budget binds
-first. That number is what separates *structurally reachable* from
-*practically exploitable*, and it is the single measurement I would take next.
+at V is unconditional.
+
+**The measurement this left open has since been taken, and it is worse than
+this section assumed.** `replyBudgetExhausted` reads the node-wide arm
+**first**, and the ceiling is `connSet × BlockByteCapacity` over the
+connections a node *actually holds* — not over the 48-connection adversarial
+maximum this write-up reasoned from. At `connSet = 2`, which is the live
+testnet today, that is 16,000,000 bytes against a per-identity budget of
+8,000,000: **two identities' worth, not forty-eight.** The ceiling sized as a
+node-wide backstop is, on a small network, barely above the per-peer budget it
+sits behind — so the smaller the network, the cheaper this is, and a
+two-node testnet is the cheapest case rather than the safest.
+
+That is now tracked against the freeze rather than left as an unmeasured note.
+It does not change the fix taken here, and it does raise the priority of the
+wire change: an explicit "budgeted, ask later" answer is what makes A's refusal
+legible to V, and nothing else in this layer can distinguish it from silence.
 
 ---
 
@@ -184,8 +246,10 @@ range; `1<<depth` overflows alongside it.
 cross-multiplication — but **imposes no ceiling**. The same argument applies to
 `max_cites_per_block`.
 
-Not reachable from the network: the value is operator configuration and the
-committed parameter sets are far below it. It is recorded because `Validate`
+Not reachable from the network, and that was checked rather than assumed:
+params reach this code solely through `e.Chain.Params()`, and nothing anywhere
+decodes a parameter set off the wire. The committed sets are far below the
+bound. It is recorded because `Validate`
 already refuses far less exotic things, and because the guard is one
 comparison. The panic that made I5-H15 critical is the same function.
 
@@ -315,6 +379,15 @@ because the next auditor should not re-run these.
   five negative-score call sites were read and reasoned about, not driven. The
   reap is the one where the fault and the charge are separated by sixty seconds
   and a different code path, which is why it was the one worth driving.
-- **Nothing here was run under `-race`.** The machine has no cgo, so the
-  detector is unavailable, and no claim is made in either direction about the
-  interleavings in `unregister`'s teardown that `sync.md` §7 already names.
+- **The `-race` gap is closed for the fix, and not for the layer.** CGO is
+  available after all — the earlier claim here was wrong — and the fix plus the
+  whole unserved-body evasion set run clean under the detector. That covers the
+  code this audit added; it says nothing about the interleavings in
+  `unregister`'s teardown that `sync.md` §7 already names, because no test
+  drives them.
+- **I8-H1b is the second defect in this audit found by someone other than its
+  author, in code its author had just written.** The first, I8-L1, was a test
+  that could not fail. Both were caught by mutation — one by mine, one by a
+  reviewer's — and neither by reading. I do not have a method that would have
+  caught either from the inside, and the honest reading of two in one pass is
+  that the rate is a property of the work rather than of these two instances.
