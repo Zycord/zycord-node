@@ -151,6 +151,12 @@ func TestTheJITCodeBufferIsSizedForTheLargerV2Program(t *testing.T) {
 		{"program.hpp", "Instruction programBuffer[RANDOMX_PROGRAM_MAX_SIZE]"},
 		{"jit_compiler.hpp", "int32_t instructionOffsets[RANDOMX_PROGRAM_MAX_SIZE]"},
 		{"vm_interpreted.hpp", "InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE]"},
+		// The arm64 generator patches a fixed template rather than emitting a
+		// free-standing program, so its bound lives in the ASSEMBLY: the slot
+		// the program body is written into is a .fill sized by MAX_SIZE. Its
+		// emit32 is an unchecked store exactly as x86's is, and this is the
+		// one instance of the invariant that no C++ reader would look for.
+		{"jit_compiler_a64_static.S", "RANDOMX_PROGRAM_MAX_SIZE*12"},
 	} {
 		b, err := os.ReadFile(filepath.Join("upstream", c.file))
 		if err != nil {

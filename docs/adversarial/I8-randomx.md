@@ -52,7 +52,17 @@ The sweep is exhaustive over the opcode byte rather than random, so the 13,442 i
 
 **The mutation is what makes this worth writing down.** Recomputing `RandomXCodeSize` from `RANDOMX_PROGRAM_SIZE_V1` — one identifier, exactly the edit a careless backport would make — gives a 12,288-byte buffer, and the same worst-case program **overflows it by 1,154 bytes**, into the superscalar-hash region that `superScalarHashOffset` places immediately after. That would be a heap overflow on *every hash*, on miner and verifier alike.
 
-**Now pinned.** `TestTheJITCodeBufferIsSizedForTheLargerV2Program` in `pinned_test.go` checks all four declarations and the `MAX ≥ V1, V2` relation. It reads the vendored source rather than running the JIT, deliberately: it needs no C toolchain and no amd64, so it runs in the same ordinary `go test ./...` that `TestVendoredTreeMatchesPinned` runs in. All four properties were mutated individually and **all four mutations kill it**.
+**The a64 generator has the same invariant, in assembly, and it is easier to miss.** The a64 JIT does not emit a free-standing program; it patches a fixed template copied from `randomx_program_aarch64`, and the slot the program body is written into is reserved *in the assembly file*:
+
+```
+	# buffer for generated instructions
+	# FDIV_M is the largest instruction taking up to 12 ARMv8 instructions
+	.fill RANDOMX_PROGRAM_MAX_SIZE*12,4,0
+```
+
+`emit32` there is `*(uint32_t*)(code + codePos) = val` — unchecked, exactly as on x86. So `RANDOMX_PROGRAM_MAX_SIZE` appearing in that `.fill` is the arm64 counterpart of `RandomXCodeSize`, and it is the one instance of this invariant that lives in a `.S` file where no C++ reader would look for it. It is pinned by the same test.
+
+**Now pinned.** `TestTheJITCodeBufferIsSizedForTheLargerV2Program` in `pinned_test.go` checks all five declarations and the `MAX ≥ V1, V2` relation. It reads the vendored source rather than running the JIT, deliberately: it needs no C toolchain and no amd64, so it runs in the same ordinary `go test ./...` that `TestVendoredTreeMatchesPinned` runs in. All five properties were mutated individually and **all five mutations kill it**.
 
 ---
 

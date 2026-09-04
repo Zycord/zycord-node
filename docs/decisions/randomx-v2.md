@@ -605,7 +605,14 @@ it by 1,154 bytes** into the superscalar-hash region, on every hash, on miner
 and verifier alike. Upstream got it right; nothing in this tree was checking
 that they had. `TestTheJITCodeBufferIsSizedForTheLargerV2Program` now checks
 it, in the no-build-tag half of the package so it runs without a C toolchain,
-and all four properties it pins were mutated and all four mutations kill it.
+and all five properties it pins were mutated and all five mutations kill it.
+
+**The arm64 generator has the same invariant and it lives in assembly**, which
+is the part most likely to be missed on a future tag bump: the a64 JIT patches
+a fixed template rather than emitting a free-standing program, so the slot the
+program body goes into is a `.fill RANDOMX_PROGRAM_MAX_SIZE*12` in
+`jit_compiler_a64_static.S`, and its `emit32` is an unchecked store exactly as
+x86's is. That `.fill` is pinned by the same test.
 
 **Two things that read as defects and are not, both recorded so they are not
 re-investigated.** `generateProgram` advances `codePos` by v1's
