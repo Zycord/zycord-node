@@ -9,3 +9,18 @@ import "zycord/core/types"
 func (m *Miner) CheckDeclaredTarget(b *types.Block) error {
 	return m.checkDeclaredTarget(b)
 }
+
+// SetNonceSpaceForTest narrows the nonce space so the exhaustion path can be
+// reached without spending 2^32 hash evaluations, and restores it afterwards.
+//
+// It exists in a _test.go file on purpose: nothing in a built binary can call
+// it, so the production width stays a fact of the code rather than something a
+// caller could set. The exhaustion branch is unreachable on any real network —
+// 2^32 RandomX hashes against a 30-second interval — and a branch that can only
+// be reached by waiting for hardware to change is a branch that goes untested
+// until it fires in production.
+func SetNonceSpaceForTest(n uint64) func() {
+	prev := nonceSpace
+	nonceSpace = n
+	return func() { nonceSpace = prev }
+}

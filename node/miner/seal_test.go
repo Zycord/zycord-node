@@ -354,3 +354,296 @@ func TestAMinerRejectsItsOwnDivergentTargetBeforeApplying(t *testing.T) {
 			"returned %v, want ErrTargetDoesNotVerify", err)
 	}
 }
+
+// The nonce space narrows to a handful of values for the tests below.
+//
+// Exhausting it honestly is 2^32 hash evaluations — minutes even against an
+// engine that returns a constant, which is not a cost a suite running on every
+// commit can carry. Narrowing the space exercises the same branch with the
+// same arithmetic; what it does not prove is the production width, and
+// core/types' blob tests pin that separately.
+const testSpace = 64
+
+// neverEngine answers a digest no target this chain can set will ever accept:
+// 0xff in every byte is 2^256-1 read either way round, and a target is a u256,
+// so nothing satisfies it. It also counts the calls, which is how the tests
+// below tell a walked space from a wrapped one.
+type neverEngine struct{ calls atomic.Uint64 }
+
+func (*neverEngine) Name() string { return pow.Dev{}.Name() }
+
+func (e *neverEngine) Hash(types.Hash, []byte) types.Hash {
+	e.calls.Add(1)
+	var h types.Hash
+	for i := range h {
+		h[i] = 0xff
+	}
+	return h
+}
+
+// TestExhaustingTheNonceSpaceIsReportedAsItsOwnEvent pins the distinction the
+// fresh-template answer rests on: a budget that covered the whole nonce space
+// and found nothing is not the same event as a budget that merely ran out.
+//
+// Without the distinction MineOneWhile has nothing to trigger reassembly on,
+// and the only remaining options are wrapping — an unterminating re-test of
+// nonces already rejected — or reporting a spent template as though retrying
+// the identical bytes might work.
+func TestExhaustingTheNonceSpaceIsReportedAsItsOwnEvent(t *testing.T) {
+	defer miner.SetNonceSpaceForTest(testSpace)()
+
+	m := sealHarness(t)
+	m.Engine = &neverEngine{}
+
+	b, err := m.Assemble()
+	if err != nil {
+		t.Fatalf("assembling: %v", err)
+	}
+
+	// A budget short of the space: no solution, but nonces remain.
+	err = m.SealWhile(b, testSpace/2, nil)
+	if !errors.Is(err, miner.ErrNoSolution) {
+		t.Fatalf("a spent budget should report ErrNoSolution, got %v", err)
+	}
+	if errors.Is(err, miner.ErrNonceSpaceExhausted) {
+		t.Fatal("a budget of half the space reported the whole space exhausted; " +
+			"the two events are being conflated, and reassembly would fire on " +
+			"every unlucky search")
+	}
+
+	// A budget covering the space. Reported as exhaustion AND still as
+	// ErrNoSolution, so no existing caller stops recognising it.
+	err = m.SealWhile(b, testSpace, nil)
+	if !errors.Is(err, miner.ErrNonceSpaceExhausted) {
+		t.Fatalf("a budget covering the whole nonce space did not report "+
+			"exhaustion: %v", err)
+	}
+	if !errors.Is(err, miner.ErrNoSolution) {
+		t.Fatalf("exhaustion stopped being an ErrNoSolution; every caller that "+
+			"only needs \"no block this time\" silently changed behaviour: %v", err)
+	}
+}
+
+// TestSealDoesNotWrapOntoNoncesItAlreadyRejected is the anti-wrap assertion.
+//
+// The issue this implements says to reassemble "rather than wrap", and wrapping
+// is the failure with no symptom: a wrapped counter re-tests nonces already
+// rejected, so the miner reports hashrate it is not converting into coverage
+// and, against a fixed template, never terminates at all.
+//
+// Asserted by COUNTING engine calls rather than by observing that the call
+// returned, because a wrap that happened to terminate for some other reason
+// would pass a liveness check. A space of N nonces means exactly N hashes;
+// more than that is a nonce tested twice.
+func TestSealDoesNotWrapOntoNoncesItAlreadyRejected(t *testing.T) {
+	defer miner.SetNonceSpaceForTest(testSpace)()
+
+	m := sealHarness(t)
+	e := &neverEngine{}
+	m.Engine = e
+
+	b, err := m.Assemble()
+	if err != nil {
+		t.Fatalf("assembling: %v", err)
+	}
+	// Deliberately over the space: this is the input a clamp exists for, and
+	// the input a wrap would loop on.
+	if err := m.SealWhile(b, testSpace*4, nil); !errors.Is(err, miner.ErrNonceSpaceExhausted) {
+		t.Fatalf("expected exhaustion, got %v", err)
+	}
+
+	if got := e.calls.Load(); got != testSpace {
+		t.Fatalf("a budget of %d over a space of %d made %d hash calls; more "+
+			"than %d means nonces were re-tested (a wrap), fewer means the "+
+			"space was reported walked when it was not",
+			testSpace*4, testSpace, got, testSpace)
+	}
+}
+
+// relentingEngine refuses every nonce until it has been asked a given number of
+// times, then accepts everything.
+//
+// It is how a test places the first solution in the SECOND template: set the
+// refusal count to exactly one template's worth of nonces, and a miner that
+// gave up after one exhausted space fails while a miner that reassembles
+// passes.
+type relentingEngine struct {
+	refuseFirst uint64
+	calls       atomic.Uint64
+}
+
+func (*relentingEngine) Name() string { return pow.Dev{}.Name() }
+
+func (e *relentingEngine) Hash(types.Hash, []byte) types.Hash {
+	n := e.calls.Add(1)
+	var h types.Hash
+	if n <= e.refuseFirst {
+		for i := range h {
+			h[i] = 0xff
+		}
+	}
+	return h
+}
+
+// TestExhaustionTakesAFreshTemplateRatherThanWrapping is the acceptance test
+// for the policy: on exhaustion, reassemble.
+//
+// The engine refuses every nonce of the first template's whole space and then
+// accepts, so the block that comes back can only have been sealed under a
+// template assembled AFTER the first was exhausted. A miner that wrapped would
+// spin inside the first template forever; a miner that reported the first
+// exhaustion to its caller would return an error instead of a block.
+func TestExhaustionTakesAFreshTemplateRatherThanWrapping(t *testing.T) {
+	defer miner.SetNonceSpaceForTest(testSpace)()
+
+	m := sealHarness(t)
+	e := &relentingEngine{refuseFirst: testSpace}
+	m.Engine = e
+
+	b, _, err := m.MineOneWhile(testSpace, nil)
+	if err != nil {
+		t.Fatalf("a miner that exhausted one template's nonce space should have "+
+			"reassembled and sealed under the next one, got: %v", err)
+	}
+	if b == nil {
+		t.Fatal("no block and no error")
+	}
+
+	// Anti-vacuity: the first testSpace calls are the first template walked end
+	// to end. A total at or below that means the solution came from the FIRST
+	// template and reassembly was never exercised — the shape in which this
+	// test would pass without the behaviour it names.
+	if got := e.calls.Load(); got <= testSpace {
+		t.Fatalf("the whole run cost %d hashes against a space of %d, so the "+
+			"solution came from the first template and reassembly was never "+
+			"reached", got, testSpace)
+	}
+
+	// Reassembly must produce a real seal, not merely an exit.
+	if err := pow.CheckWork(m.Engine, b.Header, m.Chain.Params()); err != nil {
+		t.Fatalf("the block sealed under the fresh template fails the work "+
+			"rule: %v", err)
+	}
+	if b.Header.PoW.ExtraNonce != 0 {
+		t.Fatalf("reassembly rolled ExtraNonce to %d; the chosen answer to "+
+			"exhaustion is a fresh template, and ExtraNonce stays at zero",
+			b.Header.PoW.ExtraNonce)
+	}
+}
+
+// TestExhaustionIsReportedWhenReassemblyCannotHelp pins the bound on the retry
+// loop.
+//
+// Reassembly is progress only if the template actually changed. Against an
+// engine that refuses everything, no number of fresh templates produces a
+// block, and the loop must terminate and say so rather than spin — the failure
+// that replaces an infinite wrap with an infinite reassemble and looks
+// identical from outside.
+func TestExhaustionIsReportedWhenReassemblyCannotHelp(t *testing.T) {
+	defer miner.SetNonceSpaceForTest(testSpace)()
+
+	m := sealHarness(t)
+	e := &neverEngine{}
+	m.Engine = e
+
+	_, _, err := m.MineOneWhile(testSpace, nil)
+	if !errors.Is(err, miner.ErrNonceSpaceExhausted) {
+		t.Fatalf("a miner that cannot seal under any template must report "+
+			"exhaustion rather than loop, got: %v", err)
+	}
+
+	// Anti-vacuity: it must have tried more than one template, or the bound is
+	// being satisfied by never retrying at all.
+	if got := e.calls.Load(); got <= testSpace {
+		t.Fatalf("gave up after %d hashes, one template or less, so the retry "+
+			"never happened and the bound proves nothing", got)
+	}
+}
+
+// TestBuiltInMiningSetsExtraNonceToZero pins the solo-miner policy of
+// docs/ARCHITECTURE.md §12 as an executable claim.
+//
+// ExtraNonce sits INSIDE the proof-of-work seed preimage (PoWSeed zeroes Nonce
+// and only Nonce), so it is not a cosmetic field: every distinct value is a
+// distinct seed and therefore a disjoint nonce space. A miner that wrote a
+// nonzero one would still produce valid blocks — nothing in consensus
+// constrains the field — which is exactly why nothing else in the tree would
+// catch the change.
+func TestBuiltInMiningSetsExtraNonceToZero(t *testing.T) {
+	m := sealHarness(t)
+
+	for h := uint64(1); h <= 8; h++ {
+		b, _, err := m.MineOne(1 << 20)
+		if err != nil {
+			t.Fatalf("height %d: %v", h, err)
+		}
+		if b.Header.PoW.ExtraNonce != 0 {
+			t.Fatalf("height %d mined with ExtraNonce %d; the built-in miner "+
+				"mines at zero and shards nothing (ARCHITECTURE §12)",
+				h, b.Header.PoW.ExtraNonce)
+		}
+	}
+
+	// Anti-vacuity, as a measurement rather than a hope: the assertion above is
+	// only meaningful if ExtraNonce is a field a seal COULD have moved. Set it
+	// by hand, seal, and confirm the sealer leaves it alone — so the zero above
+	// is the assembler's decision and not a field the sealer flattens
+	// regardless, which would make the assertion true no matter what Assemble
+	// wrote.
+	b, err := m.Assemble()
+	if err != nil {
+		t.Fatalf("assembling: %v", err)
+	}
+	b.Header.PoW.ExtraNonce = 0xDEADBEEF
+	if err := m.SealWhile(b, 1<<20, nil); err != nil {
+		t.Fatalf("sealing: %v", err)
+	}
+	if b.Header.PoW.ExtraNonce != 0xDEADBEEF {
+		t.Fatalf("the sealer rewrote ExtraNonce to %d, so the zero asserted "+
+			"above would be the sealer's doing rather than the assembler's and "+
+			"the assertion would prove nothing", b.Header.PoW.ExtraNonce)
+	}
+}
+
+// TestAnAbandonedSearchIsNotReportedAsExhaustion covers the case where a wide
+// budget and an early exit meet.
+//
+// The budget decides whether the space COULD have been walked; the abandon
+// predicate decides whether it WAS. Conflating them tells the caller to
+// reassemble and hash again on the strength of a space nobody walked — and the
+// two moments a search is abandoned are a shutdown and a lost race, which are
+// precisely the moments the miner has been asked to stop. The symptom would be
+// a node that keeps hashing through SIGTERM.
+func TestAnAbandonedSearchIsNotReportedAsExhaustion(t *testing.T) {
+	defer miner.SetNonceSpaceForTest(testSpace)()
+
+	m := sealHarness(t)
+	e := &neverEngine{}
+	m.Engine = e
+
+	b, err := m.Assemble()
+	if err != nil {
+		t.Fatalf("assembling: %v", err)
+	}
+
+	// A budget that covers the whole space, abandoned at the first poll.
+	err = m.SealWhile(b, testSpace, func() bool { return true })
+	if !errors.Is(err, miner.ErrNoSolution) {
+		t.Fatalf("an abandoned search should still report ErrNoSolution, got %v", err)
+	}
+	if errors.Is(err, miner.ErrNonceSpaceExhausted) {
+		t.Fatal("a search abandoned on its first poll reported the nonce space " +
+			"exhausted; the caller would reassemble and hash again on a space " +
+			"nobody walked, which during a shutdown is a node that will not stop")
+	}
+
+	// Anti-vacuity: the abandon must actually have cut the search short. If
+	// the workers had walked the space anyway, the assertion above would be
+	// about a budget rather than about abandonment, and it would hold for the
+	// wrong reason.
+	if got := e.calls.Load(); got >= testSpace {
+		t.Fatalf("the abandoned search still made %d of %d hash calls, so it "+
+			"was not cut short and this test proves nothing about abandonment",
+			got, testSpace)
+	}
+}

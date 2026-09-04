@@ -18,6 +18,25 @@ import (
 // ErrNoSolution reports that the nonce budget ran out before the target was met.
 var ErrNoSolution = errors.New("miner: no solution within the attempt budget")
 
+// ErrNonceSpaceExhausted reports that every nonce under one template was tried
+// and none met the target.
+//
+// It is wrapped alongside ErrNoSolution rather than replacing it, because from
+// a caller's chair "no block this time" is the same outcome either way and no
+// existing errors.Is(err, ErrNoSolution) should stop being true. What it adds
+// is the one fact that changes the *response*: the 2^32 nonces this template
+// owns are spent, so retrying the same template cannot succeed, and the search
+// has to move to a seed the miner has not walked yet.
+//
+// It is reachable only from a caller that asks for a budget of 2^32 or more.
+// At the hardware this milestone targets that is weeks of hashing for one
+// 30-second block, so a live network never sees this; the sentinel exists so
+// that the impossible case has a defined answer rather than an infinite loop,
+// and so that answer is testable without waiting for the hardware to change.
+var ErrNonceSpaceExhausted = errors.New(
+	"miner: every nonce for this template has been tried; the search must move " +
+		"to a fresh template rather than wrap onto nonces already rejected")
+
 // ErrStaleTemplate reports that the tip moved while a block was being sealed.
 //
 // It is separated from real errors because it is not one. On a live network
@@ -221,7 +240,21 @@ func (m *Miner) Assemble() (*types.Block, error) {
 			// The seed epoch is not a choice: the fold pins it to the one
 			// this height implies, so declaring anything else produces a
 			// block this miner's own rules reject.
-			PoW: types.PoWSeal{SeedEpoch: pow.SeedEpochFor(tip.Height+1, p)},
+			//
+			// ExtraNonce is written explicitly, and at zero, even though the
+			// zero value would give the same bytes. It is the solo-miner
+			// policy of ARCHITECTURE §12 stated where a reader of this
+			// assembler can see it, rather than inferred from a field's
+			// absence: ExtraNonce shards a search space *across* miners, and
+			// a solo miner walking one 2^32 space has nobody to be separated
+			// from. Writing it also makes the field's value a decision this
+			// code owns, so that a later edit adding a nonzero value is a
+			// visible change of policy rather than the quiet removal of an
+			// omission nobody recorded a reason for.
+			PoW: types.PoWSeal{
+				ExtraNonce: 0,
+				SeedEpoch:  pow.SeedEpochFor(tip.Height+1, p),
+			},
 		},
 		Certs: selected,
 		// Cites is left empty: gathering competing headers to cite
@@ -598,17 +631,23 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 	// wrapped one would re-test nonces already rejected, reporting hashrate it
 	// was not converting into coverage.
 	//
-	// **This is the minimum this function needs to be correct at the new nonce
-	// width, and deliberately not more.** **This miner never sets or rolls
-	// ExtraNonce: it mines at zero, always.** Rolling it to buy a fresh 2^32
-	// space when this one is exhausted — the mechanism types.PoWSeal describes
-	// — is left to whoever next rewrites this loop, together with the policy
-	// question it carries: whether a solo miner reaching the end of a space
-	// should prefer a fresh ExtraNonce or a fresh template, which re-rolls the
-	// seed through Time and CertRoot anyway. Exhausting 2^32 RandomX hashes inside
-	// one 30-second interval is far out of reach for the hardware this
-	// milestone targets, so the clamp is not a live limit today; it is here so
-	// that reaching it is a bounded search rather than an infinite loop.
+	// **This miner mines at ExtraNonce = 0, always**, and the policy question
+	// the clamp used to leave open is now answered: a solo miner that reaches
+	// the end of a space takes a FRESH TEMPLATE, not a fresh ExtraNonce.
+	// MineOneWhile is where that happens; the reason lives there, with the
+	// reassembly it describes.
+	//
+	// Clamped rather than wrapped, for the reason pow.Solve clamps and for one
+	// more that matters here: exhaustion has to be *distinguishable*. A wrapped
+	// counter re-tests nonces already rejected and can never terminate, so the
+	// caller above could not tell a space genuinely walked to its end from a
+	// search that will never finish, and the fresh-template answer would have
+	// nothing to trigger on. Exhausting 2^32 RandomX hashes inside one
+	// 30-second interval is far out of reach for the hardware this milestone
+	// targets, so this is not a live limit today; it is here so that reaching
+	// it is a bounded search with a defined outcome rather than an infinite
+	// loop.
+	exhaustive := attempts >= nonceSpace
 	if attempts > nonceSpace {
 		attempts = nonceSpace
 	}
@@ -635,6 +674,7 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 		// carrying one worker's nonce and another's digest would fail its own
 		// network's check.
 		winnerHash atomic.Pointer[types.Hash]
+		quit       atomic.Bool
 	)
 	for w := 0; w < threads; w++ {
 		wg.Add(1)
@@ -656,6 +696,14 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 						return
 					}
 					if abandon != nil && abandon() {
+						// Record that this worker LEFT rather than finished.
+						// Without it a budget wide enough to cover the space
+						// reports exhaustion for a search that was abandoned
+						// on its first poll, and the caller then reassembles
+						// and re-hashes on the strength of a space nobody
+						// walked — during a shutdown, exactly when it must
+						// stop.
+						quit.Store(true)
 						return
 					}
 				}
@@ -681,6 +729,22 @@ func (m *Miner) SealWhile(b *types.Block, attempts uint64, abandon func() bool) 
 	wg.Wait()
 
 	if !found.Load() {
+		// A budget that covered the whole nonce space and found nothing is a
+		// different event from a budget that merely ran out, and the caller
+		// acts on the difference: there is no nonce left to try under this
+		// template, so retrying it is guaranteed to fail. Wrapping keeps
+		// errors.Is(err, ErrNoSolution) true for every caller that only needs
+		// "no block this time".
+		//
+		// An ABANDONED search is neither, however wide its budget was. The
+		// workers stop at their next poll, so most of the space is untried,
+		// and calling that exhaustion would tell the caller to reassemble and
+		// hash again on the strength of a space nobody walked — during a
+		// shutdown or a lost race, which are the two moments the miner is
+		// being asked to stop.
+		if exhaustive && !quit.Load() {
+			return fmt.Errorf("%w: %w", ErrNoSolution, ErrNonceSpaceExhausted)
+		}
 		return ErrNoSolution
 	}
 	// Written after every worker has stopped, so the header this returns is
@@ -703,7 +767,32 @@ const pollAttempts = 512
 // nonceSpace is how many nonces one (template, ExtraNonce) pair holds, the
 // width of types.PoWSeal's Nonce. It bounds the attempt budget rather than the
 // header: a budget above it cannot buy a nonce that does not exist.
-const nonceSpace = 1 << 32
+//
+// A var rather than a const, and only so that the exhaustion path is testable.
+// Reaching it honestly costs 2^32 hash evaluations — minutes even against an
+// engine that does nothing but return a constant, and far too slow for a suite
+// that runs on every commit — so the tests narrow the space instead of
+// out-hashing it. Production never assigns it: the only writer is
+// SetNonceSpaceForTest, which lives in a _test.go file and therefore does not
+// exist in a built binary.
+//
+// The alternative considered and rejected was threading a space width through
+// SealWhile's signature, which puts a knob no caller should turn into the
+// public API of the miner in order to reach a branch no network can reach.
+var nonceSpace uint64 = 1 << 32
+
+// maxTemplateRetries bounds how many times MineOneWhile will reassemble after
+// exhausting a template's whole nonce space.
+//
+// It is small on purpose. Reassembly buys a fresh seed only when something the
+// header commits to has moved — the clock, the mempool, the tip — and a miner
+// that has walked 2^32 nonces without any of the three moving is not going to
+// be rescued by a fourth attempt at the same bytes; it is a node whose clock
+// has stopped, and the honest answer to the caller is that there is no block,
+// not an unbounded loop inside one call. The daemon's own mining loop
+// reassembles on the next interval regardless, so a genuinely transient cause
+// gets its retries there, where a shutdown signal can still be seen.
+const maxTemplateRetries = 2
 
 // MineOne assembles, seals and applies a single block.
 func (m *Miner) MineOne(attempts uint64) (*types.Block, *fold.Result, error) {
@@ -723,26 +812,82 @@ func (m *Miner) MineOne(attempts uint64) (*types.Block, *fold.Result, error) {
 // It is enforced here rather than left to callers because it is not a policy
 // choice. A caller that forgot it would not fail; it would quietly mine
 // yesterday's block, and the symptom is indistinguishable from bad luck.
+//
+// # Exhausting a template's nonce space
+//
+// A budget of 2^32 or more walks every nonce one template owns. If none met
+// the target, this REASSEMBLES — it does not wrap onto nonces already
+// rejected, and it does not roll ExtraNonce.
+//
+// Wrapping is excluded outright: re-testing a rejected nonce is a loop that
+// reports hashrate it is not converting into coverage, and against a fixed
+// template it cannot terminate.
+//
+// Between the two ways of reaching a seed nobody has walked, reassembly is the
+// one the architecture already chose. docs/ARCHITECTURE.md §12 says a solo
+// miner "sets it to 0 and loses nothing", because "a template refresh re-rolls
+// the seed anyway" —
+// through Time, through CertRoot as the mempool moves, and through the parent
+// itself if the tip advanced. So reassembly reaches a fresh 2^32 space by the
+// route the design already relies on, and it does it while picking up the
+// transactions and the tip that arrived during the search — which a rolled
+// ExtraNonce, hashing a template now minutes stale, would not.
+//
+// ExtraNonce is left at zero because its job is *separation between* miners,
+// not depth for one: it is what lets a pool hand each connection a space no
+// other connection is walking (ARCHITECTURE §12, types.PoWSeal). A solo miner
+// has nobody to be separated from, and using it for depth here would give this
+// loop a second mechanism doing the first one's job. That matches the
+// Monero/XMRig precedent, where extra-nonce sharding is the pool's instrument
+// — varied per connection or per job in the coinbase's tx_extra — while a
+// miner that exhausts its nonce range asks for new work rather than rolling
+// the pool's field itself.
+//
+// The loop is bounded rather than infinite. Reassembly is only progress if the
+// template actually changed, and a node whose clock, mempool and tip are all
+// static reassembles the identical header and would spin forever on it. So an
+// exhausted space is retried a small fixed number of times and then reported,
+// which is also what keeps this reachable in a test without 2^32 hashes.
+//
+// None of this is reachable on a live network. 2^32 RandomX hashes is weeks of
+// work for the hardware this milestone targets, against a 30-second interval.
+// It is written down because "unreachable" is a statement about hardware, and
+// the alternative to defining the case is an infinite loop that appears when
+// the statement stops being true.
 func (m *Miner) MineOneWhile(attempts uint64, extra func() bool) (*types.Block, *fold.Result, error) {
-	b, err := m.Assemble()
-	if err != nil {
-		return nil, nil, err
-	}
-	parent := b.Header.ParentID
-	abandon := func() bool {
-		if extra != nil && extra() {
-			return true
+	var b *types.Block
+	for try := 0; ; try++ {
+		var err error
+		b, err = m.Assemble()
+		if err != nil {
+			return nil, nil, err
 		}
-		return m.Chain.Tip().ID() != parent
-	}
-	if err := m.SealWhile(b, attempts, abandon); err != nil {
+		parent := b.Header.ParentID
+		abandon := func() bool {
+			if extra != nil && extra() {
+				return true
+			}
+			return m.Chain.Tip().ID() != parent
+		}
+		err = m.SealWhile(b, attempts, abandon)
+		if err == nil {
+			break
+		}
 		// A search abandoned because the tip moved is the same event as a seal
 		// that lost the race, and callers already know what to do with that.
 		// Reporting it as ErrNoSolution would make healthy competition look
 		// like a miner that cannot find blocks — which is the mistake I4-M3
 		// records in the other direction.
+		//
+		// Checked before exhaustion: a moved tip makes the template stale for
+		// a reason the caller already handles, and reassembling here would
+		// hide a lost race behind a retry.
 		if errors.Is(err, ErrNoSolution) && m.Chain.Tip().ID() != parent {
 			return nil, nil, ErrStaleTemplate
+		}
+		// Every nonce under this template is spent. Take a fresh one.
+		if errors.Is(err, ErrNonceSpaceExhausted) && try < maxTemplateRetries {
+			continue
 		}
 		return nil, nil, err
 	}
