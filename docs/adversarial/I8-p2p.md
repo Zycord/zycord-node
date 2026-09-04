@@ -91,7 +91,42 @@ clears that to keep a late re-delivery applicable, and here there is neither a
 charge nor a delivery to protect.
 
 The rule is unweakened in the direction it exists for. An announcer that was
-asked and would not serve still leaves its entry standing and is still charged.
+asked and would not serve, on a connection that stays up, still leaves its
+entry standing and is still charged.
+
+**What the fix gives up, at full width.** A peer that announces and then
+*deliberately* hangs up before the window elapses now escapes the −10 it used
+to pay. That is a real concession and not a rounding error, so it is stated
+rather than implied: the charge is now conditional on the connection
+surviving the window.
+
+Three things bound it. The announcement had to pass `work.Check` to reach
+`pending` at all, so each wasted slot costs the sender a real proof-of-work
+evaluation — this is not a free way to consume the reap. The disconnect
+forfeits the connection, which is the resource every other defence in this
+layer is keyed on, and re-establishing one is priced by the listener's
+per-source admission. And the entry is dropped rather than retained, so the
+abandoned announcement costs this node nothing to hold.
+
+Set against that, the behaviour it replaces charged an *honest* peer for the
+same event, permanently and to disk. Between a defence that misses a
+disconnecting liar and one that bans a restarting friend, this layer's own
+stated preference — the exemptions around `ErrOrphanOutOfWindow`,
+`ErrWrongParent` and the whole of `SyncPenalty` — is consistently the first.
+Charging the liar without charging the friend needs the announcer's *identity*
+to carry the debt across the socket, and `ReapUnservedBodies` is handed a
+connection address and never a public key. That is the shape of the real fix
+and it is larger than this one.
+
+**And the identity half already behaved this way**, which is the argument that
+settled the choice. `Node.reapUnservedBodies` recovers the key by looking the
+address up in `n.conns`, so a departed peer was *already* exempt from the
+identity-keyed charge — its comment says so, and prices the alternative:
+*"holding a public key per pending announcement so a ten-point penalty can
+outlive the connection buys less than it costs."* The two tallies simply
+disagreed about departure, and only the address-keyed one persisted to disk.
+This makes them agree, in the direction the surviving half had already
+chosen.
 
 **Both tests are mutation-proven**, which matters because the first two
 versions of this finding were wrong (below). Removing `dropPeerPendingLocked`
