@@ -10,7 +10,7 @@ The result is a network whose **per-node cost falls as the network grows**, inst
 
 ## Mine in 60 seconds
 
-The public testnet relaunches 2026-09-06 00:00 UTC. Start a node before then
+The public testnet relaunches 2026-09-04 06:00 UTC. Start a node before then
 and it waits for the hour on its own — there is nothing to restart. There is no
 faucet — coins come from mining, which is the distribution mainnet gets too.
 
@@ -75,7 +75,7 @@ Read the [whitepaper](docs/whitepaper.md) for the argument, the [architecture sp
 
 ## Status
 
-**Pre-genesis. The public testnet relaunches 2026-09-06 00:00 UTC; mainnet
+**Pre-genesis. The public testnet relaunches 2026-09-04 06:00 UTC; mainnet
 genesis is 2026-09-15 00:00 UTC.** The first testnet ran from 2026-08-30 and is
 retired: the hashing blob was reshaped so that stock XMRig can mine this chain,
 which is a consensus change no chain can be continued across. Consensus

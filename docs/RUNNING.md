@@ -127,8 +127,8 @@ zycordd --devnet --dir ./devnet \
 **Start it whenever you like.** A node started before its network's first block is due does not mine early and does not need to be started again at the hour: it refuses to build a block whose timestamp its own clock has not reached, waits, and begins on its own. It says so while it waits, with the time it is waiting for and how long is left:
 
 ```
-waiting to mine: the next block cannot be dated before 2026-09-06T00:00:01Z
-(unix 1788652801), and this node's clock reads 2026-09-05T20:12:31Z — 3h47m30s
+waiting to mine: the next block cannot be dated before 2026-09-04T06:00:01Z
+(unix 1788501601), and this node's clock reads 2026-09-04T02:12:31Z — 3h47m30s
 to wait. Leave this running: mining starts on its own and there is nothing to
 restart or reconfigure.
 ```

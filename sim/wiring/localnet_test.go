@@ -61,7 +61,7 @@ func loadLocalnet(t *testing.T) *params.Params {
 // cover, while its README goes on claiming otherwise.
 func TestTheLocalNetRecipeRunsTheRealEngine(t *testing.T) {
 	p := loadLocalnet(t)
-	if p.PoWEngine != "randomx-v1" {
+	if p.PoWEngine != "randomx-v2" {
 		t.Errorf("the local-net recipe declares pow_engine %q; it exists to exercise "+
 			"the RandomX path, and on any other engine it is devnet with extra steps",
 			p.PoWEngine)
@@ -162,7 +162,7 @@ func TestTheLocalNetIsNotShipped(t *testing.T) {
 // docs/localnet/README.md tells a reader that `make localnet` is the whole
 // recipe. That sentence is only true while the target exists, points at this
 // parameter file, and uses the randomx-tagged binary — a target built on the
-// pure-Go `zycordd` would refuse to start against a randomx-v1 network, which
+// pure-Go `zycordd` would refuse to start against a randomx-v2 network, which
 // is correct behaviour producing a completely mystifying experience for
 // somebody following the documented path.
 func TestTheMakefileRunsTheRecipeTheReadmeDocuments(t *testing.T) {

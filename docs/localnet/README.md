@@ -48,7 +48,11 @@ make localnet
 That is the whole recipe. It creates `.localnet/`, generates a throwaway payout
 key, and starts a mining node on
 [`params.randomx-localnet.json`](params.randomx-localnet.json). Ctrl-C stops
-it. To start over, delete the directory — this network is reset from genesis,
+it. It mines from the first second: this network's `genesis_time` is anchored in
+the past on purpose, because a node refuses to build a block whose timestamp its
+own clock has not reached, and a local net dated forward would start, peer, log
+`waiting to mine` and produce nothing until that hour arrived — which on a
+throwaway network reads as a hang rather than as the correct behaviour it is. To start over, delete the directory — this network is reset from genesis,
 never migrated:
 
 ```sh
