@@ -1870,7 +1870,7 @@ func (n *Node) serve(conn *Conn, outbound bool) {
 		unrequested := func() {
 			if v.Reply != nil && v.Reply.Kind == KindGetBlock {
 				if g, err := UnmarshalGetBlock(v.Reply.Payload); err == nil {
-					n.Engine.ForgetUnrequestedBody(g.ID)
+					n.Engine.ForgetUnrequestedBody(conn.Addr, g.ID)
 				}
 			}
 		}

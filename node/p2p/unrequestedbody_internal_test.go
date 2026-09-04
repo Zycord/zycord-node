@@ -159,7 +159,7 @@ func TestADiscardedGetBlockDoesNotBecomeAnUnservedBodyCharge(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: the get-block did not decode: %v", round, err)
 		}
-		e.ForgetUnrequestedBody(g.ID)
+		e.ForgetUnrequestedBody(honest, g.ID)
 
 		now = now.Add(PendingBodyTimeout + time.Second)
 		e.ReapUnservedBodies(now)
