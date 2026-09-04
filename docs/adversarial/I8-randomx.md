@@ -135,7 +135,7 @@ Three independent implementations, decoded rather than eyeballed:
 |---|---|---|
 | interpreter (`bytecode_machine.hpp`) | `((flags & V2) == 0) \|\| ((isrc & 60) == 0)` | literal `60` |
 | x86 JIT (`h_CFROUND`) | `test eax, {0xa9,0x00,0x80,0x07,0x00}` after `rol rax, 13` | imm32 = `0x78000` = **60 << 13**, and the compensating `rol 13` puts `isrc` bits 2–5 at bits 15–18 → **tests the same four bits** |
-| a64 JIT (`h_CFROUND`) | `emit32(0xF27E0E9F)` | decoded as AArch64 logical-immediate `N=1, immr=62, imms=3` → **`tst tmp, #60`** |
+| a64 JIT (`h_CFROUND`) | `emit32(0xF27E0E9F)` | decoded as AArch64 logical-immediate `N=1, immr=62, imms=3` → a **`tst` of `tmp` against the immediate 60** |
 
 All three test bits 2–5 of `rotr(src, imm)`, and all three are gated on `RANDOMX_FLAG_V2`. The x86 one is the interesting case: the `60 << 13` is not a typo but the consequence of the JIT rotating left by 13 instead of right by `imm`, and it took decoding the immediate to see that it agrees.
 

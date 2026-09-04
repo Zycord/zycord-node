@@ -629,14 +629,15 @@ branch's overlapping tail write never crosses a worker boundary, so
 **Three consensus-critical agreements were checked rather than assumed.**
 CFROUND's new `isrc & 60` guard agrees across the interpreter, the x86 JIT
 (`60 << 13` after a compensating `rol 13`) and the a64 JIT (`0xF27E0E9F`
-decoding to `tst #60`) — the last two by decoding the immediates, since neither
-is legible as `60` in the source. rx/2's dataset-pointer change — modifying
-`ma` before the swap rather than `mx` after it, and reading from the pre-XOR
-`ma` — was modelled from both the interpreter and the assembly and compared
-over **600,000 random states under both versions with zero mismatches**, with
-two plausible mis-implementations each killing the model at a 100% rate. And
-the masked dataset read is in bounds by construction with **zero slack**: the
-largest possible read ends at exactly `DatasetSize`.
+decoding to a `tst` against the immediate 60) — the last two by decoding the
+immediates, since neither is legible as `60` in the source. rx/2's
+dataset-pointer change — modifying `ma` before the swap rather than `mx`
+after it, and reading from the pre-XOR `ma` — was modelled from both the
+interpreter and the assembly and compared over **600,000 random states under
+both versions with zero mismatches**, with two plausible mis-implementations
+each killing the model at a 100% rate. And the masked dataset read is in
+bounds by construction with **zero slack**: the largest possible read ends
+at exactly `DatasetSize`.
 
 **What the read closed on arm64, and what it did not.** Cross-assembling
 `jit_compiler_a64_static.S` and reading the symbol table shows that **every
