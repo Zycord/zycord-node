@@ -166,9 +166,18 @@ func TestShutdownWaitsForARequestStillInsideAHandlerAndCloseDoesNot(t *testing.T
 // directly would notice.
 func TestTheServerNewBuildsIsRoutedToThisPackagesMux(t *testing.T) {
 	s := New(nil, nil, DefaultConfig(), nil)
-	mux, ok := s.srv.Handler.(*http.ServeMux)
+	if s.srv.Handler == nil {
+		t.Fatal("the server's handler is nil, so ListenAndServe would serve " +
+			"http.DefaultServeMux")
+	}
+	// The handler is this package's mux behind the loopback-Host guard
+	// (guardHost), so the routed mux is reached through the wrapper rather
+	// than being the handler itself. Unwrapped here so that the routing
+	// assertion below stays what it was: a check that these patterns resolve,
+	// made without invoking a handler against the nil chain New was given.
+	mux, ok := s.mux.(*http.ServeMux)
 	if !ok {
-		t.Fatalf("the server's handler is %T, not this package's mux", s.srv.Handler)
+		t.Fatalf("the routed handler is %T, not this package's mux", s.mux)
 	}
 	for _, route := range []string{"/status", "/head", "/block", "/submit", "/metrics"} {
 		_, pattern := mux.Handler(httptest.NewRequest(http.MethodGet, route, nil))
@@ -176,6 +185,19 @@ func TestTheServerNewBuildsIsRoutedToThisPackagesMux(t *testing.T) {
 			t.Errorf("%s resolves to pattern %q; the server ListenAndServe drives is not the "+
 				"routed one", route, pattern)
 		}
+	}
+	// And the guard is in the served path. Without this the routing check
+	// above would pass just as well against an unguarded mux, which is the
+	// vacuity that made the test worth extending rather than only fixing.
+	// /status on a nil chain would panic if the request reached the handler,
+	// so a 403 here is also positive evidence that it did not.
+	r := httptest.NewRequest(http.MethodGet, "/status", nil)
+	r.Host = "rebound.attacker.example"
+	rec := httptest.NewRecorder()
+	s.srv.Handler.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("a non-loopback Host got status %d, want 403: the rebinding "+
+			"guard is not in the served path", rec.Code)
 	}
 }
 

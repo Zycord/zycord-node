@@ -109,6 +109,12 @@ type Server struct {
 	lastSweep time.Time
 	now       func() time.Time
 	srv       *http.Server
+	// mux is the routed handler Handler() built, kept so that the wiring test
+	// can inspect routing without going through guardHost — and so that the
+	// guard being a wrapper does not make "is this server routed to our own
+	// mux" unanswerable. Written once, by Handler, before the serve goroutine
+	// starts.
+	mux http.Handler
 	// ln is the bound listener, set by Listen and served by ListenAndServe.
 	// Listen runs before the serve goroutine is launched, so the go statement
 	// that starts ListenAndServe is the happens-before edge that publishes it;
@@ -230,7 +236,99 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/network", s.read(s.handleNetwork))
 	// The one write, and the only route that accepts a verb other than GET.
 	mux.HandleFunc("/submit", s.wrap(s.handleSubmit))
-	return mux
+	s.mux = mux
+	return guardHost(mux)
+}
+
+// guardHost refuses any request whose Host header is not a loopback name.
+//
+// **A loopback bind is not by itself a defence against a browser**, and that
+// is the whole of this wrapper. The same-origin policy stops a page READING a
+// cross-origin reply; it does not stop it SENDING the request, and a POST
+// carrying `Content-Type: text/plain` is a CORS "simple request" that goes out
+// with no preflight at all. So any page the operator merely visits can POST a
+// certificate to 127.0.0.1:9420 — which /submit accepts and, on admission,
+// gossips to real peers through AnnounceCertificate. The write leaves the
+// machine. With DNS rebinding — a name the attacker controls, re-resolved to
+// 127.0.0.1 after their page has loaded — the page's own origin becomes
+// loopback and the replies become readable too, which turns every read here
+// into an enumeration of the operator's addresses and balances.
+//
+// docs/RUNNING.md already names DNS rebinding as "the real attack against a
+// server on loopback", and wallet/webui carries this exact guard
+// (loopbackHost, there) for its own surface. The node's RPC did not, and the
+// asymmetry was the defect rather than the reasoning: nothing about a node
+// makes it a less interesting target than a wallet.
+//
+// **The Host header is the right instrument, and Origin is not.** A browser
+// reports Host faithfully and an attacker cannot forge it into a loopback name
+// without giving up the rebinding — the name in the URL is what the browser
+// puts here. Origin would be the wrong rule for this API: the RPC's clients
+// are curl, zcd and monitoring, none of which send Origin at all, so requiring
+// one would refuse every legitimate caller. Requiring a loopback Host refuses
+// none of them: curl sends `Host: 127.0.0.1:9420` because that is the address
+// it was given.
+//
+// The port is deliberately not compared. The attacker must already use our
+// port for the request to arrive, so it carries no information; ignoring it is
+// also what keeps `ssh -L 9999:127.0.0.1:9420` working, which is the
+// documented way to reach this RPC on a remote host. Same reasoning, same
+// wording, as wallet/webui's own loopbackHost.
+//
+// An operator who deliberately exposes the RPC on a routable address is
+// refused by this too, which is correct rather than incidental: reaching it
+// then requires naming a loopback Host, which a reverse proxy does by setting
+// it, and an unproxied public RPC is the configuration this guard should be
+// refusing anyway.
+func guardHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) {
+			// 403 with a body that names the cause, because the operator who
+			// meets this while setting up a proxy needs to know which header
+			// to set, and the attacker learns nothing they did not already
+			// know.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"this RPC serves only requests whose ` +
+				`Host is loopback; a proxy must set Host: 127.0.0.1"}` + "\n"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// loopbackHost reports whether a Host header names the loopback interface.
+//
+// **There are now three loopback checks in this tree and they are not
+// duplicates**, which is worth stating so that a future reader does not
+// helpfully unify them. wallet/webui's loopbackHost answers this same question
+// for that interface and is deliberately spelled separately, because these are
+// different packages with different exposure and a shared helper would couple
+// the node's guard to the wallet's. stratum.IsLoopback answers a *different*
+// question — whether a BIND address is loopback, for the exposure warning —
+// where the empty host means "every interface" rather than "no header". All
+// three refuse the empty string; only this one and webui's are about a value
+// an attacker chooses.
+//
+// An EMPTY Host is refused. HTTP/1.1 requires the header and Go's server
+// rejects a request without one before a handler runs, so this is unreachable
+// over the wire; it is written as a refusal anyway because the failure a
+// default-allow would produce is silent and total, and because httptest can
+// construct one.
+func loopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	}
+	name = strings.Trim(name, "[]")
+	if name == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(name)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Listen binds cfg.Addr. It is split out of ListenAndServe so a caller can

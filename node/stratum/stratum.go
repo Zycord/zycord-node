@@ -514,6 +514,17 @@ func (s *Server) fallbackPayout() types.Address { return s.cfg.Payout }
 // cannot disagree with what the node actually verifies against.
 func (s *Server) algo() (string, bool) { return algoFor(s.engine.Name()) }
 
+// Algo reports the algorithm identifier this endpoint advertises to miners,
+// and whether any Stratum miner implements it.
+//
+// Exported for the wiring's "listening" line, which used to spell the
+// identifier as a constant — "rx/0" — while algoFor resolved the running
+// engine to "rx/2". The log therefore named an algorithm this endpoint does
+// not serve, on a line an operator reads while bringing a network up. That is
+// the same defect algoFor's own comment records an earlier revision shipping
+// into the protocol; it had survived in the log.
+func (s *Server) Algo() (string, bool) { return s.algo() }
+
 func (s *Server) logf(format string, args ...any) {
 	if s.cfg.Logger != nil {
 		s.cfg.Logger.Printf(format, args...)
