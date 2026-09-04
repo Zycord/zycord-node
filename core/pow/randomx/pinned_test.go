@@ -7,7 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -104,4 +107,89 @@ func hashTree(root string) (string, error) {
 		fmt.Fprintf(outer, "%x  %s\n", byPath[p], p)
 	}
 	return hex.EncodeToString(outer.Sum(nil)), nil
+}
+
+// TestTheJITCodeBufferIsSizedForTheLargerV2Program pins the one line in the
+// vendored x86 code generator that stands between rx/2 and a heap overflow on
+// every hash.
+//
+// rx/2 raised the program length from 256 instructions to 384. The JIT emits
+// into a fixed buffer sized at compile time, and the instruction buffer,
+// the loop bounds and that size are three separate expressions in three
+// separate files. Upstream widened all of them — `Program::programBuffer` and
+// `JitCompilerX86`'s `instructionOffsets` to `RANDOMX_PROGRAM_MAX_SIZE`, the
+// loops to `getSize(flags)`, and `RandomXCodeSize` to `MAX_SIZE` as well. If
+// any ONE of them had been left at the v1 constant while the others moved, the
+// generator would write past the end of the buffer.
+//
+// The x86 generator keeps its own `std::vector<int32_t>` for instruction
+// offsets rather than using CompilerState's fixed array, so on THIS build the
+// whole of the protection is RandomXCodeSize. The array is pinned anyway
+// because it is real code sized by MAX_SIZE and the RV64 compiler builds on
+// it.
+//
+// **This is not a hypothetical, it is a measurement.** Compiling a
+// 384-instruction program built entirely from the largest-emitting opcode
+// reaches 13442 bytes; the buffer is 16384. Recomputing `RandomXCodeSize` from
+// the v1 constant instead gives 12288, and the same program overflows it by
+// 1154 bytes — into the superscalar hash region that sits immediately after.
+// The sweep behind those numbers is exhaustive over all 256 opcodes rather
+// than random, so it is a bound and not a sample.
+//
+// What is checked here is the SOURCE, not the behaviour, and deliberately so.
+// A behavioural test would need the private C++ headers and would run only on
+// amd64; this runs everywhere, without a C toolchain, and fails on exactly the
+// edit that would reintroduce the defect — a `MAX_SIZE` quietly changed back
+// to a version-specific constant.
+func TestTheJITCodeBufferIsSizedForTheLargerV2Program(t *testing.T) {
+	// The buffer must be sized by the MAXIMUM program length, never by a
+	// version-specific one: the generator does not know which version it will
+	// be asked for until setFlags, and the buffer is allocated in the
+	// constructor, before that.
+	for _, c := range []struct{ file, want string }{
+		{"jit_compiler_x86.cpp", "MaxRandomXInstrCodeSize * RANDOMX_PROGRAM_MAX_SIZE"},
+		{"program.hpp", "Instruction programBuffer[RANDOMX_PROGRAM_MAX_SIZE]"},
+		{"jit_compiler.hpp", "int32_t instructionOffsets[RANDOMX_PROGRAM_MAX_SIZE]"},
+		{"vm_interpreted.hpp", "InstructionByteCode bytecode[RANDOMX_PROGRAM_MAX_SIZE]"},
+	} {
+		b, err := os.ReadFile(filepath.Join("upstream", c.file))
+		if err != nil {
+			t.Fatalf("reading vendored %s: %v", c.file, err)
+		}
+		if !strings.Contains(string(b), c.want) {
+			t.Errorf("upstream/%s no longer contains %q.\n"+
+				"Every buffer the program is written into, and the code buffer "+
+				"the JIT emits into, must be sized by RANDOMX_PROGRAM_MAX_SIZE. "+
+				"Sizing any of them by RANDOMX_PROGRAM_SIZE_V1 while rx/2 runs "+
+				"384-instruction programs is a write past the end of the "+
+				"allocation on every hash.", c.file, c.want)
+		}
+	}
+
+	// And the two sizes must still bracket each other the way the delta
+	// assumes. If upstream ever raised V2 above MAX, every bound above would
+	// be too small while still mentioning MAX_SIZE.
+	b, err := os.ReadFile(filepath.Join("upstream", "configuration.h"))
+	if err != nil {
+		t.Fatalf("reading vendored configuration.h: %v", err)
+	}
+	sizes := map[string]int{}
+	for _, name := range []string{"RANDOMX_PROGRAM_SIZE_V1", "RANDOMX_PROGRAM_SIZE_V2", "RANDOMX_PROGRAM_MAX_SIZE"} {
+		m := regexp.MustCompile(`(?m)^#define\s+` + name + `\s+(\d+)`).FindStringSubmatch(string(b))
+		if m == nil {
+			t.Fatalf("configuration.h no longer defines %s", name)
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("%s is not a number: %v", name, err)
+		}
+		sizes[name] = n
+	}
+	if sizes["RANDOMX_PROGRAM_MAX_SIZE"] < sizes["RANDOMX_PROGRAM_SIZE_V2"] ||
+		sizes["RANDOMX_PROGRAM_MAX_SIZE"] < sizes["RANDOMX_PROGRAM_SIZE_V1"] {
+		t.Fatalf("RANDOMX_PROGRAM_MAX_SIZE=%d does not cover V1=%d/V2=%d; "+
+			"every buffer sized by MAX_SIZE is now too small for the program "+
+			"that will be written into it",
+			sizes["RANDOMX_PROGRAM_MAX_SIZE"], sizes["RANDOMX_PROGRAM_SIZE_V1"], sizes["RANDOMX_PROGRAM_SIZE_V2"])
+	}
 }

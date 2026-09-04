@@ -542,9 +542,12 @@ the comment claims. The comment should be corrected to say so.
   coherency around self-modifying code, and that is precisely where the JIT is
   most exposed. One command, no project — but it has not been run on a chip,
   and the emulator agreeing is not the chip agreeing.
-- **The line-by-line read of the ~800-line delta.** This pass was differential
-  and mutation-driven: it puts pressure on the code generators from outside
-  rather than reading them. §4's ask is not discharged.
+- **The line-by-line read of the ~800-line delta.** *Closed on the compiled
+  surface by section 8.9 below; still open for RISC-V, which this build does
+  not compile.* This pass was differential and mutation-driven: it puts
+  pressure on the code generators from outside rather than reading them. §4's
+  ask is discharged for the code that ships and explicitly not for the code
+  that does not.
 - **The 1-in-2²⁸ class of bug is not excluded by any of this.** The sweep is
   hundreds of inputs against a defect density of roughly one in 268 million.
   What the sweep can catch is a generator wrong on a broad class of programs;
@@ -568,3 +571,102 @@ the comment claims. The comment should be corrected to say so.
   has not activated rx/2, and "a stock XMRig binary found a block on this
   chain" remains unproven for rx/2. Nothing in this pass could prove it, because
   nothing in this tree can run XMRig.
+
+### 8.9 The line-by-line read, and what it leaves open
+
+The gap 8.6 named first and 8.8 left open — "**the ~800-line delta between
+v1.2.3 and v2.0.1 has never been read line by line**" — was read. The findings
+are in [I8-randomx](../adversarial/I8-randomx.md); this section records only
+what moved, because this is the section the freeze decision is taken against.
+
+**Nothing found is a consensus defect, and nothing found is memory-unsafe on
+any path a peer can reach.** That was the read's first priority and it is the
+one result worth stating without qualification.
+
+**The denominator was wrong, and correcting it is most of what made the read
+tractable.** The full `v1.2.3..v2.0.1` diff over `src/` minus `tests/` is
+**4,428 insertions across 65 files**, not ~800 lines. But `vendor.sh` compiles
+14 of those files: the rest is RISC-V (~2,450 lines, in no source list), the
+MASM variant of the x86 assembly, and test code. **The compiled surface is
+~1,650 changed lines across 32 files, and all 32 were read.** §4's "~800 lines
+concentrated in two JIT generators and hand-written assembly" is an accurate
+description of the compiled half; it was never a description of the whole diff.
+
+**The most valuable thing the read found is a line that is correct.**
+`RandomXCodeSize` in `jit_compiler_x86.cpp` is computed from
+`RANDOMX_PROGRAM_MAX_SIZE`. Because rx/2's programs are 384 instructions
+against v1's 256, and because the x86 JIT's four `emit` primitives have **no
+bounds check of any kind**, that single identifier is the whole of what
+prevents the generator writing past its allocation. Compiling the worst case —
+all 256 opcodes swept, 384 instructions each — reaches **13,442 bytes against
+a 16,384-byte buffer** on the mining path and 13,495 on the light one.
+Recomputing the bound from the v1 constant, one identifier changed, **overflows
+it by 1,154 bytes** into the superscalar-hash region, on every hash, on miner
+and verifier alike. Upstream got it right; nothing in this tree was checking
+that they had. `TestTheJITCodeBufferIsSizedForTheLargerV2Program` now checks
+it, in the no-build-tag half of the package so it runs without a C toolchain,
+and all four properties it pins were mutated and all four mutations kill it.
+
+**Two things that read as defects and are not, both recorded so they are not
+re-investigated.** `generateProgram` advances `codePos` by v1's
+`readDatasetSize` after copying either block — safe only because assembling the
+static file shows both blocks are **66 bytes** (v2 reorders the same seven
+instructions), and fragile if upstream ever lengthens one. And
+`randomx_init_dataset`'s new `itemCount < 4` branch fills a 256-byte **stack**
+buffer from JIT-generated code; it is unreachable from this binding because
+`DatasetItemCount` is 34,078,719 ≡ 3 (mod 4) and no span across worker counts
+1–64 is ever smaller than 4. The same enumeration shows the new unaligned
+branch's overlapping tail write never crosses a worker boundary, so
+`initDataset`'s concurrency assumption survives v2's rewrite.
+
+**Three consensus-critical agreements were checked rather than assumed.**
+CFROUND's new `isrc & 60` guard agrees across the interpreter, the x86 JIT
+(`60 << 13` after a compensating `rol 13`) and the a64 JIT (`0xF27E0E9F`
+decoding to `tst #60`) — the last two by decoding the immediates, since neither
+is legible as `60` in the source. rx/2's dataset-pointer change — modifying
+`ma` before the swap rather than `mx` after it, and reading from the pre-XOR
+`ma` — was modelled from both the interpreter and the assembly and compared
+over **600,000 random states under both versions with zero mismatches**, with
+two plausible mis-implementations each killing the model at a 100% rate. And
+the masked dataset read is in bounds by construction with **zero slack**: the
+largest possible read ends at exactly `DatasetSize`.
+
+**What the read closed on arm64, and what it did not.** Cross-assembling
+`jit_compiler_a64_static.S` and reading the symbol table shows that **every
+patched instruction on both the light and full paths falls inside the
+`__builtin___clear_cache` range**, which is not visible from the source because
+`codePos` is repositioned to label offsets rather than advanced. The one write
+outside the range, `aes_lut_pointers` on the v2 soft-AES path, is a `.fill`
+data slot consumed by `ldp` and correctly needs no I-cache maintenance. **This
+does not weaken 8.8's arm64 caveat in the slightest.** It is static reasoning
+from label offsets; it says the code generator emits the right bytes and clears
+the right range, and it says nothing about a real core's cache coherency around
+self-modifying code. **The real-silicon run is still owed.**
+
+**The pinning pipeline was verified rather than trusted.** 8.2's two fixes both
+hold: the tree hash is identical under four caller locales with `LC_ALL=C` and
+**the bug reproduces exactly** (`d96521a5…` under `en_US.UTF-8`) without it; a
+fresh clone recomputes the pinned hash, so the CRLF fix holds where it matters.
+And the stronger claim was checked directly rather than through the hash —
+`git archive` of the pinned commit, tests removed, `diff -r` against the
+vendored tree: **no differences.** The vendored bytes are upstream's, verified
+against upstream rather than against a number this repository wrote itself.
+
+#### What section 8.9 does NOT close
+
+- **The 1-in-2²⁸ class of bug is untouched by a read, and this is the important
+  one.** Reading finds defects that are wrong on their face. The v2.0 bug that
+  motivates all of this was wrong on roughly one input in 268 million and would
+  have read as perfectly correct. 8.8's judgement stands unchanged: only volume
+  closes it, and the testnet is the volume.
+- **Real arm64 hardware.** Unchanged from 8.8, and 8.9 adds only static
+  evidence. The emulator agreeing is not the chip agreeing, and neither is a
+  symbol table.
+- **The RISC-V delta, ~2,450 lines, was not read.** Justified because
+  `vendor.sh` compiles none of it. If this chain ever ships a RISC-V build,
+  that code is unaudited and this sentence is the record that it is.
+- **`jit_compiler_x86_static.asm`**, the MASM variant, was not read; the GNU
+  `.S` is what this build assembles.
+- **Still the first production user.** §5's standing risk is untouched by a
+  read of the source, and "a stock XMRig binary found a block on this chain"
+  remains unproven for rx/2.
