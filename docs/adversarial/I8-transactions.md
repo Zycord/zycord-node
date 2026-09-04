@@ -4,21 +4,23 @@
 
 **Persona:** the auditor who assumes the *reading* is worthless. I1 audited this surface at M0, when it was four programs and a fold. Everything since has been networking, proof of work and the ceilings; the money path has been extended — F8b, the burst valve, B18, the epoch controller — without being re-attacked as a whole. So the question here is not "is the code well argued", because it is, extravagantly. It is **which of these arguments is load-bearing and which is decoration**, and the only instrument that answers that is a mutation that should fail and does.
 
-The headline is a negative result and it is the right one: **fourteen mutations across the money path, fourteen killed.** No vacuous test was found on this surface. The one defect below was not found by reading the fold at all — it was found by asking which block rules the *builder* enforces, and discovering that the answer is four out of five.
+The headline is a negative result and it is the right one: **fourteen mutations across the money path, fourteen killed.** No vacuous test was found on this surface. The one defect below was not found by reading the fold at all — it was found by asking which block rules the *builder* enforces, and discovering that the answer was four out of five. It is five out of five now: the fix landed on this branch, and I8-M1 records both what the defect was and what the fix did not close.
 
 ---
 
-## I8-M1 — The builder enforces four of the five block ceilings, and the fifth stops the node ⬜ *open; latent on mainnet, live on devnet*
+## I8-M1 — The builder enforces four of the five block ceilings, and the fifth stops the node ✅ *fixed in the builder*; ⚠️ *the unattributable-refusal stall it exposed is untouched*
 
-`miner.Select` packs a block against B12 (certificate count), B13 (bytes), B5 (sequential gas) and B6 (parallel gas). It never sums `len(c.Sigs)`, so it does not enforce **B18**, the per-block signature ceiling. B18 shipped after `Select` was written and the packing loop was not revisited.
+`miner.Select` packed a block against B12 (certificate count), B13 (bytes), B5 (sequential gas) and B6 (parallel gas). It never summed `len(c.Sigs)`, so it did not enforce **B18**, the per-block signature ceiling. B18 shipped after `Select` was written and the packing loop was not revisited.
 
-An over-B18 block is not invalid-and-shipped — `Chain.Apply` is authoritative and refuses it. The defect is that the refusal is **unattributable**, and that removes the miner's only recovery path:
+**Fixed on this branch, in the builder and not in the fold.** `Select` now carries a running signature total against `MaxSigsPerBlock(T)` in the same greedy loop that already held the other four, skipping a certificate that does not fit exactly as the byte and gas ceilings do. Nothing in the fold moved and B18 stays unattributable on purpose: inventing a culpable index for a sum over every certificate would be a consensus edit bought for a builder-side error message. The guarantee is structural rather than empirical — `Select`'s output satisfies B18, `dropTheDrops` only ever *removes* certificates from that output, and removing one can only lower the sum. Everything below is what was measured before that landed, kept because the reachability argument outlives the bug and because the second half of the disposition is still open.
+
+An over-B18 block was never invalid-and-shipped — `Chain.Apply` is authoritative and refuses it. The defect was that the refusal is **unattributable**, and that removes the miner's only recovery path:
 
 - B18 reports through `invalid()`, not `invalidCert(i, …)`. That is *correct*: it is a genuine block-level property with no single culpable certificate, exactly as B5, B6, B12 and B13 are.
 - `dropTheDrops`' recovery is `errors.As(err, &cre)` against `*fold.CertRuleError`. With no index there is nothing to exclude, so control reaches the "not attributable to any one certificate" arm and returns the error.
 - `Assemble` propagates it; `MineOneWhile` returns without retrying. **There is no empty-block floor on that path** — the `return nil, nil` floor sits *inside* the `CertRuleError` branch B18 never enters.
 
-So a pool holding enough signature-dense certificates stops the node producing blocks at all, and keeps it stopped. Nothing sheds them: they are individually valid, the pool admitted them under its own rules, and `Pool.OnBlock` — which would clear them — runs only downstream of a successful `Apply`, which never happens. The same failure reaches `node/stratum`, where `Assemble` failing means `newJob` fails and every connected miner stops receiving work.
+So a pool holding enough signature-dense certificates stopped the node producing blocks at all, and kept it stopped. Nothing shed them: they were individually valid, the pool admitted them under its own rules, and `Pool.OnBlock` — which would clear them — runs only downstream of a successful `Apply`, which never happened. The same failure reached `node/stratum`, where `Assemble` failing means `newJob` fails and every connected miner stops receiving work. **All three bullets above are still true of the code as it stands**; what the fix changed is that B18 can no longer be the rule that reaches them.
 
 **Measured, end to end, on devnet.** Twenty-five RETIRE certificates of sixteen signatures each, funded for real out of mined coin and admitted by the node's own mempool (25 of 25):
 
@@ -28,7 +30,7 @@ attempt 2: … (identical)
 attempt 3: … (identical)
 ```
 
-`node/miner/sig_ceiling_test.go` carries the witness at three altitudes: `Select` returns a set over the ceiling, the fold's refusal of that set carries no index, and `Assemble` fails on three successive attempts. Each is armed against measuring the wrong ceiling — the fixture fails if its own pool exceeds B12, B13, B5 or B6, so a witness that stopped separating B18 would say so rather than pass.
+`node/miner/sig_ceiling_test.go` is the regression guard now rather than the witness, and asserts the same three altitudes in their fixed form: `Select` respects the ceiling, the fold still refuses an over-dense set by name and still without an index, and a signature-dense pool no longer stops block production. Each is armed against measuring the wrong ceiling — the fixture fails if its own pool exceeds B12, B13, B5 or B6, so a witness that stopped separating B18 would say so rather than pass.
 
 ### Why this is MEDIUM and not HIGH, stated as a measurement rather than a hope
 
@@ -55,9 +57,9 @@ T=4000000 (2.50x): 11312 sigs vs 15000 -> margin 24.6% seq 7989100/8000000
 T=5120000 (3.20x): 14400 sigs vs 19200 -> margin 25.0% seq 10170000/10240000
 ```
 
-So a live mainnet chain cannot walk into this by growing. What *would* open it is a parameter change, and the two that do are exactly the kind under discussion before a freeze: **`max_sigs_per_block_genesis` below 4528**, or the binding gas ceiling raised by **33%**. Either is a one-line edit to `spec/params.json` that no test would currently refuse, because nothing anywhere asserts the relationship between what `Select` packs and what B18 admits.
+So a live mainnet chain cannot walk into this by growing. What *would* cross the two ceilings is a parameter change, and the two that do are exactly the kind under discussion before a freeze: **`max_sigs_per_block_genesis` below 4528**, or the binding gas ceiling raised by **33%**. Either is a one-line edit to `spec/params.json`. **That coupling survives the fix, and it is the reason the freeze has to treat those two numbers together.** What changed is the consequence, not the crossing: with `Select` enforcing B18 the result is no longer a stall but a smaller block — B18 rather than B5 becomes the ceiling that binds, and the 24.5% margin is spent silently on throughput instead of on liveness. Still nothing asserts it as a parameter property. `node/miner/sig_ceiling_test.go` pins that `Select` respects B18; it does not pin that B5 keeps binding first.
 
-**Disposition.** The fix is one accumulator in `Select`'s packing loop, beside the three already there. What should not be done is making B18 attributable — it is not a property of any one certificate, and forcing an index onto it would be a worse rule to buy a better error message. The second, cheaper half is that `dropTheDrops`' non-attributable arm should fall back to a truncated list rather than to no block: **B18 is the first block rule to reach that arm, and any future one reproduces the same total stall.** That is the durable half of this finding.
+**Disposition.** The first half is done: one accumulator in `Select`'s packing loop, beside the three already there. B18 was deliberately *not* made attributable — it is not a property of any one certificate, and forcing an index onto it would be a worse rule bought for a better error message. **The second, cheaper half is still open**, and it is the durable half of this finding: `dropTheDrops`' non-attributable arm should fall back to a truncated list rather than to no block. That arm still returns an error today, so **B18 was the first block rule to reach it and any future one reproduces the same total stall** — closed for B18 by the builder, not closed in general.
 
 ---
 
@@ -96,13 +98,13 @@ I4-H2 recorded `Readmit` as "correct, complete, and called from nowhere". It is 
 
 ---
 
-## I8-L1 — Two invariants held at a distance, neither asserted where it is relied on ⬜ *open, documentation-shaped*
+## I8-L1 — Two invariants held at a distance, neither asserted where it is relied on ⬜ *open, documentation-shaped; the `Select`↔B18 half has since been asserted*
 
 Neither is a defect today. Both are places where a correct behaviour depends on a rule in another file that does not know it is load-bearing, which is the shape that survives a refactor and stops being true.
 
 **`State.Undo`'s seen handling depends on B1.** `UndoLog.SeenAdded` and `SeenRemoved` must be disjoint, or the delete clobbers the restore and a reorg silently loses a seen entry — which is a replay window. They are disjoint only because B1 enforces `c.TTL >= h.Height` while `PruneSeen` removes only `ttl < h.Height - 1`, and `markSeen` runs strictly before the prune. Three facts in two packages, none of which cites the others. Weakening B1 to admit `c.TTL < h.Height` would make `Undo` lossy with nothing failing.
 
-**`Select` and B18 have no stated relationship at all.** I8-M1 is the live instance. The 24.5% margin is a consequence of the gas schedule and nobody wrote it down; a parameter change spends it silently.
+**`Select` and B18 had no stated relationship at all, and now half of one.** I8-M1's fix put the ceiling in the packing loop and `node/miner/sig_ceiling_test.go` asserts that it holds, so that much is no longer held at a distance. The margin still is: the 24.5% is a consequence of the gas schedule, nothing asserts that B5 binds before B18, and a parameter change spends it silently.
 
 The general form is the one I6-M1 already named: a safety property whose argument lives in a comment in a different package is a property with no instrument. Both want a test that fails when the coupling breaks, not a paragraph.
 
@@ -130,7 +132,7 @@ Recorded because a list of what held is worth as much as the finding, and becaus
 
 - **Whether B18 is reachable on mainnet with a shape I did not construct.** I swept the two signature-dense Era-0 families at four widths each. The bound is the gas schedule, not my imagination, and the 24.5% margin is measured at every T — but the sweep is a sweep. What would settle it is a search over the certificate shape space maximising signatures per unit of sequential gas, which is a small optimisation problem nobody has posed.
 - **The refund-cascade depth against `maxDropPasses = 4`.** The miner's own comment records that an attempted cascade witness collapsed into a single pass and was removed rather than kept as a test asserting less than its name. I did not construct one either. It is a revenue question rather than a validity one, and it is honestly labelled in the source.
-- **Whether the pool's admission rules would shed an I8-M1 flood before it reached `Select` on mainnet parameters.** On devnet the flood was admitted 25 of 25 once funded. Mainnet's aggregate deposit screen prices the same flood far higher in capital, and I measured the capital but not the pool's behaviour at that scale.
+- **Whether the pool's admission rules would shed an I8-M1 flood before it reached `Select` on mainnet parameters.** On devnet the flood was admitted 25 of 25 once funded. Mainnet's aggregate deposit screen prices the same flood far higher in capital, and I measured the capital but not the pool's behaviour at that scale. Since the fix this is a throughput question rather than a liveness one — such a flood now costs block space instead of block production — but it is the same unmeasured screen.
 - **Anything about live testnet behaviour.** Every measurement here is from the suite on this tree.
 
 ---
@@ -139,9 +141,9 @@ Recorded because a list of what held is worth as much as the finding, and becaus
 
 | | |
 |---|---|
-| I8-M1 | ⬜ open — `Select` does not enforce B18; latent on mainnet behind a 24.5% margin that is structural across the range of T, live on devnet. Two fixes: one accumulator in `Select`, and a truncating fallback on `dropTheDrops`' non-attributable arm |
+| I8-M1 | ✅ fixed in the builder — `Select` now sums signatures against B18 in the same loop as the other four ceilings; was latent on mainnet behind a 24.5% margin that is structural across the range of T, live on devnet. ⬜ still open: the truncating fallback on `dropTheDrops`' non-attributable arm, and the margin itself is unasserted |
 | I8-N1 | ✅ fourteen mutations across the money path, fourteen killed; no vacuous test on this surface |
 | I8-N2 | ✅ `mempool.Readmit` wired in three places; I4-H2 closed |
-| I8-L1 | ⬜ open — two invariants held at a distance (`Undo`↔B1, `Select`↔B18), neither asserted where relied on |
+| I8-L1 | ⬜ open — two invariants held at a distance; `Select`↔B18 is asserted since I8-M1's fix, `Undo`↔B1 still is not, and neither margin is pinned as a parameter property |
 
-**What this pass should be read for.** Not the fold, which held against everything I could aim at it and whose tests are real. The finding is that **the block rules are enforced twice — once by the fold and once by the builder — and only one of those two lists is complete.** The fold's list is the one that decides validity, so the gap does not corrupt state; it stops the node instead, on the one rule whose refusal carries no index to recover from. Before the freeze, the cheap question to ask of every block-level rule is not "does the fold check it" but "does the builder respect it, and what happens to a node that finds out it does not".
+**What this pass should be read for.** Not the fold, which held against everything I could aim at it and whose tests are real. The finding is that **the block rules are enforced twice — once by the fold and once by the builder — and the two lists had drifted apart with nothing watching.** The fold's list is the one that decides validity, so the gap did not corrupt state; it stopped the node instead, on the one rule whose refusal carries no index to recover from. Both lists are complete as of the fix, and nothing holds them that way: the next block rule to ship after `Select` was last read reproduces this exactly. Before the freeze, the cheap question to ask of every block-level rule is not "does the fold check it" but "does the builder respect it, and what happens to a node that finds out it does not".
