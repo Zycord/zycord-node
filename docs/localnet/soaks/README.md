@@ -14,7 +14,9 @@ makes at length.
 | file | what it is |
 | --- | --- |
 | [`rx2-epoch-boundary.txt`](rx2-epoch-boundary.txt) | rx/2 crossing 52 key-schedule boundaries, mining and verifying, on the RandomX local net |
-| [`devnet-convergence.md`](devnet-convergence.md) | a multi-node dev-engine devnet under chaos: convergence by block id, propagation, and resource growth |
+| [`devnet-convergence.md`](devnet-convergence.md) | a multi-node dev-engine devnet under chaos: convergence by block id, propagation, and resource growth — the written record |
+| [`devnet-convergence-samples.tsv`](devnet-convergence-samples.tsv) | its per-node series, single-miner regime |
+| [`devnet-convergence-contention-samples.tsv`](devnet-convergence-contention-samples.tsv) | its per-node series, continuous contention |
 
 ## What these are not
 

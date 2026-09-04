@@ -91,8 +91,11 @@ then reorged away is still caught.
 
 ## Results
 
-See [`devnet-convergence-samples.tsv`](devnet-convergence-samples.tsv) for the
-raw per-node series, and the header of this section for how to read it.
+Raw per-node series, with a header on each explaining how to read it:
+[`devnet-convergence-samples.tsv`](devnet-convergence-samples.tsv) for the
+single-miner regime and
+[`devnet-convergence-contention-samples.tsv`](devnet-convergence-contention-samples.tsv)
+for continuous contention.
 
 ### Convergence after the chaos stops
 
@@ -175,6 +178,76 @@ one cannot, because the chain never stopped growing.
 
 Disk grew to 6.7 MB for 1015 blocks, in step with the chain, as it must.
 
+### History agreement under continuous contention
+
+The second regime, and the harder question: every miner mining for the whole
+run, **199 kills and 368 partitions** over 50 minutes, with the network reaching
+height 1000.
+
+```
+history: 744 heights verified to 744 (network reached 1000);
+  3.96 nodes per height on average, 33 heights compared across fewer than 4
+deepest observed reorg: 3 blocks (horizon 256)
+billing law: 874 certificate inclusions across 1000 blocks, no duplicates
+load: 2357 certificates submitted, 2357 accepted
+```
+
+**744 heights verified with no divergence** is the result. Every one was checked
+against every node that could answer, cumulatively and without gaps, so a
+divergence created and then reorged away would still have been caught.
+
+The 33 partial comparisons are heights where a node was mid-kill and could not
+answer. They are reported rather than folded in, because a run that mostly
+talked to three nodes must not read like one that talked to four — 3.96 nodes
+per height on average says how strong the evidence actually is.
+
+The deepest reorg was **3 blocks** against a 256-block horizon. That is far
+below the 128 the horizon was sized against, and it is worth being careful about
+what it means: it is one run at one seed on one machine, not a new measurement
+of the tail. The horizon stays where it is.
+
+| measure | p50 | p90 | p99 | max |
+| --- | --- | --- | --- | --- |
+| trail behind the highest node (blocks) | 0 | 0 | 1 | 3 |
+
+Across 795 node-samples. Resources: threads peaked at 12-13 and descriptors at
+20, both flat; disk reached 6.5 MB with the chain. Node `a` shows a 183 MB RSS
+peak that was back to 45 MB fifteen seconds later, and a 122 MB peak that
+behaved the same way — single-sample transients that fully reclaim. The floor
+per ten-minute window ran 15.2, 17.1, 12.6, 22.0, 24.2 MB and *fell* in the
+middle, which a leak does not do.
+
+**These two regimes must not be read against each other.** The contention
+figures are tighter than the single-miner regime's (p99 of 1 against 2, max of 3
+against 11), and it would be wrong to conclude contention is easier: the machine
+was at load average 6-19 during this regime and 8-47 during the other. That
+difference alone plausibly accounts for the gap. Each regime is evidence about
+itself under its own conditions.
+
+### A note on why the settled-height check earns its place
+
+After the convergence check passed, a later stage of the same run logged:
+
+```
+balances not compared: 4/4 nodes reachable on 2 distinct tips
+```
+
+Read quickly that looks like it contradicts the convergence result. It does
+not, and the reason is exactly why this run added the settled-height check.
+
+The sampler's last three rounds show all four nodes on one tip at heights 1011,
+1012 and 1015. The two tips seen afterwards are the surviving miner having
+produced another block that had not yet reached every node — propagation lag
+measured at a different instant, not a fork. Tip agreement is a property of
+*when you look*; it was true at every instant the sampler looked and briefly
+untrue a moment later, without anything being wrong.
+
+That is the whole argument for comparing a settled height instead. Height 1007
+had been passed by every node, so no amount of further mining could change what
+any of them held there, and all four returned one id. A check that can be
+falsified by sampling a moment later is not the check you want to hang a
+convergence claim on.
+
 ### What was not established
 
 The propagation figure is bounded below by the sample interval and says nothing
@@ -185,8 +258,9 @@ taken on a heavily loaded machine — see below.
 
 ## The machine, and what it does to these numbers
 
-The run shared a six-core machine with five other test suites, at a load
-average between 8 and 20 throughout. That is stated up front because it is
+Both regimes shared a six-core machine with five other test suites. The
+single-miner regime ran at a load average between 8 and 47; the contention
+regime, later, at between 6 and 19. That is stated up front because it is
 load-bearing for how the timing figures should be read:
 
 **The convergence results are unaffected by load.** Whether four nodes hold the
@@ -200,17 +274,30 @@ Every trail figure includes time the node spent waiting for a core. On an idle
 machine they would be smaller, and by an unknown factor — this run cannot say
 by how much, and does not.
 
-**The growth figures are the strongest thing here.** Memory, descriptors and
-thread counts are not sensitive to how busy the machine is, and a run that
-holds them flat for two hours under contention holds them flat.
+**The growth figures are the strongest thing here.** Descriptor and thread
+counts are not sensitive to how busy the machine is, and both were flat across
+both regimes. Memory needs the floor read rather than the peak, and on that
+reading it tracks the chain rather than the clock.
+
+**And the difference between the two regimes' latency figures is not a finding.**
+They ran at different times under different load. Comparing them would be
+measuring the other five test suites.
 
 ## Reproducing
 
 ```sh
 ZCD_SOAK=55m ZCD_SOAK_SAMPLE=15s ZCD_SOAK_LOGDIR=./.soakrun \
-  go test ./sim/chaos/ -run 'TestChaosSoak$|TestChaosSoakUnderContinuousContention$' \
-  -count=1 -v -timeout 180m
+  go test ./sim/chaos/ -run 'TestChaosSoak$' -count=1 -v -timeout 120m
+
+ZCD_SOAK=50m ZCD_SOAK_SAMPLE=15s ZCD_SOAK_LOGDIR=./.soakrun \
+  go test ./sim/chaos/ -run 'TestChaosSoakUnderContinuousContention$' \
+  -count=1 -v -timeout 120m
 ```
+
+Run separately rather than in one invocation, so that one regime's duration and
+conditions are recorded against its own artifact. `-run TestChaosSoak` on its
+own matches all four regimes, which is `make soak`'s behaviour and not what
+these two artifacts are.
 
 `make soak` is the shorter form at the default 35 minutes and runs all four
 regimes; `make soak-long` is the four-hour gate. `ZCD_SOAK_SEED` shifts the
