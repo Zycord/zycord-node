@@ -93,9 +93,14 @@ attacker" are independent claims, and a surface needs both.*
 
 ⚠ **One consequence for operators, stated plainly.** A reverse proxy in front of the RPC
 must now set `Host: 127.0.0.1`. `docs/RUNNING.md` already advises rate-limiting at a proxy
-if the RPC is exposed at all; that advice now carries a requirement. An unproxied RPC on
-a routable address is refused outright, which is the configuration this guard should be
-refusing.
+if the RPC is exposed at all; that advice now carries a requirement.
+
+**And one thing this guard is not.** It is a rebinding defence, not access control. It
+closes the browser class completely, because a page cannot forge `Host`. It stops nobody
+who can reach the port with a tool of their own: with `--rpc 0.0.0.0`, a plain
+`curl -H "Host: 127.0.0.1"` from the network is answered 200, `/submit` included. Binding
+this socket to a routable address is still exactly as dangerous as it was, and I8-L10
+carries what remains of that.
 
 ---
 
@@ -311,13 +316,27 @@ The constraint itself is **confirmed intact** on every path.
   Ed25519 verification **last**, with the `screened` token kept as a compiler-checked proof
   that the order cannot be inverted. Body cap 1 MiB, 600 req/min, a 256 MiB/min block-byte
   budget, and no `Content-Encoding` handling anywhere, so there is no decompression bomb.
-- **I8-L10 — `--rpc` accepts a routable address with no validation and no warning.** ⚠
-  *open.* The default is loopback, so the claim holds by default. But the Stratum endpoint
-  validates its own bind and warns loudly when it is not loopback, and the RPC — the older
-  surface, and the one I8-C1 shows is more reachable than it looked — prints nothing.
-  I8-C1's `Host` guard now refuses a browser regardless of the bind, which is the important
-  half; the missing warning is still an asymmetry worth closing, and it is one line beside
-  the one that already exists for Stratum.
+- **I8-L10 — `--rpc` accepts a routable address with no validation and no warning, and
+  the `Host` guard does not cover that case.** ⚠ *open.* The default is loopback, so the
+  claim holds by default. But the Stratum endpoint validates its own bind and warns loudly
+  when it is not loopback, and the RPC — the older surface, and the one I8-C1 shows is more
+  reachable than it looked — prints nothing.
+
+  **The scope of I8-C1's fix has to be stated precisely, because it is easy to over-read
+  and I over-read it in the first draft of this note.** `guardHost` is a *rebinding
+  defence, not access control.* It closes the entire browser class — a page cannot forge
+  `Host`, which is the whole reason the header is the right instrument — but it is not a
+  barrier to anyone who can reach the port with a tool of their own. Demonstrated in review:
+  with `--rpc 0.0.0.0`, a plain `curl -H "Host: 127.0.0.1"` from the network is answered
+  **200**, `/submit` included. A forged header costs an attacker one flag.
+
+  So the two halves are independent and only one of them is fixed. What remains is the
+  exposure warning: an operator who binds a routable address gets no line saying so, where
+  the same operator binding Stratum to one gets a loud unconditional warning that names the
+  consequence. That is one line beside the one that already exists for Stratum, and it is
+  the honest close for this finding — not a second guard, because there is no header check
+  that can distinguish a legitimate remote operator from an attacker, and pretending
+  otherwise is what a password on the Stratum socket would have been (I8-L1).
 
 ---
 

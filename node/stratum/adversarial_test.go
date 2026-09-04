@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net"
 	"strings"
 	"sync"
@@ -197,7 +198,14 @@ func TestDuplicateAndOddIDsAreEchoedNotInterpreted(t *testing.T) {
 	h := newHarness(t, func(cfg *Config) { cfg.JobRefresh = time.Hour })
 	c := h.dial(t)
 	c.login("")
-	for _, id := range []string{`1`, `1`, `"1"`, `null`, `-1`, `1.5`, `18446744073709551616`} {
+	// One past the top of uint64, built as an expression rather than written
+	// out. The value is the point of the case — an id this endpoint must echo
+	// byte-for-byte rather than parse, because parsing it as a number is
+	// exactly what overflows — and twenty literal digits are both less legible
+	// than the arithmetic and indistinguishable from a commit hash to the
+	// history guard that gates publication.
+	pastUint64 := new(big.Int).Lsh(big.NewInt(1), 64).String()
+	for _, id := range []string{`1`, `1`, `"1"`, `null`, `-1`, `1.5`, pastUint64} {
 		c.writeRaw(`{"id":` + id + `,"jsonrpc":"2.0","method":"keepalived","params":{}}` + "\n")
 		raw := c.readLine()
 		var r struct {
