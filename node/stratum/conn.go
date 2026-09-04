@@ -71,6 +71,10 @@ type conn struct {
 	// lastSeen is the clock reading at the last inbound line. The keepalive
 	// reaper compares against it.
 	lastSeen time.Time
+	// lastAssembly is the clock reading at the last template assembly this
+	// connection caused, from any path. onGetJob rate-limits against it; see
+	// minAssemblyInterval.
+	lastAssembly time.Time
 }
 
 func newConn(s *Server, nc net.Conn) *conn {
@@ -309,12 +313,56 @@ func (c *conn) onGetJob(req request) bool {
 	if !c.isLoggedIn() {
 		return c.reply(req.ID, nil, errUnauthenticated)
 	}
+	// A minimum interval between ASSEMBLIES, not between replies.
+	//
+	// The comment above prices a getjob at "one Assemble, which is bounded by
+	// how often a miner can ask, which is bounded by the ban score and the
+	// connection cap". Measured, that bound is not a bound: getjob is
+	// deliberately unscored — a miner asking for work is behaving — so the ban
+	// score never fires, and one connection issues about 16,500 calls a second
+	// down a pipelined socket. Against a real chain one Assemble is ~570 µs of
+	// snapshot, difficulty-window walk, mempool selection, a dry-run fold to a
+	// fixpoint and a root computation, so a single unauthenticated connection
+	// asks for roughly nine CPU-seconds of work per wall-clock second, and the
+	// default sixteen slowed this node's own template assembly by 45x
+	// (I8-H1, measured in TestGetJobFloodAgainstARealChain).
+	//
+	// Answered by serving the job the connection already has rather than by
+	// refusing or by scoring. Refusing would break the method's honest use —
+	// a miner that has exhausted a nonce space needs work NOW — and scoring
+	// would ban miners for asking, which is what the method is for. A cached
+	// job is a correct answer to "give me work": it is the same template the
+	// miner would have been pushed, its nonce space is untouched, and a miner
+	// that genuinely exhausted 2^32 nonces in under a job interval does not
+	// exist. So the honest caller is unaffected and the flood is bounded to
+	// one assembly per interval per connection.
+	//
+	// The interval is deliberately far below JobRefresh: this is a floor on
+	// cost, not a second refresh policy, and a miner recovering from an error
+	// must not wait thirty seconds for work.
+	c.mu.Lock()
+	since := c.srv.cfg.Now().Sub(c.lastAssembly)
+	cached := c.jobs.newest()
+	c.mu.Unlock()
+	if cached != nil && since < minAssemblyInterval {
+		return c.reply(req.ID, c.jobParams(cached), nil)
+	}
 	j, err := c.newJob()
 	if err != nil {
 		return c.reply(req.ID, nil, &rpcError{-1, "no template available: " + err.Error()})
 	}
 	return c.reply(req.ID, c.jobParams(j), nil)
 }
+
+// minAssemblyInterval is the shortest gap between two template assemblies
+// driven by one connection's getjob calls.
+//
+// One second, which is well under the 30-second job refresh — so a miner that
+// has run out of work waits at most a second for a genuinely fresh template —
+// and is three orders of magnitude above the rate a pipelined socket can ask
+// at. It bounds an unscored method's cost without changing what the method
+// means to a miner that is behaving.
+const minAssemblyInterval = time.Second
 
 // onSubmit handles `submit`: verify a share, and if it is a block, apply and
 // announce it.
@@ -371,7 +419,20 @@ func (c *conn) onSubmit(req request) bool {
 		c.penalise(1, "duplicate share")
 		return c.reply(req.ID, nil, errDuplicateShare)
 	}
-	j.submitted[nonce] = struct{}{}
+	// The nonce is NOT recorded here. It is recorded once the share has been
+	// shown to clear the job target — see the insert below the check.
+	//
+	// The ordering is the finding I8-M1 records. Recording before the check
+	// made job.submitted's own comment false: it claims an attacker "would
+	// have to spend a real hash per entry to get past the low-difficulty check
+	// first", which describes an insert placed after the check, and the insert
+	// was before it. Two things followed. The map grew on shares that had
+	// demonstrated nothing, and — the reason this is worth moving rather than
+	// only documenting — the SECOND copy of a nonce that had already failed
+	// the target was answered as a duplicate at one point instead of as a bad
+	// share at two, so a flooder halved its own score cost by repeating
+	// itself.
+	//
 	// The header is copied out under the lock and the block is rebuilt
 	// outside it. Header is a value type with no pointer fields, so this copy
 	// genuinely detaches; the certificate slice is shared, and is safe to
@@ -423,6 +484,14 @@ func (c *conn) onSubmit(req request) bool {
 			c.nc.RemoteAddr(), height)
 		return c.reply(req.ID, nil, errLowDifficulty)
 	}
+
+	// The share has cleared the job target, so it is a share worth remembering
+	// and a retransmit of it is a genuine duplicate rather than a repeat of
+	// something already refused. This is the insert job.submitted's comment
+	// describes: an entry costs the sender a real proof of work.
+	c.mu.Lock()
+	j.submitted[nonce] = struct{}{}
+	c.mu.Unlock()
 
 	// The share against the FULL 256-bit network target, which is the rule
 	// every peer will judge the resulting block by.
@@ -521,6 +590,11 @@ func (c *conn) newJob() (*job, error) {
 	}
 	c.mu.Lock()
 	c.jobs.put(j)
+	// Stamped here rather than in onGetJob so that EVERY assembly — a push, a
+	// login, a getjob — counts against the interval. A getjob arriving just
+	// after a pushed job has been built is asking for a template that already
+	// exists.
+	c.lastAssembly = c.srv.cfg.Now()
 	c.mu.Unlock()
 	return j, nil
 }

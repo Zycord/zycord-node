@@ -514,8 +514,15 @@ func main() {
 			// comment gives at length: a line printed ahead of a bind declared
 			// a service up in the very run where the bind then failed, and
 			// everything reading the log believed it.
-			log.Printf("stratum listening on %s (rx/0, solo — an accepted share is a block)",
-				sv.Addr())
+			// The algorithm is read from the endpoint, which reads it from
+			// the engine, rather than spelled here. This line named "rx/0"
+			// against an rx/2 network until I8-L2.
+			algo, mineable := sv.Algo()
+			if !mineable {
+				algo = "no algorithm any Stratum miner implements"
+			}
+			log.Printf("stratum listening on %s (%s, solo — an accepted share is a block)",
+				sv.Addr(), algo)
 			if !stratum.IsLoopback(scfg.Addr) {
 				// Loud, and deliberately not behind a --i-know-what-im-doing
 				// flag. The exposure is real and is not the usual one: it is

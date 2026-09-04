@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,7 +20,7 @@ func (s *Server) clientCount() int {
 }
 
 func request(host string) *http.Request {
-	r := httptest.NewRequest(http.MethodGet, "/status", nil)
+	r := loopbackRequest(http.MethodGet, "/status", nil)
 	r.RemoteAddr = host + ":1024"
 	return r
 }
@@ -236,4 +237,13 @@ func TestOnlyAdmissionCreatesLimiterEntries(t *testing.T) {
 	if charged != 1 {
 		t.Fatalf("an admitted client carries %d charges after being billed, want 1", charged)
 	}
+}
+
+// loopbackRequest builds a request the loopback-Host guard admits. See
+// guardHost: httptest's default Host of "example.com" is refused, and these
+// tests stand in for a local client.
+func loopbackRequest(method, path string, body io.Reader) *http.Request {
+	r := httptest.NewRequest(method, path, body)
+	r.Host = "127.0.0.1:9420"
+	return r
 }

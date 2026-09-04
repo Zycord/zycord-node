@@ -74,6 +74,11 @@ type fakeAssembler struct {
 	target u256.U256
 	err    error
 	calls  int
+	// dirtyNonce and dirtyExtra let the adversarial suite hand the endpoint a
+	// template whose nonce field is already set, which is the one shape that
+	// can produce a served blob XMRig latches nicehash mode on.
+	dirtyNonce uint32
+	dirtyExtra uint32
 }
 
 func (f *fakeAssembler) Assemble() (*types.Block, error) {
@@ -83,12 +88,15 @@ func (f *fakeAssembler) Assemble() (*types.Block, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &types.Block{Header: types.Header{
+	h := types.Header{
 		Version: types.HeaderVersion,
 		Height:  f.height,
 		Time:    1000 + uint64(f.calls),
 		Target:  f.target,
-	}}, nil
+	}
+	h.PoW.Nonce = f.dirtyNonce
+	h.PoW.ExtraNonce = f.dirtyExtra
+	return &types.Block{Header: h}, nil
 }
 
 // fakeAnnouncer records what was gossiped.
@@ -429,18 +437,55 @@ func TestMethodsRequireLogin(t *testing.T) {
 // getjob must hand out a FRESH template, not the cached one. A miner calls it
 // when it has nothing left to do; returning what it already holds leaves it
 // idle until the refresh timer fires.
+//
+// Bounded by minAssemblyInterval, which I8-H1 added: an unscored method that
+// assembles a template on every call is a 45x CPU amplifier from one
+// connection. So the property has two halves and this test asserts both — a
+// call past the interval rebuilds, and a call inside it is answered from the
+// cache rather than by assembling again. The clock is injected so that the
+// interval is tested rather than slept through.
 func TestGetJobBuildsAFreshTemplate(t *testing.T) {
-	h := newHarness(t, nil)
+	var clk fakeClock
+	clk.set(time.Unix(1_700_000_000, 0))
+	h := newHarness(t, func(cfg *Config) {
+		cfg.Now = clk.now
+		cfg.JobRefresh = time.Hour
+	})
 	c := h.dial(t)
 	first := c.login("").Job
 
+	// Inside the interval: the same job comes back, and no template is built.
+	h.asm.mu.Lock()
+	before := h.asm.calls
+	h.asm.mu.Unlock()
 	r := c.call("getjob", map[string]any{})
 	if r.Error != nil {
-		t.Fatalf("getjob: %v", r.Error)
+		t.Fatalf("getjob inside the interval: %v", r.Error)
+	}
+	var cached jobParams
+	remarshal(t, r.Result, &cached)
+	h.asm.mu.Lock()
+	built := h.asm.calls - before
+	h.asm.mu.Unlock()
+	if built != 0 {
+		t.Errorf("a getjob inside minAssemblyInterval assembled %d templates; "+
+			"the rate limit is not holding and one connection can spend this "+
+			"node's CPU without bound", built)
+	}
+	if cached.JobID != first.JobID {
+		t.Errorf("a getjob inside the interval returned a different job (%s, "+
+			"want %s): it must be answered from the cache",
+			cached.JobID, first.JobID)
+	}
+
+	// Past the interval: a genuinely fresh template.
+	clk.advance(2 * minAssemblyInterval)
+	r = c.call("getjob", map[string]any{})
+	if r.Error != nil {
+		t.Fatalf("getjob past the interval: %v", r.Error)
 	}
 	var second jobParams
 	remarshal(t, r.Result, &second)
-
 	if second.JobID == first.JobID {
 		t.Error("getjob returned the job the miner already holds; it would idle until the timer fires")
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -39,6 +40,19 @@ func key(t *testing.T, n byte) *wallet.Key {
 }
 
 func drops(n uint64) u256.U256 { return u256.FromUint64(n) }
+
+// req builds a request the way a local client makes one.
+//
+// httptest.NewRequest defaults the Host to "example.com", which the
+// loopback-Host guard (see guardHost) correctly refuses. Every test here is
+// standing in for curl or zcd talking to 127.0.0.1, so the Host is set to say
+// so — rather than the guard being disabled for tests, which would leave the
+// thing it defends untested.
+func req(method, path string, body io.Reader) *http.Request {
+	r := httptest.NewRequest(method, path, body)
+	r.Host = "127.0.0.1:9420"
+	return r
+}
 
 type harness struct {
 	p       *params.Params
@@ -92,7 +106,7 @@ func (h *harness) mine(t *testing.T, n int) {
 func (h *harness) get(t *testing.T, path string) map[string]any {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	h.handler.ServeHTTP(rec, req(http.MethodGet, path, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET %s: status %d: %s", path, rec.Code, rec.Body.String())
 	}
@@ -131,7 +145,7 @@ func TestSubmitAndMine(t *testing.T) {
 
 	body := "0x" + hex.EncodeToString(cert.MarshalSSZ())
 	rec := httptest.NewRecorder()
-	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/submit", strings.NewReader(body)))
+	h.handler.ServeHTTP(rec, req(http.MethodPost, "/submit", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("submit: status %d: %s", rec.Code, rec.Body.String())
 	}
@@ -170,7 +184,7 @@ func TestSubmitIsTheOnlyWriteAndGrantsNothing(t *testing.T) {
 	for _, path := range []string{"/status", "/head", "/fees", "/mempool", "/metrics"} {
 		before := h.chain.StateRoot()
 		rec := httptest.NewRecorder()
-		h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")))
+		h.handler.ServeHTTP(rec, req(http.MethodPost, path, strings.NewReader("{}")))
 		if h.chain.StateRoot() != before {
 			t.Fatalf("%s changed the state", path)
 		}
@@ -180,7 +194,7 @@ func TestSubmitIsTheOnlyWriteAndGrantsNothing(t *testing.T) {
 	// rejected by the same V-rules a peer's would meet.
 	for _, body := range []string{"", "not hex", "0xdeadbeef"} {
 		rec := httptest.NewRecorder()
-		h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/submit", strings.NewReader(body)))
+		h.handler.ServeHTTP(rec, req(http.MethodPost, "/submit", strings.NewReader(body)))
 		if rec.Code == http.StatusOK {
 			t.Fatalf("submit accepted %q", body)
 		}
@@ -202,7 +216,7 @@ func TestSubmitIsTheOnlyWriteAndGrantsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/submit",
+	h.handler.ServeHTTP(rec, req(http.MethodPost, "/submit",
 		strings.NewReader(hex.EncodeToString(cert.MarshalSSZ()))))
 	if rec.Code == http.StatusOK {
 		t.Fatal("an unfunded certificate was pooled")
@@ -223,7 +237,7 @@ func TestRateLimitIsOnByDefault(t *testing.T) {
 	var limited bool
 	for i := 0; i < 10; i++ {
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+		handler.ServeHTTP(rec, req(http.MethodGet, "/status", nil))
 		if rec.Code == http.StatusTooManyRequests {
 			limited = true
 			break
@@ -337,7 +351,7 @@ func TestMetricsTrackOutcomes(t *testing.T) {
 	// the blocks actually land, and the assertion is that mining a block moved
 	// them without anybody asking.
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	handler.ServeHTTP(rec, req(http.MethodGet, "/metrics", nil))
 	var out map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
@@ -371,7 +385,7 @@ func TestMetricsNegotiatesItsRepresentation(t *testing.T) {
 
 	get := func(accept, query string) *httptest.ResponseRecorder {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "/metrics"+query, nil)
+		req := req(http.MethodGet, "/metrics"+query, nil)
 		if accept != "" {
 			req.Header.Set("Accept", accept)
 		}
@@ -498,7 +512,7 @@ func TestScrapeReportsTheNodesActualNumbers(t *testing.T) {
 	submit := func(body string) int {
 		t.Helper()
 		rec := httptest.NewRecorder()
-		h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/submit", strings.NewReader(body)))
+		h.handler.ServeHTTP(rec, req(http.MethodPost, "/submit", strings.NewReader(body)))
 		return rec.Code
 	}
 
@@ -701,7 +715,7 @@ func TestSubmittedCertificatesAreRelayed(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := strings.NewReader("0x" + hex.EncodeToString(cert.MarshalSSZ()))
-	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/submit", body))
+	h.handler.ServeHTTP(rec, req(http.MethodPost, "/submit", body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("submit returned %d: %s", rec.Code, rec.Body.String())
 	}
@@ -719,7 +733,7 @@ func TestSubmittedCertificatesAreRelayed(t *testing.T) {
 	// above would pass against a handler that broadcasts unconditionally — which
 	// would make the RPC an amplifier for anything anyone posts at it.
 	rec2 := httptest.NewRecorder()
-	h.handler.ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, "/submit",
+	h.handler.ServeHTTP(rec2, req(http.MethodPost, "/submit",
 		strings.NewReader("not hex")))
 	if rec2.Code == http.StatusOK {
 		t.Fatal("setup: the malformed submission was accepted")
@@ -750,7 +764,7 @@ func (r *recordingNetwork) AnnounceCertificate(c *types.Certificate) {
 func (h *harness) raw(t *testing.T, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	h.handler.ServeHTTP(rec, req(http.MethodGet, path, nil))
 	return rec
 }
 
@@ -843,7 +857,7 @@ func TestBlockBytesAreBudgetedNotJustCounted(t *testing.T) {
 
 	pull := func() int {
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/block?format=ssz&height=1", nil))
+		handler.ServeHTTP(rec, req(http.MethodGet, "/block?format=ssz&height=1", nil))
 		return rec.Code
 	}
 	for i := 0; i < 2; i++ {
@@ -863,7 +877,7 @@ func TestBlockBytesAreBudgetedNotJustCounted(t *testing.T) {
 	// its block bytes must still be able to ask the questions that cost
 	// nothing, or the budget is a lockout rather than a price.
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	handler.ServeHTTP(rec, req(http.MethodGet, "/status", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/status returned %d after the block-byte budget was spent: the "+
 			"budget locked the client out of endpoints it does not price", rec.Code)
@@ -905,7 +919,7 @@ func TestBlockCacheHeadersMatchWhatCanStillChange(t *testing.T) {
 	}
 
 	// A conditional request is answered without the body.
-	req := httptest.NewRequest(http.MethodGet, "/block?format=ssz&id="+id, nil)
+	req := req(http.MethodGet, "/block?format=ssz&id="+id, nil)
 	req.Header.Set("If-None-Match", etag)
 	rec := httptest.NewRecorder()
 	h.handler.ServeHTTP(rec, req)
@@ -1136,7 +1150,7 @@ func TestTheExplorerSurfaceStaysPowerless(t *testing.T) {
 	} {
 		before := h.chain.StateRoot()
 		rec := httptest.NewRecorder()
-		h.handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")))
+		h.handler.ServeHTTP(rec, req(http.MethodPost, path, strings.NewReader("{}")))
 		if h.chain.StateRoot() != before {
 			t.Fatalf("%s changed the state", path)
 		}
@@ -1150,7 +1164,7 @@ func TestTheExplorerSurfaceStaysPowerless(t *testing.T) {
 		"/params", "/fees", "/mempool", "/metrics", "/network",
 	} {
 		rec := httptest.NewRecorder()
-		rec2 := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+		rec2 := req(http.MethodPost, path, strings.NewReader("{}"))
 		h.handler.ServeHTTP(rec, rec2)
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("POST %s answered %d with %d bytes, want 405: a read the node "+
@@ -1304,7 +1318,7 @@ func TestConditionalBlockRequestsSeeStateThatMoved(t *testing.T) {
 	}
 
 	conditional := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "/block?id="+id, nil)
+		req := req(http.MethodGet, "/block?id="+id, nil)
 		req.Header.Set("If-None-Match", etag)
 		rec := httptest.NewRecorder()
 		h.handler.ServeHTTP(rec, req)
@@ -1477,7 +1491,7 @@ func TestConditionalBytesCostNeitherSide(t *testing.T) {
 	handler := srv.Handler()
 
 	fetch := func(etag string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, "/block?format=ssz&height=1", nil)
+		req := req(http.MethodGet, "/block?format=ssz&height=1", nil)
 		if etag != "" {
 			req.Header.Set("If-None-Match", etag)
 		}
@@ -1621,7 +1635,7 @@ func TestBlockBudgetIsChargedBeforeTheDecode(t *testing.T) {
 	// instead of by the ordering fix.
 	control := rpc.New(c2, pool2, rpc.DefaultConfig(), &rpc.Metrics{})
 	ctrlRec := httptest.NewRecorder()
-	control.Handler().ServeHTTP(ctrlRec, httptest.NewRequest(http.MethodGet, "/block?id="+hexHash(id), nil))
+	control.Handler().ServeHTTP(ctrlRec, req(http.MethodGet, "/block?id="+hexHash(id), nil))
 	if ctrlRec.Code != http.StatusInternalServerError {
 		t.Fatalf("setup: decoding the corrupted block answered %d, want 500 — the "+
 			"corruption this test relies on did not take: %s",
@@ -1640,14 +1654,14 @@ func TestBlockBudgetIsChargedBeforeTheDecode(t *testing.T) {
 	handler := srv.Handler()
 
 	spend := httptest.NewRecorder()
-	handler.ServeHTTP(spend, httptest.NewRequest(http.MethodGet, "/block?format=ssz&id="+hexHash(id), nil))
+	handler.ServeHTTP(spend, req(http.MethodGet, "/block?format=ssz&id="+hexHash(id), nil))
 	if spend.Code != http.StatusOK {
 		t.Fatalf("setup: spending the budget with an ssz pull answered %d: %s",
 			spend.Code, spend.Body.String())
 	}
 
 	got := httptest.NewRecorder()
-	handler.ServeHTTP(got, httptest.NewRequest(http.MethodGet, "/block?id="+hexHash(id), nil))
+	handler.ServeHTTP(got, req(http.MethodGet, "/block?id="+hexHash(id), nil))
 	if got.Code != http.StatusTooManyRequests {
 		t.Fatalf("a JSON request against an exhausted byte budget answered %d, want 429: "+
 			"a 500 here would mean the handler reached the decode before the budget was "+
@@ -1918,7 +1932,7 @@ func TestACorruptLocalBodyIsNotTheClientsFault(t *testing.T) {
 
 	srv := rpc.New(c2, mempool.New(&p, mempool.DefaultPolicy()), rpc.DefaultConfig(), &rpc.Metrics{})
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/block?id="+hexHash(id), nil))
+	srv.Handler().ServeHTTP(rec, req(http.MethodGet, "/block?id="+hexHash(id), nil))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("a block this node stored and cannot decode answered %d, want 500: "+
