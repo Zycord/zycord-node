@@ -425,6 +425,7 @@ func (e *Engine) forgetPeer(conn string) {
 	defer e.mu.Unlock()
 	delete(e.tips, conn)
 	e.dropPeerTransfers(conn)
+	e.dropPeerPendingLocked(conn)
 }
 
 // syncRotationView returns the sync candidates and the rotation key of every

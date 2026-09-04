@@ -2664,6 +2664,70 @@ func (e *Engine) dropPeerTransfers(peerAddr string) {
 	delete(e.partial, peerAddr)
 }
 
+// dropPeerPendingLocked forgets the announcements a departing connection was
+// going to answer.
+//
+// ScoreUnservedBody prices "announced and would not serve" (wire.md 9 rule 5).
+// A peer that is gone was never asked to serve -- the get-block either never
+// left this node or died on the wire with the socket -- so charging it prices
+// a fault nobody committed. Worse, for an outbound peer the address charged is
+// its stable listen address, which is persisted, so ten badly-timed departures
+// banned an honest peer permanently: there is no score decay and no unban
+// path. Nothing else noticed, because the block stays reachable by every other
+// route and the only symptom is a score.
+//
+// The entry is dropped rather than kept-and-exempted because the announcement
+// is genuinely unanswerable now: nothing arrives on a connection that no
+// longer exists, and the network re-announces the same block for free. Its
+// seenBlocks entry is deliberately left alone -- the reap's charging branch
+// clears that to keep a late re-delivery applicable, and here there is neither
+// a charge nor a delivery to protect.
+func (e *Engine) dropPeerPendingLocked(conn string) {
+	for id, p := range e.pending {
+		if p.peerAddr == conn {
+			delete(e.pending, id)
+		}
+	}
+}
+
+// ForgetUnrequestedBody drops the pending entry for an announcement whose
+// get-block this node decided not to send, provided peerAddr is the peer that
+// owes the debt.
+//
+// Node.serve builds the request into the verdict and then passes two gates
+// before it reaches the wire -- the peer may already be banned, and the write
+// may fail -- and neither told the engine. The announcement stayed in pending
+// and was reaped sixty seconds later as though the peer had refused to serve
+// it, which charges an announcer for not being *asked*. The rule prices not
+// serving, and the request never left.
+//
+// **The peer check is not defensive tidiness, and dropping it reintroduces the
+// evasion this file forbids by name.** `pending` is keyed by block id alone, so
+// an unscoped delete "lets any peer cancel any other peer's debt" -- the words
+// are unservedbody_evasion_internal_test.go's. The reachable path is the
+// chunk-continuation reply: OnBlockChunkFrom answers a mid-transfer chunk with
+// a second KindGetBlock whose id it read off the *sender's own frame*, so a
+// peer sending a valid chunk 0 that names somebody else's announced id gets
+// back a get-block for an id it does not owe. Matching on message kind alone
+// at the call site then deletes the victim's entry. Cheap to defend against
+// and cheap to attack -- one 4 MiB chunk to cancel one -10 -- but it is ban
+// *suppression*, which is the direction that quietly disarms the reap rather
+// than the direction that bans a friend.
+//
+// Scoping it here rather than at the call site is deliberate: the call site
+// holds no lock and cannot read `pending` without one, and a guard that lives
+// beside the map it protects cannot be forgotten by the next caller.
+//
+// Exported to Node rather than inferred in here because only the caller knows
+// whether the frame was actually handed to the connection.
+func (e *Engine) ForgetUnrequestedBody(peerAddr string, id types.Hash) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if p, ok := e.pending[id]; ok && p.peerAddr == peerAddr {
+		delete(e.pending, id)
+	}
+}
+
 // OnBlock applies a delivered block body. It charges the key epoch its work
 // check demands to peerAddr, which is the right payer for a body that arrived
 // with no authenticated identity — an exported call, a withheld-block replay,

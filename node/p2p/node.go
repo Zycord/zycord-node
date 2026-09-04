@@ -1855,12 +1855,33 @@ func (n *Node) serve(conn *Conn, outbound bool) {
 		if v.Err != nil && errors.Is(v.Err, chain.ErrLocal) {
 			n.log("local fault handling %s from %s (peer not charged): %v", kind, conn.Addr, v.Err)
 		}
+		// A get-block this node builds and then does not send must not be
+		// left standing in the engine's pending map.
+		//
+		// OnBlockAnnounce writes pending and returns the request in one step,
+		// but the request crosses the two gates below before it reaches the
+		// wire, and neither used to tell the engine when it discarded one.
+		// The announcement then sat there until ReapUnservedBodies charged
+		// its announcer ScoreUnservedBody — for a body this node never asked
+		// for. wire.md §9 rule 5 prices "announced and would not serve", and
+		// no request ever left, so that was never true of anyone. The address
+		// charged is an outbound peer's stable listen address, and the score
+		// persists with no decay and no unban, so it accumulated.
+		unrequested := func() {
+			if v.Reply != nil && v.Reply.Kind == KindGetBlock {
+				if g, err := UnmarshalGetBlock(v.Reply.Payload); err == nil {
+					n.Engine.ForgetUnrequestedBody(conn.Addr, g.ID)
+				}
+			}
+		}
 		if v.Err != nil && v.Score <= ScoreProtocolViolation {
 			n.log("dropping %s: %v", conn.Addr, v.Err)
+			unrequested()
 			return
 		}
 		if n.Peers.Banned(conn.Addr) || n.Peers.BannedKey(conn.PeerKey) {
 			n.log("banning %s", conn.Addr)
+			unrequested()
 			return
 		}
 		if v.Reply != nil {
@@ -1869,6 +1890,7 @@ func (n *Node) serve(conn *Conn, outbound bool) {
 			// up to MaxMessageBytes — indefinitely.
 			if err := conn.SendDeadline(v.Reply.Kind, v.Reply.Payload,
 				time.Now().Add(writeTimeout)); err != nil {
+				unrequested()
 				return
 			}
 		}

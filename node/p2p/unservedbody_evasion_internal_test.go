@@ -140,6 +140,76 @@ func TestAPeerCannotCancelAnotherPeersUnservedBody(t *testing.T) {
 	}
 }
 
+// TestAPeerCannotCancelAnotherPeersUnservedBodyThroughTheServeSeam is the same
+// property over the path Node.serve actually takes, and it exists because the
+// test above could not see that path.
+//
+// The guard above drives OnBlockChunk and reads the Verdict. Node.serve does
+// something the Verdict alone does not describe: it takes v.Reply and, when it
+// does NOT hand the frame to the connection, tells the engine to forget the
+// pending entry that reply was for. That seam is a second mutator of `pending`
+// reached from a chunk path, and the id it carries comes off the *sender's*
+// frame -- OnBlockChunkFrom answers a mid-transfer chunk with a get-block for
+// c.ID, and c.ID is whatever the sender wrote.
+//
+// So an attacker sends a valid chunk 0 naming the honest peer's announced id.
+// The reply is a get-block for an id the attacker does not owe; if the seam
+// deletes on id alone, the honest peer's debt is cancelled by a stranger.
+//
+// The seam is reproduced here rather than driven through a socket because the
+// discard branches in Node.serve are a banned peer and a failed write, neither
+// of which a unit test can arrange without a connection. What is asserted is
+// the contract between them: whatever Node.serve passes to
+// ForgetUnrequestedBody, it passes the address of the connection the frame
+// arrived on, and the engine must refuse to act on an id that address does not
+// owe.
+func TestAPeerCannotCancelAnotherPeersUnservedBodyThroughTheServeSeam(t *testing.T) {
+	e := testEngine(t)
+	const honest = "10.66.0.2:5000"
+	const attacker = "10.66.0.1:5000"
+	var announced types.Hash
+	announced[0] = 0xB3
+	at := time.Now()
+	seedAnnouncement(e, announced, honest, at)
+
+	// A valid chunk 0 of a two-chunk transfer, naming the honest peer's id.
+	// It is accepted -- this is not a malformed message -- and it is answered
+	// with a continuation request for that same id.
+	v := e.OnBlockChunk(attacker, BlockChunk{
+		ID: announced, Chunk: 0, Total: 2, Data: fullChunk(),
+	}.MarshalBlockChunk())
+	if v.Err != nil {
+		t.Fatalf("setup: the attacker's chunk 0 was refused (%v); this test needs "+
+			"the accepted path that produces a continuation reply", v.Err)
+	}
+	if v.Reply == nil || v.Reply.Kind != KindGetBlock {
+		t.Fatalf("setup: chunk 0 produced no get-block continuation (reply %v), so "+
+			"the seam below would have nothing to act on", v.Reply)
+	}
+	// Anti-vacuity: the reply must name the VICTIM's id, or the scoping this
+	// test is about is never exercised.
+	g, err := UnmarshalGetBlock(v.Reply.Payload)
+	if err != nil {
+		t.Fatalf("setup: the continuation did not decode: %v", err)
+	}
+	if g.ID != announced {
+		t.Fatalf("setup: the continuation names %x, not the victim's %x; the "+
+			"attack this test describes is not being driven", g.ID[:8], announced[:8])
+	}
+
+	// Node.serve's discard branch, with the address of the connection the
+	// frame arrived on -- the attacker's.
+	e.ForgetUnrequestedBody(attacker, g.ID)
+
+	charged := reapAfterWindow(e, at)
+	if !chargedWith(charged, honest) {
+		t.Fatalf("a peer cancelled a different peer's unserved-body debt through "+
+			"the Node.serve seam: charged=%v. The continuation reply carries an id "+
+			"the SENDER chose, so a delete keyed on id alone lets any peer clear "+
+			"any announcer's debt for the price of one chunk", charged)
+	}
+}
+
 // TestAnAnnouncerCannotCancelItsOwnUnservedBodyByTrippingThePerPeerEviction:
 // the eviction victim is chosen by `started`, which follows the order this
 // same peer opened its transfers in, so "this node evicted my transfer" is a
