@@ -245,6 +245,39 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.json(func(*http.Request) (any, error) {
 		return s.api.Settings(), nil
 	}))
+	mux.HandleFunc("GET /api/networks", s.json(func(*http.Request) (any, error) {
+		return s.api.Networks(), nil
+	}))
+	mux.HandleFunc("GET /api/sync", s.json(func(*http.Request) (any, error) {
+		return s.api.Sync(), nil
+	}))
+	// The bundled node. `zcd ui` has none, and answers so; the routes exist
+	// so the frontend is one file.
+	mux.HandleFunc("GET /api/localnode", s.json(func(*http.Request) (any, error) {
+		return s.api.LocalNode(), nil
+	}))
+	mux.HandleFunc("POST /api/localnode/start", s.json(func(*http.Request) (any, error) {
+		return s.api.StartLocalNode()
+	}))
+	mux.HandleFunc("POST /api/localnode/stop", s.json(func(*http.Request) (any, error) {
+		return s.api.StopLocalNode()
+	}))
+	mux.HandleFunc("POST /api/probe", s.json(func(r *http.Request) (any, error) {
+		var req ProbeRequest
+		if err := decode(r, &req); err != nil {
+			return nil, err
+		}
+		return s.api.Probe(req), nil
+	}))
+	// Refused by `zcd ui` for the same reason /api/configure is: the key file
+	// was named on the command line. Registered so the frontend is one file.
+	mux.HandleFunc("POST /api/create", s.json(func(r *http.Request) (any, error) {
+		var req CreateRequest
+		if err := decode(r, &req); err != nil {
+			return nil, err
+		}
+		return s.api.Create(req)
+	}))
 	// Registered even though `zcd ui` refuses it (Config.Configurable is
 	// false there), so that the frontend is the same file in both front ends
 	// and the refusal is the wallet's answer rather than a missing route.

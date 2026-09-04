@@ -28,6 +28,7 @@ import (
 	"zycord/core/u256"
 	"zycord/spec"
 	"zycord/wallet"
+	"zycord/wallet/localnode"
 	"zycord/wallet/session"
 )
 
@@ -71,6 +72,18 @@ type Config struct {
 	// LockAfter is how long the key survives with no activity. Zero disables
 	// the idle lock, which is a choice a caller has to make explicitly.
 	LockAfter time.Duration
+
+	// LocalNode, when set, is a zycordd the wallet can run beside itself.
+	// NodeMode says whether it does: "local" starts it and talks to it,
+	// "external" (or empty) talks to RPC as given. Mine, MineThreads and
+	// Payout are the bundled node's mining settings; Payout is the wallet's
+	// persistent address as of when mining was switched on, remembered so
+	// the node can start mining before the key is unlocked.
+	LocalNode   *localnode.Manager
+	NodeMode    string
+	Mine        bool
+	MineThreads int
+	Payout      string
 
 	// Configurable allows the front end to change the fields above through
 	// Configure.
@@ -127,6 +140,14 @@ type WalletState struct {
 	Persistent       string `json:"persistent"`
 	OneShot          string `json:"one_shot"`
 	LockAfterSeconds int    `json:"lock_after_seconds"`
+	// NodeMode is "local" when the wallet runs the node it talks to;
+	// LocalNodeAvailable says whether it could. Mining and Payout are the
+	// bundled node's mining settings.
+	NodeMode           string `json:"node_mode"`
+	LocalNodeAvailable bool   `json:"local_node_available"`
+	Mining             bool   `json:"mining"`
+	MineThreads        int    `json:"mine_threads"`
+	Payout             string `json:"payout"`
 }
 
 // Wallet reports the current state without touching the network.
@@ -151,6 +172,18 @@ func (a *API) Configure(req ConfigureRequest) (*WalletState, error) {
 		return nil, ErrNotConfigurable
 	}
 
+	a.mu.RLock()
+	mgr := a.cfg.LocalNode
+	a.mu.RUnlock()
+	local := strings.TrimSpace(req.NodeMode) == "local"
+	if local && mgr == nil {
+		return nil, errors.New("wallet: this wallet has no built-in node; name a node to talk to instead")
+	}
+	if local && strings.TrimSpace(req.RPC) == "" {
+		// The address is the node's to decide; the field is required by
+		// resolve for the external case only.
+		req.RPC = "http://127.0.0.1:9420"
+	}
 	next, err := req.resolve()
 	if err != nil {
 		return nil, err
@@ -159,6 +192,36 @@ func (a *API) Configure(req ConfigureRequest) (*WalletState, error) {
 		if err := wallet.InspectKeyFile(next.KeyPath); err != nil {
 			return nil, err
 		}
+	}
+
+	// Mining pays the wallet's persistent address and nothing else, so it
+	// needs the key to have been open at least once. The address is derived
+	// before anything below locks.
+	payout := ""
+	if req.Mine {
+		if !local {
+			return nil, errors.New("wallet: mining is a setting of the built-in node; switch to it first")
+		}
+		a.mu.RLock()
+		if a.key != nil {
+			payout = session.HexAddr(a.key.Persistent())
+		} else {
+			payout = a.cfg.Payout
+		}
+		a.mu.RUnlock()
+		if payout == "" {
+			return nil, errors.New("wallet: unlock the wallet once before turning mining on, so it knows which address to pay")
+		}
+	}
+
+	if local {
+		rpc, err := mgr.Start(next.Params.Name, localnode.Options{Mine: req.Mine, Payout: payout, Threads: req.MineThreads})
+		if err != nil {
+			return nil, err
+		}
+		next.RPC = rpc
+	} else if mgr != nil {
+		_ = mgr.Stop()
 	}
 	if next.ConfirmRPC != "" && session.SameEndpoint(next.RPC, next.ConfirmRPC) {
 		return nil, fmt.Errorf("%w: both name %s", session.ErrConfirmRPCNotIndependent, next.RPC)
@@ -171,8 +234,164 @@ func (a *API) Configure(req ConfigureRequest) (*WalletState, error) {
 		a.key = nil
 	}
 	a.cfg.KeyPath, a.cfg.RPC, a.cfg.ConfirmRPC, a.cfg.Params = next.KeyPath, next.RPC, next.ConfirmRPC, next.Params
+	a.cfg.NodeMode = "external"
+	if local {
+		a.cfg.NodeMode = "local"
+	}
+	a.cfg.Mine, a.cfg.MineThreads = req.Mine, req.MineThreads
+	if payout != "" {
+		a.cfg.Payout = payout
+	}
 	a.seen = time.Now()
 	return a.stateLocked(), nil
+}
+
+// LocalNode reports the bundled node, or Available: false when there is
+// none.
+func (a *API) LocalNode() *localnode.Info {
+	cfg := a.config()
+	if cfg.LocalNode == nil {
+		return &localnode.Info{}
+	}
+	info := cfg.LocalNode.Info()
+	return &info
+}
+
+// StartLocalNode starts the bundled node for the configured network and
+// points the wallet at it. It is what the interface calls on launch when the
+// saved mode is "local", and what a person presses after the node exited.
+func (a *API) StartLocalNode() (*localnode.Info, error) {
+	cfg := a.config()
+	if cfg.LocalNode == nil {
+		return nil, localnode.ErrNoBinary
+	}
+	rpc, err := cfg.LocalNode.Start(cfg.Params.Name, localnode.Options{Mine: cfg.Mine, Payout: cfg.Payout, Threads: cfg.MineThreads})
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.cfg.RPC, a.cfg.NodeMode = rpc, "local"
+	a.mu.Unlock()
+	return a.LocalNode(), nil
+}
+
+// StopLocalNode stops the bundled node. The wallet keeps pointing at its
+// address, so the interface shows "no node" rather than switching anywhere.
+func (a *API) StopLocalNode() (*localnode.Info, error) {
+	cfg := a.config()
+	if cfg.LocalNode == nil {
+		return nil, localnode.ErrNoBinary
+	}
+	if err := cfg.LocalNode.Stop(); err != nil {
+		return nil, err
+	}
+	return a.LocalNode(), nil
+}
+
+// SyncInfo is whether the node this wallet talks to is at the tip, and if
+// not, how far off. It is the difference between a balance and a stale
+// balance, which no number on its own reveals.
+type SyncInfo struct {
+	Reachable bool   `json:"reachable"`
+	Mismatch  bool   `json:"mismatch"`
+	Error     string `json:"error"`
+
+	Syncing bool `json:"syncing"`
+	// Progress is 0–100, estimated from the tip's timestamp against the
+	// clock: the node does not know the chain's height before it has it,
+	// but it knows when genesis was and what time it is.
+	Progress      float64 `json:"progress"`
+	Height        uint64  `json:"height"`
+	TipTime       uint64  `json:"tip_time"`
+	TipAgeSeconds int64   `json:"tip_age_seconds"`
+	Peers         int     `json:"peers"`
+	P2PEnabled    bool    `json:"p2p_enabled"`
+
+	// The three reasons, separately: below the checkpoint floor this release
+	// enforces, a tip older than the network's block time allows, or nobody
+	// to hear about new blocks from.
+	BehindFloor bool `json:"behind_floor"`
+	Stale       bool `json:"stale"`
+	NoPeers     bool `json:"no_peers"`
+
+	Message string `json:"message"`
+}
+
+// staleAfter is how old a tip may be before the node is treated as behind.
+// Twenty block intervals, and never under twenty minutes: a public network
+// whose blocks are further apart than that is stalled, not the node.
+func staleAfter(p *params.Params) time.Duration {
+	d := time.Duration(p.TargetBlockSeconds) * 20 * time.Second
+	if d < 20*time.Minute {
+		d = 20 * time.Minute
+	}
+	return d
+}
+
+// Sync asks the node where it is. Like Node, it does not touch the idle
+// timer: the interface polls it while a sync screen is up.
+func (a *API) Sync() *SyncInfo {
+	cfg := a.config()
+	out := &SyncInfo{}
+	s, err := session.New(nil, cfg.Params, cfg.RPC, "")
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	if _, err := s.AssertChainID(s.Primary()); err != nil {
+		out.Error = err.Error()
+		out.Mismatch = errors.Is(err, session.ErrChainIDMismatch)
+		return out
+	}
+	status, err := s.Primary().Status()
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	out.Reachable = true
+	out.Height, out.TipTime = status.Height, status.Time
+	if net, err := s.Primary().Network(); err == nil {
+		out.P2PEnabled, out.Peers = net.Enabled, net.Peers
+	}
+
+	now := time.Now().Unix()
+	if int64(status.Time) < now {
+		out.TipAgeSeconds = now - int64(status.Time)
+	}
+	out.BehindFloor = status.MinChainWorkHeight > 0 && status.Height < status.MinChainWorkHeight
+	out.Stale = time.Duration(out.TipAgeSeconds)*time.Second > staleAfter(cfg.Params)
+	// A devnet is a private chain: its only node is often the one asked.
+	out.NoPeers = out.P2PEnabled && out.Peers == 0 && cfg.Params.Name != spec.Devnet().Name
+	out.Syncing = out.BehindFloor || out.Stale || out.NoPeers
+
+	switch {
+	case !out.Syncing:
+		out.Progress, out.Message = 100, "Up to date"
+	case out.BehindFloor || out.Stale:
+		genesis := int64(cfg.Params.GenesisTime)
+		if now > genesis && int64(status.Time) > genesis {
+			out.Progress = float64(int64(status.Time)-genesis) / float64(now-genesis) * 100
+		}
+		if out.Progress > 99.9 {
+			out.Progress = 99.9
+		}
+		out.Message = "Downloading blocks: the tip is " + humanAge(out.TipAgeSeconds) + " behind"
+	default:
+		out.Message = "Looking for peers"
+	}
+	return out
+}
+
+func humanAge(secs int64) string {
+	switch {
+	case secs < 120:
+		return fmt.Sprintf("%d seconds", secs)
+	case secs < 2*3600:
+		return fmt.Sprintf("%d minutes", secs/60)
+	case secs < 2*86400:
+		return fmt.Sprintf("%d hours", secs/3600)
+	}
+	return fmt.Sprintf("%d days", secs/86400)
 }
 
 // Settings is the current configuration, for a front end that wants to
@@ -181,11 +400,151 @@ func (a *API) Settings() ConfigureRequest {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return ConfigureRequest{
-		KeyPath:    a.cfg.KeyPath,
-		RPC:        a.cfg.RPC,
-		ConfirmRPC: a.cfg.ConfirmRPC,
-		Network:    a.cfg.Params.Name,
+		KeyPath:     a.cfg.KeyPath,
+		RPC:         a.cfg.RPC,
+		ConfirmRPC:  a.cfg.ConfirmRPC,
+		Network:     a.cfg.Params.Name,
+		NodeMode:    a.cfg.NodeMode,
+		Mine:        a.cfg.Mine,
+		MineThreads: a.cfg.MineThreads,
 	}
+}
+
+// NetworkInfo is one network this build can sign for, as the interface lists
+// it. The list comes from here rather than being typed into the frontend, so
+// a network added to spec/ appears in the wallet without a second edit.
+type NetworkInfo struct {
+	Name    string `json:"name"`
+	Label   string `json:"label"`
+	ChainID uint64 `json:"chain_id"`
+	// Summary is the one line a person choosing a network needs.
+	Summary string `json:"summary"`
+	// Public marks the networks a first run is offered. The devnet is a
+	// developer's throwaway and is reachable from Settings, not from the
+	// screen a person meets when they open the wallet for the first time.
+	Public bool `json:"public"`
+}
+
+// Networks lists the embedded parameter sets, mainnet first.
+func (a *API) Networks() []NetworkInfo {
+	return []NetworkInfo{
+		{Name: spec.Mainnet().Name, Label: "Mainnet", ChainID: spec.Mainnet().ChainID,
+			Summary: "The real network. Coins here have value.", Public: true},
+		{Name: spec.Testnet().Name, Label: "Testnet", ChainID: spec.Testnet().ChainID,
+			Summary: "The public test network. Coins here are for testing and have no value.", Public: true},
+		{Name: spec.Devnet().Name, Label: "Devnet", ChainID: spec.Devnet().ChainID,
+			Summary: "A throwaway local network for development, reset at will.", Public: false},
+	}
+}
+
+// CreateRequest names where a new key file goes and what encrypts it.
+type CreateRequest struct {
+	KeyPath    string `json:"key_path"`
+	Passphrase string `json:"passphrase"`
+}
+
+// Create generates a new key, writes it encrypted to KeyPath, and opens it.
+//
+// It is the graphical form of `zcd wallet new`, and it exists because the
+// desktop application is the interface for people who do not have `zcd`: a
+// wallet whose first screen asks for a file only a command line can produce
+// has not been installed, it has been unpacked.
+//
+// The write refuses an existing file and never leaves a torn one
+// (wallet.SaveKeyFile, docs/WALLET.md rule 7). The key is left unlocked
+// afterwards rather than asking for the passphrase that was typed a moment
+// ago, and the state returned carries the addresses so the interface can show
+// them at once.
+func (a *API) Create(req CreateRequest) (*WalletState, error) {
+	a.mu.RLock()
+	configurable := a.cfg.Configurable
+	a.mu.RUnlock()
+	if !configurable {
+		return nil, ErrNotConfigurable
+	}
+	path := strings.TrimSpace(req.KeyPath)
+	if path == "" {
+		return nil, errors.New("wallet: choose where to save the key file")
+	}
+	if req.Passphrase == "" {
+		return nil, errors.New("wallet: a passphrase is required; there is no unencrypted key format")
+	}
+	pass := []byte(req.Passphrase)
+	defer func() {
+		for i := range pass {
+			pass[i] = 0
+		}
+	}()
+	k, err := wallet.NewKey()
+	if err != nil {
+		return nil, err
+	}
+	if err := wallet.SaveKeyFile(path, k, pass); err != nil {
+		k.Zero()
+		return nil, err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.key != nil {
+		a.key.Zero()
+	}
+	a.key, a.cfg.KeyPath, a.seen = k, path, time.Now()
+	return a.stateLocked(), nil
+}
+
+// ProbeRequest names a node to ask, and the network the person means it to
+// be on.
+type ProbeRequest struct {
+	RPC     string `json:"rpc"`
+	Network string `json:"network"`
+}
+
+// ProbeResult is what one node said about itself, against what was expected.
+type ProbeResult struct {
+	RPC       string `json:"rpc"`
+	Reachable bool   `json:"reachable"`
+	Error     string `json:"error"`
+
+	// What the node reports.
+	Network string `json:"network"`
+	ChainID uint64 `json:"chain_id"`
+	Height  uint64 `json:"height"`
+
+	// What was asserted, and whether the two agree. A reachable node on the
+	// wrong network is the case the interface has to name rather than fold
+	// into "unreachable": the fix is different.
+	Expected        string `json:"expected"`
+	ExpectedChainID uint64 `json:"expected_chain_id"`
+	Matches         bool   `json:"matches"`
+}
+
+// Probe asks a node who it is, without saving anything and without a key.
+//
+// It is what a settings form's "test" button does: the node address and the
+// network are the two things a person can get wrong on the first screen, and
+// both are cheaper to find out about before Save than after.
+func (a *API) Probe(req ProbeRequest) *ProbeResult {
+	out := &ProbeResult{RPC: strings.TrimSpace(req.RPC)}
+	resolved, err := (ConfigureRequest{RPC: out.RPC, Network: req.Network}).resolve()
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	out.Expected, out.ExpectedChainID = resolved.Params.Name, resolved.Params.ChainID
+	status, err := session.NewClient(out.RPC).Status()
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	out.Reachable = true
+	out.Network, out.ChainID, out.Height = status.Network, status.ChainID, status.Height
+	out.Matches = status.ChainID == resolved.Params.ChainID
+	if !out.Matches {
+		out.Error = fmt.Sprintf("%s is on %q (chain id %d), not %q (chain id %d)",
+			out.RPC, status.Network, status.ChainID, resolved.Params.Name, resolved.Params.ChainID)
+	}
+	return out
 }
 
 // ConfigureRequest names a key file, a node and a network.
@@ -197,6 +556,13 @@ type ConfigureRequest struct {
 	// zcd command calls them. An empty value means mainnet, which is the
 	// default everywhere else too.
 	Network string `json:"network"`
+	// NodeMode is "local" to run the bundled node, anything else to talk to
+	// RPC as given.
+	NodeMode string `json:"node_mode"`
+	// Mine and MineThreads are the bundled node's mining settings. The
+	// payout is always the wallet's own persistent address.
+	Mine        bool `json:"mine"`
+	MineThreads int  `json:"mine_threads"`
 }
 
 type resolvedConfig struct {
@@ -215,11 +581,13 @@ func (r ConfigureRequest) resolve() (resolvedConfig, error) {
 	switch strings.TrimSpace(r.Network) {
 	case "", spec.Mainnet().Name:
 		out.Params = spec.Mainnet()
+	case spec.Testnet().Name:
+		out.Params = spec.Testnet()
 	case spec.Devnet().Name:
 		out.Params = spec.Devnet()
 	default:
-		return out, fmt.Errorf("wallet: %q is not a network this build knows; expected %q or %q",
-			r.Network, spec.Mainnet().Name, spec.Devnet().Name)
+		return out, fmt.Errorf("wallet: %q is not a network this build knows; expected %q, %q or %q",
+			r.Network, spec.Mainnet().Name, spec.Testnet().Name, spec.Devnet().Name)
 	}
 	if out.RPC == "" {
 		return out, errors.New("wallet: a node address is required")
@@ -229,15 +597,23 @@ func (r ConfigureRequest) resolve() (resolvedConfig, error) {
 
 func (a *API) stateLocked() *WalletState {
 	s := &WalletState{
-		Locked:           a.key == nil,
-		NeedsKey:         a.cfg.KeyPath == "",
-		Configurable:     a.cfg.Configurable,
-		KeyPath:          a.cfg.KeyPath,
-		Network:          a.cfg.Params.Name,
-		ChainID:          a.cfg.Params.ChainID,
-		RPC:              a.cfg.RPC,
-		ConfirmRPC:       a.cfg.ConfirmRPC,
-		LockAfterSeconds: int(a.cfg.LockAfter / time.Second),
+		Locked:             a.key == nil,
+		NeedsKey:           a.cfg.KeyPath == "",
+		Configurable:       a.cfg.Configurable,
+		KeyPath:            a.cfg.KeyPath,
+		Network:            a.cfg.Params.Name,
+		ChainID:            a.cfg.Params.ChainID,
+		RPC:                a.cfg.RPC,
+		ConfirmRPC:         a.cfg.ConfirmRPC,
+		LockAfterSeconds:   int(a.cfg.LockAfter / time.Second),
+		NodeMode:           a.cfg.NodeMode,
+		LocalNodeAvailable: a.cfg.LocalNode != nil && a.cfg.LocalNode.Binary != "",
+		Mining:             a.cfg.Mine,
+		MineThreads:        a.cfg.MineThreads,
+		Payout:             a.cfg.Payout,
+	}
+	if a.cfg.NodeMode == "" {
+		s.NodeMode = "external"
 	}
 	if a.key != nil {
 		s.Persistent = session.HexAddr(a.key.Persistent())
@@ -433,6 +809,14 @@ type NodeInfo struct {
 	Reachable bool   `json:"reachable"`
 	Error     string `json:"error"`
 
+	// Mismatch is a node that answered and is on another network. It is
+	// reported apart from unreachability because the remedy is different:
+	// change the network this wallet asserts, or the node it asks. NodeNetwork
+	// and NodeChainID are what it said about itself.
+	Mismatch    bool   `json:"mismatch"`
+	NodeNetwork string `json:"node_network"`
+	NodeChainID uint64 `json:"node_chain_id"`
+
 	Network   string `json:"network"`
 	ChainID   uint64 `json:"chain_id"`
 	Height    uint64 `json:"height"`
@@ -477,6 +861,12 @@ func (a *API) Node() *NodeInfo {
 	// exactly where that has to be visible.
 	if _, err := s.AssertChainID(s.Primary()); err != nil {
 		out.Error = err.Error()
+		if errors.Is(err, session.ErrChainIDMismatch) {
+			if status, serr := s.Primary().Status(); serr == nil {
+				out.Mismatch = true
+				out.NodeNetwork, out.NodeChainID = status.Network, status.ChainID
+			}
+		}
 		return out
 	}
 	status, err := s.Primary().Status()
@@ -575,6 +965,14 @@ func (a *API) Send(req SendRequest) (*SendResponse, error) {
 	to, err := session.ParseAddress(req.To)
 	if err != nil {
 		return nil, err
+	}
+	// A node that has not caught up reports the balances of some earlier
+	// block, and every number below — what the source holds, the fee in
+	// force, the height the certificate expires at — would be read off that.
+	// Nothing here can tell a stale answer from a current one, so the one
+	// signal that can is checked first.
+	if sy := a.Sync(); sy.Reachable && (sy.Stale || sy.BehindFloor) {
+		return nil, fmt.Errorf("wallet: the node is still syncing (%s); nothing is signed against a stale state", sy.Message)
 	}
 	opts, err := sendOptions(req)
 	if err != nil {

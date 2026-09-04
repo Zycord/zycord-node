@@ -31,6 +31,13 @@ type fakeNode struct {
 	// beforeBalance, if set, runs before every /balance answer. It is how a
 	// test stalls a spend in the middle of one.
 	beforeBalance func()
+	// tipTime is what /status reports as the tip's timestamp; zero means
+	// now. floor is the checkpoint height it claims to enforce.
+	tipTime int64
+	floor   uint64
+	// peers is what /network reports; zero means the default of three, and
+	// a negative value means none.
+	peers int
 }
 
 func (f *fakeNode) serve(t *testing.T) string {
@@ -38,7 +45,12 @@ func (f *fakeNode) serve(t *testing.T) string {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/status":
-			fmt.Fprintf(w, `{"chain_id":%d,"height":1000,"network":"zycord"}`, spec.Mainnet().ChainID)
+			tip := f.tipTime
+			if tip == 0 {
+				tip = time.Now().Unix()
+			}
+			fmt.Fprintf(w, `{"chain_id":%d,"height":1000,"network":"zycord","time":%d,"min_chain_work_height":%d}`,
+				spec.Mainnet().ChainID, tip, f.floor)
 		case "/fees":
 			fmt.Fprint(w, `{"seq_base_fee":"10","par_base_fee":"5","skip_fee":"1000"}`)
 		case "/balance":
@@ -58,7 +70,11 @@ func (f *fakeNode) serve(t *testing.T) string {
 			}
 			fmt.Fprintf(w, `{"balance":%q,"spent":false}`, bal)
 		case "/network":
-			fmt.Fprint(w, `{"enabled":true,"peers":3,"listening":true,"inbound":2,"outbound":1,"reachable":true}`)
+			peers := 3
+			if f.peers != 0 {
+				peers = max(f.peers, 0)
+			}
+			fmt.Fprintf(w, `{"enabled":true,"peers":%d,"listening":true,"inbound":2,"outbound":1,"reachable":true}`, peers)
 		case "/submit":
 			f.mu.Lock()
 			f.submitted++

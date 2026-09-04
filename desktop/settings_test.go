@@ -27,7 +27,7 @@ func TestSettingsSurviveACrashMidWrite(t *testing.T) {
 	for _, rpc := range []string{"http://127.0.0.1:9420", "http://127.0.0.1:9999"} {
 		if err := saveSettings(path, webui.ConfigureRequest{
 			KeyPath: "/keys/w.json", RPC: rpc, Network: "zycord",
-		}); err != nil {
+		}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -90,7 +90,7 @@ func TestTheUpdateAnswerHasThreeStates(t *testing.T) {
 
 	if err := saveSettings(path, webui.ConfigureRequest{
 		KeyPath: "/keys/w.json", RPC: "http://127.0.0.1:9420", Network: "zycord",
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatal(err)
 	}
 	b := &Bridge{settingsPath: path}

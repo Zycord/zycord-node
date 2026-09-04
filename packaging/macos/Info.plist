@@ -32,7 +32,8 @@
   <string>10.15</string>
   <key>NSHighResolutionCapable</key>
   <true/>
-  <!-- No network entitlement is claimed and none is needed: the wallet talks
-       to a node the operator names, over loopback by default. -->
+  <!-- No entitlement is claimed and none is needed: the application is not
+       sandboxed. The wallet talks to a node over loopback; the zycordd beside
+       it in Contents/MacOS makes the outbound peer connections. -->
 </dict>
 </plist>

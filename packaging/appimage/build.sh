@@ -46,9 +46,24 @@ echo "==> building zycord-wallet ${VERSION}"
 (cd desktop && go build -tags desktop,production,webkit2_41 -trimpath \
     -ldflags "-s -w -X main.version=${VERSION}" -o "../${OUT}/zycord-wallet" .)
 
+# The node the wallet runs beside itself (wallet/localnode). It is looked for
+# next to the wallet's executable, which inside an AppImage is usr/bin. The
+# RandomX build, so it can join the public networks; cgo, like everything else
+# in this file. DESKTOP_NODE=0 leaves it out, and the wallet then asks for a
+# node to talk to.
+DESKTOP_NODE="${DESKTOP_NODE:-1}"
+if [ "$DESKTOP_NODE" != 0 ]; then
+    echo "==> building zycordd ${VERSION} (RandomX)"
+    CGO_ENABLED=1 go build -tags randomx -trimpath \
+        -ldflags "-s -w -X main.version=${VERSION}" -o "${OUT}/zycordd" ./cmd/zycordd
+fi
+
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications"
 mv "${OUT}/zycord-wallet" "$APPDIR/usr/bin/zycord-wallet"
+if [ "$DESKTOP_NODE" != 0 ]; then
+    mv "${OUT}/zycordd" "$APPDIR/usr/bin/zycordd"
+fi
 cp packaging/appimage/zycord-wallet.desktop "$APPDIR/usr/share/applications/"
 
 # No icon: the application ships without one rather than pulling an image

@@ -75,6 +75,10 @@ type Status struct {
 	Tip       string `json:"tip"`
 	StateRoot string `json:"state_root"`
 	Time      uint64 `json:"time"`
+	// MinChainWorkHeight is the launch checkpoint floor this node enforces;
+	// a tip below it is a node that has not finished syncing, whatever else
+	// it reports. Zero from a node built without checkpoints.
+	MinChainWorkHeight uint64 `json:"min_chain_work_height"`
 }
 
 // Head is /head: the tip header's own fields.

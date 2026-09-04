@@ -98,14 +98,27 @@ under a different version. `make dist-desktop` adds the tag on Linux by itself.
 
 ## What it does that `zcd ui` does not
 
-Nothing, by design, except two things a browser cannot do:
+Nothing, by design, except three things a browser build has no business doing:
 
 - **It opens no TCP port.** `zcd ui` has to authenticate a loopback socket
   because a socket is reachable from the rest of the machine; this has nothing to
   reach. No token, no `Host` check, no CSRF surface.
-- **A native file dialog**, and it remembers the choice. A web page can receive a
+- **Native file dialogs**, and it remembers the choice. A web page can receive a
   file's contents but never learn its path, so the browser build asks for a typed
   path — which is what starting `zcd ui` needed anyway.
+- **It creates a key file.** The first-run screens are the graphical form of
+  `zcd wallet new`: the person who downloaded this application has no `zcd`, and a
+  wallet whose first screen asks for a file only a command line can produce has
+  been unpacked rather than installed. `webui.API.Create` writes the same format,
+  through the same no-clobber, no-torn-file path (`wallet.SaveKeyFile`), and
+  `zcd ui` refuses the call for the same reason it refuses `Configure`: its key
+  file was named on the command line.
+
+The first run also asks which network the wallet is for — mainnet, the public
+testnet or a local devnet — and offers a **Test** button that asks the node who
+it is before anything is saved. A node on a different network from the one
+selected is reported as exactly that, with a one-click switch, rather than as
+"unreachable": the two have different fixes.
 
 Everything else is the same file. `transport.js` picks the transport at load
 time and the rest of the interface is written against neither, so the two cannot
@@ -116,13 +129,60 @@ that no compiler checks.
 Every spend goes through `wallet/session`, so this window is structurally
 incapable of being more permissive than `zcd wallet send`.
 
+## The node beside it
+
+The wallet is a client of a node and holds no chain of its own. Rather than
+ask somebody who double-clicked an icon to also run a daemon, or point every
+download at a node the project runs, the application ships a `zycordd` next
+to its own executable and starts it: a full node, mining off by default, on a
+data directory of its own under the configuration directory
+(`<config>/zycord/node/<network>/`), with RPC on loopback. `wallet/localnode`
+is the whole of that: find the binary, choose a port, start, watch, stop.
+
+It is a **child process**, not an import. The key lives in the wallet's
+memory and a node parses bytes from strangers all day; the node that ships is
+`cmd/zycordd`, with the sync driver, the seeds, the checkpoints and the
+shutdown order it already has; and RandomX is cgo, which the Windows wallet
+deliberately is not. So `zycordd` beside the wallet is the RandomX build on
+every platform — cgo, unattested, and said so in the `UNATTESTED.txt` that
+travels with it — while `zycord-wallet.exe` stays pure Go and byte-identical.
+`make dist-desktop` builds both; `DESKTOP_NODE=0` ships the wallet alone, and
+the wallet then asks for a node to talk to.
+
+Three consequences the interface is built around:
+
+- **Sync first.** The first launch shows a sync screen with a progress
+  estimate (the tip's timestamp against the clock, since the node cannot know
+  the chain's height before it has it), the peer count and the node's own log.
+  A person can go in before it finishes; balances may then be stale and the
+  wallet refuses to sign anything until the node is in sync
+  (`webui.API.Sync`, checked at the top of `Send`). "In sync" is: not below the
+  checkpoint floor this release enforces, a tip younger than twenty block
+  intervals, and at least one peer on a public network.
+- **A node already running is adopted.** If something answers on 9420 and is
+  on the network the wallet wants, the wallet uses it and starts nothing; if
+  it is on another network, the bundled node goes to 9440.
+- **Mining is a setting.** Settings → "Mine with this computer" restarts the
+  bundled node with `--mine --payout <this wallet's persistent address>`. The
+  node syncs first and starts on its own; on the public networks it allocates
+  about 3 GiB for the RandomX dataset, which the setting says next to the box.
+  The payout address is kept in the settings file (it is an address, not a
+  secret) so the node can mine from launch before the key is unlocked.
+
+The Linux and Windows wallets ask the kernel, in different words, to end the
+node when the wallet dies: `Pdeathsig` on Linux, and on Windows a hidden
+console. macOS has no equivalent, so a wallet that crashes there — as opposed
+to one that is closed — can leave a node running until it is stopped by hand
+or the machine restarts.
+
 ## Settings
 
 Stored at `$XDG_CONFIG_HOME/zycord/wallet.json` (`~/Library/Application
 Support/zycord/wallet.json` on macOS, `%AppData%\zycord\wallet.json` on
-Windows), holding the key file path, the node address and the network. No secret
-is written: a key file path is not a key, and the passphrase is never stored
-anywhere.
+Windows), holding the key file path, the node address, the network, whether the
+bundled node is used and whether it mines. No secret is written: a key file
+path is not a key, a payout address is public, and the passphrase is never
+stored anywhere.
 
 Changing any of them locks the wallet. A key unlocked against one network must
 not survive into another — addresses derive from the key rather than from a

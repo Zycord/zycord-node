@@ -32,6 +32,7 @@ import (
 	"zycord/core/params"
 	"zycord/spec"
 	"zycord/update"
+	"zycord/wallet/localnode"
 	"zycord/wallet/webui"
 
 	"github.com/wailsapp/wails/v2"
@@ -62,6 +63,18 @@ func main() {
 
 	saved := loadSettings(path)
 
+	// The node that ships beside this application, if one does. It is looked
+	// for next to the executable — and, inside a macOS bundle, in Resources —
+	// and on PATH after that; a wallet installed without one still works
+	// against a node the person names.
+	mgr := bundledNode(path)
+	if saved.NodeMode == "" {
+		saved.NodeMode = "external"
+		if mgr != nil {
+			saved.NodeMode = "local"
+		}
+	}
+
 	// Configurable, unlike `zcd ui`: this application is launched by
 	// double-clicking an icon and has nowhere else to be told which key file,
 	// which node and which network to use.
@@ -72,6 +85,11 @@ func main() {
 		KeyPath:      saved.KeyPath,
 		LockAfter:    *lockAfter,
 		Configurable: true,
+		LocalNode:    mgr,
+		NodeMode:     saved.NodeMode,
+		Mine:         saved.Mine,
+		MineThreads:  saved.MineThreads,
+		Payout:       saved.Payout,
 	})
 	bridge := &Bridge{API: api, settingsPath: path}
 
@@ -95,6 +113,11 @@ func main() {
 			// reads the process next — a crash reporter, a core file, a
 			// hibernation image.
 			api.Lock()
+			// Nor a node running that nothing will stop. Graceful first, so
+			// its store closes cleanly; localnode gives it ten seconds.
+			if mgr != nil {
+				_ = mgr.Stop()
+			}
 		},
 		Mac: &mac.Options{
 			About: &mac.AboutInfo{
@@ -108,6 +131,36 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "zycord-wallet:", err)
 		os.Exit(1)
+	}
+}
+
+// bundledNode finds the zycordd shipped with this application and prepares
+// to run it under the configuration directory, or returns nil.
+//
+// settingsPath decides where the node's data goes: beside the settings file,
+// under node/<network>/. A chain's state is not a cache — losing it costs a
+// resync, not money, but a resync is hours — so it lives with the
+// configuration rather than in a cache directory an operating system may
+// clear.
+func bundledNode(settingsPath string) *localnode.Manager {
+	var dirs []string
+	if exe, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		dir := filepath.Dir(exe)
+		dirs = append(dirs, dir)
+		if goruntime.GOOS == "darwin" {
+			dirs = append(dirs, filepath.Join(dir, "..", "Resources"))
+		}
+	}
+	bin := localnode.Find(dirs...)
+	if bin == "" {
+		return nil
+	}
+	return &localnode.Manager{
+		Binary:   bin,
+		DataRoot: filepath.Join(filepath.Dir(settingsPath), "node"),
 	}
 }
 
@@ -168,6 +221,56 @@ func (b *Bridge) ChooseKeyFile() (string, error) {
 	})
 }
 
+// ChooseNewKeyFile opens the platform's save dialog for a key file that does
+// not exist yet, and returns the chosen path. The wallet itself still refuses
+// to overwrite whatever is there (docs/WALLET.md rule 7); the dialog's own
+// "replace?" prompt is not the guard.
+func (b *Bridge) ChooseNewKeyFile() (string, error) {
+	if b.ctx == nil {
+		return "", fmt.Errorf("the window is not ready yet")
+	}
+	opts := wruntime.SaveDialogOptions{
+		Title:           "Save the new Zycord key file",
+		DefaultFilename: defaultKeyFileName,
+		Filters: []wruntime.FileFilter{
+			{DisplayName: "Zycord key files (*.json)", Pattern: "*.json"},
+		},
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		opts.DefaultDirectory = home
+	}
+	return wruntime.SaveFileDialog(b.ctx, opts)
+}
+
+// defaultKeyFileName is what a new wallet is called when the person does not
+// choose. It goes in the home directory rather than the configuration
+// directory: a key file is something to back up, and a file nobody can find
+// is a file nobody backs up.
+const defaultKeyFileName = "zycord-wallet.json"
+
+// SuggestKeyPath is the path the first-run screen offers for a new key file.
+func (b *Bridge) SuggestKeyPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return defaultKeyFileName
+	}
+	return filepath.Join(home, defaultKeyFileName)
+}
+
+// Create writes a new key file through the wallet and remembers its path.
+func (b *Bridge) Create(req webui.CreateRequest) (*webui.WalletState, error) {
+	state, err := b.API.Create(req)
+	if err != nil {
+		return nil, err
+	}
+	st := loadSettings(b.settingsPath)
+	st.KeyPath = state.KeyPath
+	if err := saveRawSettings(b.settingsPath, st); err != nil {
+		fmt.Fprintln(os.Stderr, "zycord-wallet: could not save settings:", err)
+	}
+	return state, nil
+}
+
 // Configure applies a configuration and, if the wallet accepted it, writes it
 // down. Persisting only what was accepted is what stops a bad node address
 // from being reloaded on every start.
@@ -176,7 +279,7 @@ func (b *Bridge) Configure(req webui.ConfigureRequest) (*webui.WalletState, erro
 	if err != nil {
 		return nil, err
 	}
-	if err := saveSettings(b.settingsPath, req); err != nil {
+	if err := saveSettings(b.settingsPath, req, state); err != nil {
 		// Not fatal: the wallet is configured and usable, and the only cost
 		// is retyping this next time. Saying so beats failing a working
 		// action.
@@ -356,6 +459,16 @@ type settings struct {
 	ConfirmRPC string `json:"confirm_rpc"`
 	Network    string `json:"network"`
 
+	// NodeMode is "local" for the bundled node, "external" for one the
+	// person named, "" for a settings file written before the choice existed
+	// (which resolves to local when a node is bundled). Mine, MineThreads and
+	// Payout are the bundled node's mining settings; Payout is an address and
+	// not a secret.
+	NodeMode    string `json:"node_mode,omitempty"`
+	Mine        bool   `json:"mine,omitempty"`
+	MineThreads int    `json:"mine_threads,omitempty"`
+	Payout      string `json:"payout,omitempty"`
+
 	// UpdateCheck is "on", "off", or "" for not yet asked. Three states rather
 	// than a bool, because "nobody has been asked" and "somebody said no" are
 	// different things: the first shows a one-time banner and the second must
@@ -370,8 +483,11 @@ type settings struct {
 // window that will not open is worse than one that opens on the default and
 // says so in its header.
 func (s settings) params() *params.Params {
-	if s.Network == spec.Devnet().Name {
+	switch s.Network {
+	case spec.Devnet().Name:
 		return spec.Devnet()
+	case spec.Testnet().Name:
+		return spec.Testnet()
 	}
 	return spec.Mainnet()
 }
@@ -404,19 +520,42 @@ func loadSettings(path string) settings {
 		out.Network = got.Network
 	}
 	out.KeyPath, out.ConfirmRPC, out.UpdateCheck = got.KeyPath, got.ConfirmRPC, got.UpdateCheck
+	out.NodeMode, out.Mine, out.MineThreads, out.Payout = got.NodeMode, got.Mine, got.MineThreads, got.Payout
 	return out
 }
 
-func saveSettings(path string, req webui.ConfigureRequest) error {
+func saveSettings(path string, req webui.ConfigureRequest, state *webui.WalletState) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(settings{
-		KeyPath:    req.KeyPath,
-		RPC:        req.RPC,
-		ConfirmRPC: req.ConfirmRPC,
-		Network:    req.Network,
-	}, "", "  ")
+	prev := loadSettings(path)
+	st := settings{
+		KeyPath:     req.KeyPath,
+		RPC:         req.RPC,
+		ConfirmRPC:  req.ConfirmRPC,
+		Network:     req.Network,
+		NodeMode:    req.NodeMode,
+		Mine:        req.Mine,
+		MineThreads: req.MineThreads,
+		Payout:      prev.Payout,
+		UpdateCheck: prev.UpdateCheck,
+	}
+	if state != nil {
+		// The wallet reports the address it will be paid at, which is only
+		// derivable while the key is open; what it reported is what is kept.
+		if state.Payout != "" {
+			st.Payout = state.Payout
+		}
+		if state.NodeMode != "" {
+			st.NodeMode = state.NodeMode
+		}
+		if st.NodeMode == "local" {
+			// The wallet chose the bundled node's address; a settings file
+			// naming it is what makes the next launch consistent with this one.
+			st.RPC = state.RPC
+		}
+	}
+	raw, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}

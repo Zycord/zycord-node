@@ -54,7 +54,8 @@ built it stops mattering.
 | `zcd`, `zycordd` — `-randomx` | **yes**, this is the download | no — cgo, RandomX is C++ | **yes** |
 | `zcd`, `zycordd` — pure Go | **no**, you build it | **yes**, byte-identical | no |
 | Zycord Wallet, Linux and macOS | yes | no — cgo | n/a |
-| Zycord Wallet, Windows | yes | yes, the binary | n/a |
+| Zycord Wallet, Windows | yes | yes, the wallet binary | n/a |
+| the `zycordd` inside every wallet archive | yes | no — cgo, RandomX | n/a |
 
 Mainnet and the public testnet both declare `pow_engine: randomx-v1`. RandomX is
 compiled only under a build tag that needs a C compiler, and a node that cannot
@@ -158,6 +159,13 @@ Compare the `.exe` after unpacking, not the archive. And the claim is about the
 build being deterministic, not about the webview: the WebView2 runtime that
 renders the window is Microsoft's, installed on the user's machine, and is no
 more reproducible than the operating system it comes with.
+
+Every wallet archive also carries a `zycordd`: the wallet runs it as its own
+full node, so a download works without anybody's infrastructure and without a
+second program to install. That node is the RandomX build — it has to be, to
+join the public networks — and is therefore in the unattested tier on every
+platform, Windows included; the `UNATTESTED.txt` beside it says so. The claim
+about the Windows wallet binary is unchanged and is about that one file.
 
 **If you do not want to trust a binary you cannot reproduce, use `zcd`.** It is
 a first-class interface, not a developer's fallback: `zcd ui` serves the exact

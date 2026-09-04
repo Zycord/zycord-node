@@ -440,10 +440,19 @@ jobs:
             label: darwin-amd64
             tags: desktop
           # Cross-compiled, not built on windows-latest -- see the header.
+          #
+          # The WALLET needs no C toolchain (pure-Go WebView2). The zycordd
+          # that ships beside it does: it is the RandomX build, and this is the
+          # same mingw pair the cli-randomx windows leg uses. The wallet is
+          # still built at CGO_ENABLED=0 by DESKTOP_BUILD and still checked by
+          # repro-desktop; the compiler installed here is for the node alone.
           - os: ubuntu-latest
             goos: windows
             label: windows-amd64
             tags: desktop
+            cc: x86_64-w64-mingw32-gcc
+            cxx: x86_64-w64-mingw32-g++
+            apt: gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -465,6 +474,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      # For the node beside the wallet, on the one leg whose host cannot
+      # compile C for its target.
+      - name: the cross toolchain for the bundled node
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+
+      # The bundled node is the RandomX build, so what dist-randomx checks
+      # before compiling any C++ is checked here too.
+      - name: the vendored tree matches PINNED
+        run: go test -count=1 -run TestVendoredTreeMatchesPinned ./core/pow/randomx/
 
       - name: the bridge contract holds
         if: matrix.goos != 'windows'
@@ -533,6 +555,8 @@ jobs:
       # rather than by whatever the runner happens to be.
       - name: build the desktop wallet
         env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
           GOOS: ${{ matrix.goos }}
         run: make dist-desktop
 

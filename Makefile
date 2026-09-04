@@ -844,6 +844,22 @@ endif
 # build flags, the link flags and CGO_ENABLED are not.
 DESKTOP_BUILD := CGO_ENABLED=$(DESKTOP_CGO) $(GO) build -tags $(DESKTOP_TAGS) $(GOFLAGS) -ldflags '$(DESKTOP_LDFLAGS)'
 
+# The node that ships beside the wallet.
+#
+# The desktop application runs a full node of its own (wallet/localnode) and
+# finds it next to the executable, so every wallet artefact carries a zycordd
+# built for the same target. It is the RandomX build -- the only one that can
+# join mainnet or the public testnet -- and therefore cgo on every platform,
+# Windows included: the Windows leg of release.yml installs mingw for exactly
+# this file, while the wallet beside it stays CGO_ENABLED=0 and byte-identical.
+# The two claims are about two files and the closing message below keeps them
+# apart.
+#
+# DESKTOP_NODE=0 ships the wallet alone, for a machine with no C++ toolchain.
+# The wallet then reports that no node is bundled and asks for one to talk to.
+DESKTOP_NODE ?= 1
+DESKTOP_NODE_BUILD := CGO_ENABLED=1 $(GO) build -tags randomx $(GOFLAGS) -ldflags '$(LDFLAGS)'
+
 .PHONY: dist
 dist: dist-clean
 	@test -n "$(strip $(PLATFORMS))" || { echo 'dist: PLATFORMS is empty; nothing to build'; exit 1; }
@@ -1080,16 +1096,46 @@ release-smoke:
 .PHONY: dist-desktop
 dist-desktop:
 	@mkdir -p $(DIST)
-	@os=$(DESKTOP_GOOS); arch=$(DESKTOP_GOARCH); 	name=zycord-wallet-$(DIST_VERSION)-$$os-$$arch; 	ext=; if [ "$$os" = windows ]; then ext=.exe; fi; 	echo "  $$name"; 	(cd desktop && $(DESKTOP_BUILD) -o ../$(DIST)/zycord-wallet$$ext .) || exit 1; 	if [ "$$os" = darwin ]; then 	  bundle=$(DIST)/Zycord\ Wallet.app; 	  rm -rf "$$bundle"; 	  mkdir -p "$$bundle/Contents/MacOS" "$$bundle/Contents/Resources"; 	  sed -e 's/@VERSION@/$(DIST_VERSION)/g' packaging/macos/Info.plist > "$$bundle/Contents/Info.plist"; 	  mv $(DIST)/zycord-wallet "$$bundle/Contents/MacOS/zycord-wallet"; 	  (cd $(DIST) && zip -qry $$name.zip "Zycord Wallet.app" && rm -rf "Zycord Wallet.app"); 	elif [ "$$os" = windows ]; then 	  (cd $(DIST) && zip -q $$name.zip zycord-wallet.exe && rm zycord-wallet.exe); 	else 	  tar $(TAR_REPRO) -czf $(DIST)/$$name.tar.gz -C $(DIST) zycord-wallet && rm $(DIST)/zycord-wallet; 	fi
+	@os=$(DESKTOP_GOOS); arch=$(DESKTOP_GOARCH); \
+	name=zycord-wallet-$(DIST_VERSION)-$$os-$$arch; \
+	ext=; if [ "$$os" = windows ]; then ext=.exe; fi; \
+	echo "  $$name"; \
+	(cd desktop && $(DESKTOP_BUILD) -o ../$(DIST)/zycord-wallet$$ext .) || exit 1; \
+	files="zycord-wallet$$ext"; \
+	if [ "$(DESKTOP_NODE)" != 0 ]; then \
+	  echo "  $$name/zycordd$$ext (RandomX, cgo)"; \
+	  $(DESKTOP_NODE_BUILD) -o $(DIST)/zycordd$$ext ./cmd/zycordd || exit 1; \
+	  cp packaging/randomx-tier.txt $(DIST)/UNATTESTED.txt; \
+	  files="$$files zycordd$$ext UNATTESTED.txt"; \
+	fi; \
+	if [ "$$os" = darwin ]; then \
+	  bundle=$(DIST)/Zycord\ Wallet.app; \
+	  rm -rf "$$bundle"; \
+	  mkdir -p "$$bundle/Contents/MacOS" "$$bundle/Contents/Resources"; \
+	  sed -e 's/@VERSION@/$(DIST_VERSION)/g' packaging/macos/Info.plist > "$$bundle/Contents/Info.plist"; \
+	  mv $(DIST)/zycord-wallet "$$bundle/Contents/MacOS/zycord-wallet"; \
+	  if [ "$(DESKTOP_NODE)" != 0 ]; then \
+	    mv $(DIST)/zycordd "$$bundle/Contents/MacOS/zycordd"; \
+	    mv $(DIST)/UNATTESTED.txt "$$bundle/Contents/Resources/UNATTESTED.txt"; \
+	  fi; \
+	  (cd $(DIST) && zip -qry $$name.zip "Zycord Wallet.app" && rm -rf "Zycord Wallet.app"); \
+	elif [ "$$os" = windows ]; then \
+	  (cd $(DIST) && zip -q $$name.zip $$files && rm $$files); \
+	else \
+	  tar $(TAR_REPRO) -czf $(DIST)/$$name.tar.gz -C $(DIST) $$files && (cd $(DIST) && rm $$files); \
+	fi
 	@(cd $(DIST) && $(SHA256) zycord-wallet-*.tar.gz zycord-wallet-*.zip 2>/dev/null > SHA256SUMS.desktop || true)
 	@echo
 ifeq ($(DESKTOP_GOOS),windows)
-	@echo "The binary in this artefact IS byte-identical across rebuilds:"
+	@echo "The WALLET binary in this artefact IS byte-identical across rebuilds:"
 	@echo "CGO_ENABLED=0, no platform SDK, no C toolchain -- measured, two builds"
-	@echo "of one commit. The .zip around it is not: it records the file's mtime."
-	@echo "Publish the claim about the binary, not about the archive."
+	@echo "of one commit. The zycordd beside it is NOT: it is the RandomX build,"
+	@echo "cgo through mingw. The .zip around both is not either: it records the"
+	@echo "files' mtimes. Publish the claim about zycord-wallet.exe, not about"
+	@echo "the archive and not about the node."
 else
-	@echo "This artefact is NOT byte-identical across rebuilds: it uses cgo."
+	@echo "This artefact is NOT byte-identical across rebuilds: the wallet uses"
+	@echo "cgo for the webview and the zycordd beside it uses cgo for RandomX."
 	@echo "zcd is. Do not publish a reproducibility claim for this file."
 endif
 

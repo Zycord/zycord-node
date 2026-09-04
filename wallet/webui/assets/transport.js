@@ -88,9 +88,9 @@
    * The split exists because launching a browser puts the URL on another
    * process's command line, which every local user can read — /proc on Linux,
    * the process table on macOS. A handoff scraped from there is worth one
-   * exchange inside a few minutes, and
-   * spending it makes this page fail visibly rather than quietly sharing the
-   * session. See webui.Server.BrowserURL. */
+   * exchange inside a few minutes, and spending it makes this page fail
+   * visibly rather than quietly sharing the session. See
+   * webui.Server.BrowserURL. */
   function readHash() {
     var hash = window.location.hash || "";
     if (hash.charAt(0) === "#") hash = hash.slice(1);
@@ -251,16 +251,54 @@
     configure: function (req) {
       return bridge ? viaBridge("Configure", req) : http("POST", "api/configure", req);
     },
+    networks: function () {
+      return bridge ? viaBridge("Networks") : http("GET", "api/networks");
+    },
+    /* Ask a node who it is, without saving anything. */
+    probe: function (req) {
+      return bridge ? viaBridge("Probe", req) : http("POST", "api/probe", req);
+    },
+    /* Generate a key and write it encrypted. Refused by `zcd ui`, which was
+     * given its key file on the command line; the desktop application is
+     * where somebody without a command line starts. */
+    create: function (req) {
+      return bridge ? viaBridge("Create", req) : http("POST", "api/create", req);
+    },
 
-    /* Desktop only: a native file dialog. There is no browser equivalent —
-     * a page cannot learn a path, only receive file contents — so the
-     * browser build asks the person to type one, which is what they already
-     * did to start `zcd ui`. */
+    /* Where the node is, and the node the wallet runs beside itself when it
+     * ships one. `zcd ui` answers the last three with "no such node". */
+    sync: function () {
+      return bridge ? viaBridge("Sync") : http("GET", "api/sync");
+    },
+    localNode: function () {
+      return bridge ? viaBridge("LocalNode") : http("GET", "api/localnode");
+    },
+    startLocalNode: function () {
+      return bridge ? viaBridge("StartLocalNode") : http("POST", "api/localnode/start", {});
+    },
+    stopLocalNode: function () {
+      return bridge ? viaBridge("StopLocalNode") : http("POST", "api/localnode/stop", {});
+    },
+
+    /* Desktop only: native file dialogs, and a sensible default location for
+     * a new key file. There is no browser equivalent — a page cannot learn a
+     * path, only receive file contents — so the browser build asks the person
+     * to type one, which is what they already did to start `zcd ui`. */
     canBrowse: function () {
       return !!(bridge && typeof bridge.ChooseKeyFile === "function");
     },
     chooseKeyFile: function () {
       return viaBridge("ChooseKeyFile");
+    },
+    canChooseNewKeyFile: function () {
+      return !!(bridge && typeof bridge.ChooseNewKeyFile === "function");
+    },
+    chooseNewKeyFile: function () {
+      return viaBridge("ChooseNewKeyFile");
+    },
+    suggestKeyPath: function () {
+      if (!bridge || typeof bridge.SuggestKeyPath !== "function") return Promise.resolve("");
+      return viaBridge("SuggestKeyPath");
     },
 
     /* Desktop only: updates. The browser build is served by `zcd ui` from a
