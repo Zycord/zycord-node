@@ -46,10 +46,10 @@ zcd genesis --testnet
 ```
 network        zycord-testnet
 chain id       2
-params hash    0x96efbc057990d8c89236e02bb3350b662edf7c07498d8a3ca359e1cefcfeab8c
-genesis id     0xeba4ad6979e9a345cb71621f955a08f85fa92bcbe3cc04b65adc73dd70f61c9f
-state root     0x9c507c8931ed64eec151e6a14aac8c3ffa5993c4f4ee071302903c9f04190f72
-genesis time   1788501600
+params hash    0x987c0d115628b723dffb97184532e909512f4d9300106e19ea8cc73ede8c83bd
+genesis id     0xf153c38934c2c28d1bced0a07d87146e4f3e9b678752ffeb53383f84211976a7
+state root     0x5999f57eca200f53766db5f6beaf6963a615428cede3bb7c1710e9b86af4e954
+genesis time   1788526800
 cells written  6
 allocations    0
 ```

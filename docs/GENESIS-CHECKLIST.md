@@ -146,8 +146,8 @@ appears saying the same thing.
 
 **The relaunch also resets the measurement clock**, which is why it sits directly
 under the item below it. `genesis_time` in
-[`spec/params.testnet.json`](../spec/params.testnet.json) is 1788501600
-(2026-09-04 06:00 UTC), the relaunch hour; it moved there from the first
+[`spec/params.testnet.json`](../spec/params.testnet.json) is 1788526800
+(2026-09-04 13:00 UTC), the relaunch hour; it moved there from the first
 incarnation's 1788048000 (2026-08-30), because the difficulty rule reads the gap
 between a block's timestamp and its parent's and a genesis dated well before
 block 1 makes the first blocks measure the parameter file rather than the
