@@ -24,6 +24,17 @@ import (
 // Select chooses a revenue-maximising subset of a pool under the block
 // ceilings.
 //
+// Every block ceiling the fold enforces is enforced here too: B5 and B6 by the
+// gas limits, B12 by the certificate count, B13 by the running byte total, and
+// B18 by the running signature total. The list has to be complete rather than
+// nearly complete, and B18 is the one that was missing (I8-M1). A ceiling this
+// function ignores is not a packing inefficiency: the assembler dry-runs its
+// own candidate, and a block-level ceiling has no culpable certificate to name,
+// so the refusal comes back through invalid() with no index. dropTheDrops'
+// recovery needs an index, finds none, and Assemble returns an error instead of
+// a block — for every attempt, until the offending certificates age out of
+// their own TTL window. One over-dense pool, no blocks at all.
+//
 // t is the sequential target T (whitepaper §8.1) — the caller's state read,
 // not a params constant any more. Selection targets the soft ceiling 2T
 // (p.SeqGasLimit(t)), never the hard burst bound 4T: bursting trades a
@@ -99,13 +110,15 @@ func Select(pool []*types.Certificate, p *params.Params, seqBaseFee, parBaseFee 
 	})
 
 	var (
-		out     []*types.Certificate
-		seqUsed uint64
-		parUsed uint64
-		bytes   int
+		out      []*types.Certificate
+		seqUsed  uint64
+		parUsed  uint64
+		sigsUsed uint64
+		bytes    int
 	)
 	certCeiling := p.MaxCertsPerBlock(t)
 	byteCeiling := p.BlockByteLimit(t)
+	sigCeiling := p.MaxSigsPerBlock(t)
 	for _, c := range candidates {
 		if len(out) >= certCeiling {
 			break
@@ -127,9 +140,29 @@ func Select(pool []*types.Certificate, p *params.Params, seqBaseFee, parBaseFee 
 		if types.BlockOverheadBytes(len(out)+1, p.MaxCitesPerBlock)+bytes+c.cert.SizeBytes() > byteCeiling {
 			continue
 		}
+		// B18, the receiver-cost bound: the block's certificates may declare
+		// at most MaxSigsPerBlock(T) signatures between them, counted before
+		// the fold verifies any of them.
+		//
+		// Skipped rather than break, exactly like the two ceilings above: a
+		// certificate that does not fit is passed over and a cheaper one
+		// further down the ranking may still fit, which is the whole point of
+		// packing greedily. No new policy is introduced by this line — which
+		// certificates are dropped is decided where it always was, by the
+		// tip-density ranking above, and B18 only says how many fit.
+		//
+		// The sum cannot overflow: certCeiling bounds the iterations and V1
+		// bounds each certificate at max_sigs, so this is a product of two
+		// int-sized ceilings, far inside uint64 — the same argument
+		// checkBlockRules makes for its own accumulator.
+		sigs := uint64(len(c.cert.Sigs))
+		if sigsUsed+sigs > sigCeiling {
+			continue
+		}
 		out = append(out, c.cert)
 		seqUsed += c.seqGas
 		parUsed += c.parGas
+		sigsUsed += sigs
 		bytes += c.cert.SizeBytes()
 	}
 	return out
