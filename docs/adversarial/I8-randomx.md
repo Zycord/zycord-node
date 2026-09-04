@@ -19,7 +19,9 @@ The "~800 lines" of §4 is a real number for the wrong denominator. The full `v1
 | **compiled `.cpp` / `.c` / `.S`** | **14** | **844 / 136** | **yes** |
 | **headers reached by those** | **18** | **~190 / ~40** | **yes** |
 
-So the reviewable surface is **~1,650 changed lines across 32 files**, and §4's "~800 lines concentrated in two JIT generators and hand-written assembly" describes the compiled half accurately. **All 32 were read.** The RISC-V files were not read line by line, and the justification is mechanical rather than a judgement call: they appear in no `vendor.sh` source list, so cgo never hands them to a compiler. `aes_hash.cpp`'s 58 added lines are likewise entirely inside `#ifdef __riscv` and are dead on both architectures this chain ships.
+So the reviewable surface is **~1,650 changed lines across 32 files**, and §4's "~800 lines concentrated in two JIT generators and hand-written assembly" describes the compiled half accurately. **All 32 were read.**
+
+**The RISC-V exclusion is an empirical fact about the shipped binary, not an inference from the source lists.** Those files appear in no `vendor.sh` source list, no shim `#include`s one, and the three references to RISC-V code from files that *are* compiled — `aes_hash.cpp`, `cpu.cpp`, `jit_compiler.hpp` — are each behind `#ifdef __riscv` or `#elif defined(RANDOMX_COMPILER_RV64)`. The check that settles it is on the artifact rather than the source: building the tagged test binary and counting RISC-V symbols in it gives **zero**. `aes_hash.cpp`'s 58 added lines are likewise entirely inside `#ifdef __riscv` and are dead on both architectures this chain ships.
 
 Two files carry most of the risk and got most of the time: `jit_compiler_x86.cpp` (+134/−34) and `jit_compiler_a64.cpp` (+95/−9), plus their static assembly (+36 and +338).
 
