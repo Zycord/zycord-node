@@ -247,6 +247,13 @@ func TestChaosSoak(t *testing.T) {
 		t.Error("the network did not converge after the chaos stopped")
 	}
 
+	// The id at a height every node has passed, which is the strong form of the
+	// question waitForConvergence asks about the tip. Run whether or not the tip
+	// check passed: a network that did not settle on a tip may still have
+	// identical history behind it, and that is a materially different failure
+	// from a divergence — worth telling apart in the report rather than after it.
+	assertSettledHeightAgrees(t, nodes, settledMargin)
+
 	// Reported, not aborted, for the same reason as the contention regime: a
 	// convergence failure is a fact about the network's structure and the
 	// billing law is a fact about its economics. One must not hide the other,
@@ -377,6 +384,14 @@ func newSoakNetwork(t *testing.T, seed int64) ([]*soakNode, binaries, *rand.Rand
 			stopNode(n)
 		}
 	})
+
+	// The out-of-band observer, when ZCD_SOAK_SAMPLE asked for one.
+	//
+	// Registered after the stop cleanup so it runs BEFORE it: the sampler must
+	// finish reading /proc while the processes it is reading still exist, and
+	// cleanups run last-registered-first. It measures and never asserts, so an
+	// unset environment leaves every regime bit for bit what it was.
+	startSampler(t, nodes, logs)
 
 	return nodes, bin, rng, soakParams(t), block
 }

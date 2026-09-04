@@ -87,3 +87,12 @@ desktop/zycord-wallet
 desktop/zycord-wallet.exe
 desktop/desktop
 desktop/desktop.exe
+
+# The chaos soak's durable run directory, when ZCD_SOAK_LOGDIR points inside
+# the tree. Node logs, per-node data directories and the sampler's TSV land
+# here, and the logs carry the absolute path of the directory they were written
+# to -- which on a contributor's machine is a home directory and a username, in
+# the one repository that must carry neither. The measurements worth keeping
+# are extracted into docs/localnet/soaks/ by hand, with the paths stripped;
+# the raw tree is never committed.
+/.soakrun/

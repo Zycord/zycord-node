@@ -421,6 +421,14 @@ race:
 #
 # Both build their nodes with -tags zcdguard, so the consensus-state access
 # rules are machine-checked for the whole run.
+#
+# ZCD_SOAK_SAMPLE=15s adds the out-of-band sampler: every node's height, trail
+# behind the tip, resident memory, thread count, open descriptors and data
+# directory size, written to samples.tsv beside the node logs and summarised as
+# percentiles at the end. It asserts nothing — resource growth and propagation
+# delay are readings, not invariants, and on a loaded machine the difference
+# between a slow node and a broken one is a judgment the reader makes. Unset,
+# nothing samples and a run is bit for bit what it was before the knob existed.
 .PHONY: soak
 soak:
 	ZCD_SOAK=$${ZCD_SOAK:-35m} $(GO) test ./sim/chaos/ -run TestChaosSoak -count=1 -v -timeout 180m
