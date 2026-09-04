@@ -54,6 +54,7 @@ import (
 	"zycord/node/p2p"
 	"zycord/node/rpc"
 	"zycord/node/storage"
+	"zycord/node/stratum"
 	"zycord/spec"
 )
 
@@ -112,6 +113,25 @@ func main() {
 	seed := fs.Int64("seed", 1, "dial-jitter seed, so a run is reproducible")
 	mineThreads := fs.Int("mine-threads", 0,
 		"nonce-search goroutines when mining (0 = one per core)")
+	// The Stratum endpoint. DEFAULT OFF, and off by the absence of an address
+	// rather than by a boolean beside one — a --stratum plus a --stratum-listen
+	// is two flags that can disagree, and the disagreement an operator will
+	// eventually hit is "I set the address and it did not listen".
+	//
+	// The suggested value is loopback, and it is only a suggestion in the help
+	// text: an operator who wants miners from the LAN types the address that
+	// says so and gets a warning naming the exposure. See node/stratum's
+	// package comment for what that exposure actually is — it is not "someone
+	// reads your blocks", it is "someone mines to their own address on your
+	// electricity", and no password fixes that.
+	stratumAddr := fs.String("stratum-listen", "",
+		"serve the Monero-dialect Stratum protocol stock XMRig speaks, on this "+
+			"address; empty (the default) means the endpoint is off. Suggested: "+
+			"127.0.0.1:9422. The socket is UNAUTHENTICATED — anyone who can reach "+
+			"it can mine to their own payout address using this node — so bind it "+
+			"only where you trust the network.")
+	stratumMaxConns := fs.Int("stratum-max-conns", 0,
+		"maximum simultaneous Stratum connections (0 = the built-in default)")
 	// Two flags because they answer different questions. --update sets a
 	// DURABLE policy for this data directory; --no-update-check suppresses ONE
 	// run. A CI job or an air-gapped rehearsal wants the second without editing
@@ -419,8 +439,179 @@ func main() {
 		}()
 	}
 
+	// The Stratum endpoint, if an address was given. See node/stratum for the
+	// dialect and the posture; what is decided HERE rather than there is the
+	// wiring, and there are four decisions in it worth naming.
+	//
+	// FIRST: it is independent of --mine. A node can serve XMRig without
+	// running its own nonce loop, and on any machine where XMRig is worth
+	// pointing at the node that is the configuration you actually want — the
+	// built-in miner would be competing with XMRig for the same cores, and
+	// losing, while holding the RandomX dataset XMRig needs the RAM for. The
+	// two are not exclusive either: an operator who wants both gets both.
+	//
+	// SECOND: the assembler is a miner.Miner built here, with the node's
+	// --payout as its Payout. That miner NEVER SEARCHES A NONCE — the endpoint
+	// calls Assemble and nothing else — so it costs a struct, and building it
+	// here rather than reaching into whatever --mine may or may not have
+	// constructed keeps the two paths from sharing mutable state. Its Payout
+	// is the fallback for a miner that logs in without naming an address; a
+	// login that names one overwrites it per job.
+	//
+	// THIRD: the payout is resolved leniently. --payout is REQUIRED for
+	// --mine, because a built-in miner has nowhere else to get one; it is
+	// OPTIONAL here, because every XMRig sends its own address in the login
+	// field and requiring both would refuse a correct configuration. A node
+	// with neither refuses the login rather than mining to the zero address,
+	// which is not a burn — it is a cell nobody holds the key to.
+	//
+	// FOURTH: head changes are POLLED rather than pushed. node/chain has no
+	// event bus, and adding one to a package this change has no business
+	// touching, for a signal a tip read already carries, is the trade
+	// miner.SealWhile's own comment declines to make in the other direction:
+	// "real machinery, for a signal a cheap read already carries". The poll is
+	// one Tip() per second against a mutex-guarded field; the endpoint's own
+	// per-connection job timer is the backstop if it ever misses one.
+	if *stratumAddr != "" {
+		scfg := stratum.DefaultConfig()
+		scfg.Addr = *stratumAddr
+		if *stratumMaxConns > 0 {
+			scfg.MaxConns = *stratumMaxConns
+		}
+		// A payout is optional here, so a parse failure is only fatal when one
+		// was actually supplied. An operator who typed --payout wrong wants to
+		// be told; one who omitted it entirely is relying on the login field
+		// and is doing nothing wrong.
+		if *payoutHex != "" {
+			payout, err := parsePayout(*payoutHex)
+			if err != nil {
+				fatal(err)
+			}
+			scfg.Payout = payout
+		}
+		asm := &miner.Miner{
+			Chain:  c,
+			Pool:   pool,
+			Engine: work,
+			Payout: scfg.Payout,
+			Now:    func() uint64 { return uint64(time.Now().Unix()) },
+		}
+		// work, the node's VERIFYING engine, handed over as a pow.Engine. The
+		// endpoint never asks it for a fast representation — see the comment
+		// on Server.engine — so a share verification cannot be what builds the
+		// ~2 GiB dataset on a machine whose RAM belongs to XMRig.
+		sv := stratum.New(scfg, asm, c, work)
+		sv.SetAnnouncer(net)
+		if err := sv.Listen(); err != nil {
+			// Not fatal, matching the RPC's decision three blocks up: a node
+			// that cannot bind its Stratum port is still a node that follows
+			// the chain, and killing it would take the whole node down for an
+			// optional service. The line says what was lost.
+			log.Printf("stratum not listening on %s: %v (continuing without it)",
+				scfg.Addr, err)
+		} else {
+			// Announced AFTER the bind, for the reason node/rpc's Listen
+			// comment gives at length: a line printed ahead of a bind declared
+			// a service up in the very run where the bind then failed, and
+			// everything reading the log believed it.
+			log.Printf("stratum listening on %s (rx/0, solo — an accepted share is a block)",
+				sv.Addr())
+			if !stratum.IsLoopback(scfg.Addr) {
+				// Loud, and deliberately not behind a --i-know-what-im-doing
+				// flag. The exposure is real and is not the usual one: it is
+				// not that somebody can read this node's blocks, it is that
+				// anybody who can reach the socket can mine to their own
+				// payout address using this node's chain and this node's
+				// electricity. An operator who meant it loses one line to a
+				// warning; one who did not meant to bind 0.0.0.0 gets the only
+				// chance anything will ever give them to notice.
+				log.Printf("stratum: WARNING: %s is not loopback. This socket is "+
+					"UNAUTHENTICATED: anyone who can reach it can mine to their own "+
+					"payout address on this node. Bind 127.0.0.1 and use an SSH "+
+					"tunnel unless you control every host on this network.",
+					scfg.Addr)
+			}
+			// Registered in the same group as the heartbeat, not launched
+			// bare. The accept loop is a reader of the chain by proxy — every
+			// connection it admits holds `c` through Assemble and Apply — and
+			// a goroutine nothing joins is still running when main's defers
+			// release what it reads. That is the heartbeat's own regression,
+			// and cmd/zycordd's wiring test enforces it structurally rather
+			// than trusting anyone to remember: the Done must be deferred and
+			// FIRST, so an early return still decrements.
+			//
+			// Serve returns as soon as Server.Close shuts the listener, which
+			// the defer above does; the group then joins an accept loop that
+			// has already stopped accepting, and Close has already joined the
+			// connections themselves.
+			status.Add(1)
+			go func() {
+				defer status.Done()
+				if err := sv.Serve(); err != nil {
+					log.Printf("stratum stopped: %v", err)
+				}
+			}()
+			// Registered after `defer status.Wait()` so it unwinds BEFORE it,
+			// and that order is the one this endpoint needs rather than the
+			// one that merely looks tidy. Server.Close joins every connection
+			// goroutine, and each of those holds `c` through Chain.Apply, so
+			// it has to complete before `defer c.Close()` — which it does,
+			// with the whole of status.Wait() still between them.
+			//
+			// The head loop below is joined by status.Wait() AFTER this Close
+			// has already returned, so for a moment it can call OnHead on a
+			// closed server. That is safe by construction and not by luck:
+			// Close empties the connection set under the same mutex OnHead
+			// takes to read it, so the call iterates nothing. The alternative
+			// ordering — join the loop first, then close — would leave a
+			// connection goroutine inside Apply while the loop is already
+			// gone, which fixes nothing and costs the guarantee above.
+			defer func() {
+				if err := sv.Close(); err != nil {
+					log.Printf("stratum shutdown: %v", err)
+				}
+			}()
+			status.Add(1)
+			go func() {
+				defer status.Done()
+				stratumHeadLoop(c, sv, stop)
+			}()
+		}
+	}
+
 	<-stop
 	log.Println("shutting down")
+}
+
+// stratumHeadLoop pushes a fresh job to every connected miner when the tip
+// moves.
+//
+// Polling rather than a subscription, and the poll is over the block ID rather
+// than the height: a reorg that replaces a block at the same height is exactly
+// as invalidating as one that extends the chain — the template names a PARENT,
+// and a template whose parent is no longer canonical produces a block
+// Chain.Apply refuses — and a height comparison would miss it entirely.
+//
+// One second, which is 3% of a 30-second target interval: fast enough that a
+// miner wastes at most a second of hashing on a dead template, cheap enough
+// that it is a mutex-guarded struct read on a timer. The endpoint's own
+// per-connection job timer covers anything this misses.
+func stratumHeadLoop(c *chain.Chain, sv *stratum.Server, stop <-chan struct{}) {
+	const poll = time.Second
+	last := c.Tip().ID()
+	t := time.NewTicker(poll)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if id := c.Tip().ID(); id != last {
+				last = id
+				sv.OnHead()
+			}
+		}
+	}
 }
 
 // closeEngine joins every goroutine that hashes against the proof-of-work
