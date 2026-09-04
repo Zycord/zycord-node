@@ -1,6 +1,6 @@
 # Zycord — Implementation Findings I8: the transaction path
 
-**Scope:** the whole life of a transaction — construction, signing, admission, the mempool, inclusion in a block, and the state transition. `core/fold`, `core/validity`, `core/state`, `core/crypto`, `node/mempool`, `node/miner`'s selection, and the native operations in the fold. Read against the tree at `5c4b1d0`, with the public testnet live on it.
+**Scope:** the whole life of a transaction — construction, signing, admission, the mempool, inclusion in a block, and the state transition. `core/fold`, `core/validity`, `core/state`, `core/crypto`, `node/mempool`, `node/miner`'s selection, and the native operations in the fold. Read against the money path as it stood after F8b, the burst valve, B18's block ceilings and the epoch controller, and before the builder change I8-M1 below produced — with the public testnet live on it.
 
 **Persona:** the auditor who assumes the *reading* is worthless. I1 audited this surface at M0, when it was four programs and a fold. Everything since has been networking, proof of work and the ceilings; the money path has been extended — F8b, the burst valve, B18, the epoch controller — without being re-attacked as a whole. So the question here is not "is the code well argued", because it is, extravagantly. It is **which of these arguments is load-bearing and which is decoration**, and the only instrument that answers that is a mutation that should fail and does.
 
