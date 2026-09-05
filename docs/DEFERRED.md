@@ -199,7 +199,12 @@ launch, because none changes shipped behaviour.
   the correct call; what is wrong is that three sites claim a charge that cannot
   happen. *Reopens:* the day the primitive becomes a `LAUNCH.md` §4.3 decision
   (already past the three-item mark, counting this one and its siblings in this
-  file).
+  file). **Coupled to the third-party-ban entry in §5, which is now landed:**
+  charging nothing here is the only reason no ban rides the sync path, so
+  whoever makes a sync-path refusal chargeable must route it around budget
+  refusals or through the announced-body ledger
+  (`node/p2p/announceledger.go`) — otherwise that attack returns through the
+  new door, and the fix that closed it does not reach this path.
 - **The soak reports "wedged node" for a node whose RPC never bound.** The fate
   determination has an unconsidered third case, and the evidence that separates it
   is in a log line nothing reads. *Deferred:* a second defect, not a port-fix
@@ -781,75 +786,55 @@ and is not claimed.
 ## 5. Deferred code defects
 
 - **A third party drains an honest miner's shared reply budget, and the victim
-  bans the miner permanently for it. Demonstrated, not fixed.** `OnGetBlock`
-  refuses an over-budget request through `refuseUnbudgeted`, which returns no
-  reply and — correctly, since a budget refusal is a price and not a judgement —
-  no score. The budget's second arm is node-wide: a ceiling of
-  `connSet × BlockByteCapacity`, keyed on nothing and shared by every asker, so a
-  peer that has spent none of its own budget can be refused. An attacker floods
-  honest miner **A** until that shared ceiling is spent; A announces a block to
-  victim **V**; V asks for the body, A's refusal sends nothing, and sixty seconds
-  later V charges A the unserved-body penalty. Twelve blocks and A is banned at V
-  — **and the attacker is never connected to V at all.** The score rides the peer
-  store to disk and there is no decay and no unban path, so the ban is permanent.
-  Driven end to end: two identities drain a two-connection ceiling and a fresh
-  victim's request comes back with no reply and no score against it, and at the
-  node seam twelve announcements take an honest peer to −120, banned on the
-  address **and** the identity. Closing this means inverting that test's last
-  assertion.
+  bans the miner permanently for it. LANDED — closed at the announcer.** The
+  attack: `OnGetBlock` refused an over-budget request through `refuseUnbudgeted`,
+  which returns no reply and — correctly, since a budget refusal is a price and
+  not a judgement — no score. The budget's second arm is node-wide, a ceiling of
+  `connSet × BlockByteCapacity` keyed on nothing and shared by every asker, so an
+  attacker could flood honest miner **A** until that ceiling was spent, and A
+  would then refuse victim **V** the body A had just announced it. Twelve blocks
+  and A was banned at V, permanently and to disk, **with the attacker never
+  connected to V at all.**
 
-  **A small network is the cheap case, not the safe one.** The node-wide arm is
-  read first and scales with the connections a node *actually holds*, not with the
-  48-connection adversarial maximum: at two connections that is 16,000,000 bytes
-  against a per-identity budget of 8,000,000 — two identities' worth, not
-  forty-eight. A ceiling sized as a node-wide backstop sits barely above the
-  per-peer budget it stands behind, so the smaller the network the cheaper this is.
+  **Closed by attaching the obligation to the announcement**: an outbound block
+  announcement reserves the right of each announced peer to fetch that body once,
+  and the node-wide ceiling cannot starve that lane. `node/p2p/announceledger.go`
+  records a promise at `Node.Broadcast` — the single funnel every outbound
+  announcement passes — and redeems it in `OnGetBlock` at the call site of
+  `replyBudgetExhausted`, bounded once per `(peer, block)` by cumulative bytes,
+  by a TTL of `2 × PendingBodyTimeout`, and by a per-peer cap. No wire change, no
+  scoring change, nothing in the consensus zone.
 
-  *Deferred:* four candidate fixes were built or costed and each fails, recorded
-  here so the next author does not re-derive them. **Bounding the charge outright**
-  below the ban threshold disarms the ghost-flood defence — that same charge is the
-  only terminator of a peer spraying cheap `max_target` announcements at an unheld
-  parent — and was rejected by measurement rather than by argument. **Bounding it
-  only for a tip-extension** was built and mutation-proven in both directions and
-  is ineffective: under the drain A serves nothing on any path, so V's tip never
-  advances while A runs away from it, and of twelve announcements exactly **one**
-  names V's tip — the bound never engages, and the score is −120 with the fix in
-  place. That is not an edge case but the normal condition of a lagging receiver;
-  the difficulty gate's own comment measures it from the other side, at 19 of 20
-  honest announcements naming an unheld parent for a node one block behind.
-  **Retrying before charging** is defeated by a sustained drain: the bucket refills
-  every block interval and holding it empty costs the attacker about 530 KB/s at
-  two connections, so every retry meets the same refusal. **Decay or a bounded
-  unban** cannot be tuned — the ghost-flood test drives its charges in ~0 s of wall
-  clock, so any decay slow enough to leave that ban intact is far too slow to save
-  A under a drain measured in block intervals.
+  **Why this one works where five others did not.** Every earlier candidate
+  worked on V's side, teaching the *scorer* leniency: bounding the charge
+  disarmed the ghost-flood terminator, bounding it for a tip-extension covered
+  1 charge in 12 (the drain itself keeps V behind, so the announcements arrive as
+  orphans), retry died against a sustained drain, decay could not be tuned, and
+  the "budgeted, ask later" wire answer was both backward-intolerant and
+  **forgeable** — a ghost flooder claims it and escapes the ban outright. This
+  one grants no leniency at the scorer at all; it changes only which requests A
+  serves, and nothing about it is forgeable, because the ledger is A's memory of
+  A's own sends. `docs/adversarial/I8-p2p.md` carries the full analysis, the
+  amplification sizing (0.31× of the node-wide ceiling today), the
+  forward-past-apply precondition, and the eight-mutant proof.
 
-  **The wire answer fails too, and that is the finding's real sting.** An explicit
-  "budgeted, ask later" reply — making A's refusal legible to V — is not
-  backward-tolerant, since an unknown message kind is scored a protocol violation
-  and would ban its sender at any node not yet upgraded. Worse, the claim is
-  **forgeable**: a ghost flooder answers "budgeted" to every request and escapes
-  the ban outright, reopening the flood the charge exists to terminate, and
-  bounding how often a peer may claim it re-bans the honest A, whose whole
-  situation is being unable to serve for a long time. The indistinguishability
-  moves one message along and survives.
+  **The two tests in `node/p2p/thirdpartyban_internal_test.go` were NOT
+  inverted**, and the earlier instruction to invert them was wrong. They drive
+  V's engine only — no A-side engine exists in that file — so a fix in A's serve
+  path cannot change their outcome, and inverting them would have produced a
+  guard that cannot fail. They are retitled and kept as the scorer's half: V is
+  exactly as strict as before, which is what keeps the ghost-flood terminator
+  armed. The closure is asserted in
+  `node/p2p/announceledger_internal_test.go`, across two engines.
 
-  What would close it is V establishing that A is genuinely ahead without trusting
-  A's word, and the only unforgeable evidence is cumulative work V verifies itself:
-  a forward header chain rooted at V's own tip with each successive target
-  *derived* by V rather than read out of the header. An honest miner's run-away
-  chain anchors and validates; a ghost chain never does; an attacker wanting the
-  leniency has to mine at real difficulty, which is participation rather than a
-  flood. That is branch difficulty derivation plus bounded per-peer header state on
-  the hostile gossip ingress path — consensus-adjacent, and the difficulty gate
-  deliberately stops at the tip today for a measured liveness reason. It wants its
-  own review and is not a pre-freeze change. *Reopens:* immediately, for anyone
-  building that anchoring — the two tests in
-  `node/p2p/thirdpartyban_internal_test.go` assert the defect and fail until it is
-  closed. **OWNER-ONLY, for the disposition rather than the fix:** publishing this
-  tree publishes a live, reachable defect with a working recipe, and the choice
-  between closing it, accepting it as a known open finding at launch, and holding
-  the publication is the owner's. What is not available is marking it fixed.
+  *Residual, and it is a coupling rather than a gap:* whoever closes "a peer that
+  refuses a body during sync is never charged" (§2 of this file) must route that
+  charge around budget refusals or through this same ledger, **or this attack
+  returns through the new door.** The cumulative-work anchoring described in the
+  record — V verifying A is genuinely ahead by deriving difficulty over a header
+  chain rooted at its own tip — is still worth doing post-freeze on its own
+  merits, since it hardens V against shapes no ledger at A can address; it is
+  consensus-adjacent and wants its own review.
 - **`Merkleize` can index past `zeroHashes` on an operator's own parameters.**
   `ssz.Merkleize` derives `depth` by `for 1<<depth < limit { depth++ }` and then
   reads `zeroHashes[depth]`, a 64-entry array: a `cert_list_capacity` above 2^63

@@ -103,6 +103,17 @@ type Engine struct {
 	// once the window has passed — wire.md §9 rule 5: a peer that advertises
 	// headers it will not back MUST be scored down.
 	pending map[types.Hash]announcedBody
+	// announced is the mirror image of pending, on this node's own outbound
+	// side: the bodies this node has PROMISED, keyed by the payer string the
+	// serve path is handed and then by block id.
+	//
+	// `pending` records "somebody told me about a block and owes me the body";
+	// `announced` records "I told somebody about a block and owe them the
+	// body". The second exists because the first is charged — and I8-H2 is the
+	// case where this node is made to break its own promise by a third party's
+	// flood, and is banned for it at a victim that flood never touched. See
+	// announceledger.go, which holds the whole rule and its preconditions.
+	announced map[string]map[types.Hash]*announcedPromise
 	// tipTargetTip, tipTargetID and tipTarget memoize the difficulty rule's
 	// answer for the block after one particular tip, so that
 	// OnBlockAnnounceFrom's re-derivation costs a struct comparison rather than
@@ -401,6 +412,7 @@ func NewEngine(c *chain.Chain, pool *mempool.Pool, peers *PeerStore, e pow.Engin
 		work:           verify.NewWorkCache(DefaultWorkCacheEntries),
 		seenBlocks:     map[types.Hash]time.Time{},
 		pending:        map[types.Hash]announcedBody{},
+		announced:      map[string]map[types.Hash]*announcedPromise{},
 		orphans:        map[types.Hash]*types.Block{},
 		orphanLimits:   DefaultOrphanLimits(),
 		withheld:       map[types.Hash]*withheldBlock{},
@@ -4021,8 +4033,26 @@ func (e *Engine) OnGetBlock(payer string, raw []byte) Verdict {
 	if err != nil {
 		return Verdict{Cost: CostScored, Score: ScoreInvalidMessage, Err: err}
 	}
+	// The budget refusal, and the one exemption from it: a body this node
+	// PROMISED this peer by announcing it (I8-H2, announceledger.go).
+	//
+	// The exemption is evaluated after the refusal and not instead of it, so a
+	// request the budget would have served never touches the ledger and the
+	// ordinary path is unchanged in every respect. It is placed here at the call
+	// site rather than inside replyBudgetExhausted or refuseUnbudgeted because
+	// both of those are shared with OnGetHeaders, and a header range is not
+	// something this node ever promised anybody — an exemption that leaked into
+	// that path would be a hole in the ceiling rather than a lane through it.
+	//
+	// Deciding it needs the body's size, which needs the chain read the refusal
+	// exists to avoid buying. So the promise is *looked up* first, which is a
+	// map read and nothing else, and only a peer holding one buys the read.
+	exempt := false
 	if refused, own := e.replyBudgetExhausted(payer); refused {
-		return refuseUnbudgeted("block", own && e.workRefused(payer))
+		if !e.hasAnnouncedPromise(payer, req.ID) {
+			return refuseUnbudgeted("block", own && e.workRefused(payer))
+		}
+		exempt = true
 	}
 	// The stored encoding, not a decode-and-re-encode of it. Chain.Block
 	// paid for a full types.UnmarshalBlock - a *types.Certificate allocated
@@ -4044,6 +4074,19 @@ func (e *Engine) OnGetBlock(payer string, raw []byte) Verdict {
 	}
 	chunk := BlockChunk{ID: req.ID, Chunk: req.Chunk, Total: uint32(total), Data: ChunkOf(body, int(req.Chunk))}
 	payload := chunk.MarshalBlockChunk()
+	// The promise is spent here and not at the lookup above, because until the
+	// payload exists there is no byte count to spend it by — and the promise is
+	// denominated in bytes rather than in requests precisely so that a
+	// multi-chunk body redeems as one promise across the whole chunk sequence
+	// instead of serving chunk 0 and refusing the rest.
+	//
+	// A redemption that would take the promise past its cap refuses, and refuses
+	// exactly as the budget would have: same verdict, same silence, same
+	// unscored class. The peer is back to being an ordinary over-budget asker,
+	// which is what it is once this node has served it what it promised.
+	if exempt && !e.redeemAnnounced(payer, req.ID, len(body), len(payload)) {
+		return refuseUnbudgeted("block", false)
+	}
 	e.chargeReplyBytes(payer, len(payload))
 	return Verdict{Cost: CostBudgeted, Reply: &Outbound{Kind: KindBlock, Payload: payload}}
 }
@@ -4670,6 +4713,11 @@ func (e *Engine) ReapUnservedBodies(now time.Time) []string {
 	// over it, so one ticker maintains both. The cap on the insert path is the
 	// hard bound; this keeps the honest steady state near the working set.
 	e.reapSeenBlocksLocked(now)
+	// And the outbound mirror of pending, on the same sweep and for the same
+	// reason: `announced` is the window in which this node owes a body it
+	// promised, and expiry is the whole of what bounds its payer dimension.
+	// See announceledger.go.
+	e.reapAnnouncedLocked(now)
 	e.mu.Unlock()
 
 	var charged []string

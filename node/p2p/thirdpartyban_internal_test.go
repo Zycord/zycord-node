@@ -13,9 +13,28 @@ import (
 )
 
 // I8-H2: a third party gets an honest peer permanently banned at a victim it
-// never contacts. **This finding is OPEN. Both tests below describe the defect
-// as it stands, and the second one ASSERTS IT.** When I8-H2 is closed, the
-// second test's final assertion is the one that must be inverted.
+// never contacts. **The finding is CLOSED, at the announcer, by the
+// announced-body ledger in announceledger.go — and these two tests are still
+// true and still worth keeping, because they describe what the TRANSPORT SHOWS
+// THE SCORER, which the fix deliberately does not change.**
+//
+// **Read this before "inverting the last assertion", which the record used to
+// instruct and which would be wrong.** Both tests here drive V's engine and
+// nothing else: there is no A-side engine anywhere in this file, so a fix that
+// lives entirely in A's serve path cannot change either outcome. Inverting the
+// assertion below would produce a test that fails for the fix rather than
+// because of it — and pointing it the other way would produce a guard that
+// cannot fail, which is the exact defect PROTOCOL rule 24 and I8-L1 exist to
+// catch. The closure is asserted where a fix at A can reach it:
+// TestAThirdPartyDrainDoesNotBanAnHonestMinerAcrossTwoEngines in
+// announceledger_internal_test.go, which stands up both endpoints.
+//
+// What these two keep pinned is the scorer's half of the asymmetry, unchanged
+// and deliberately so: V still cannot distinguish a priced refusal from a peer
+// that would not serve, and V still bans a peer that announces twelve bodies
+// and serves none. That is what makes the ghost-flood terminator work, and any
+// future change that softened it here would disarm the charge rather than
+// repair it. The repair is that an honest A no longer ends up in that position.
 //
 // `OnGetBlock` refuses an over-budget request with no reply and no retry. The
 // second arm of that budget is node-wide — a shared `connSet × BlockByteCapacity`
@@ -75,8 +94,11 @@ func TestAThirdPartyDrainsTheSharedBudgetSoAnHonestNodeRefusesALegitimateRequest
 }
 
 // TestAThirdPartyStillDrivesAnHonestPeerToABan is the consequence at V, driven on
-// the shape the attack actually has. **It asserts the OPEN defect: the honest
-// peer IS banned.** Invert the final assertion when I8-H2 is closed.
+// the shape the attack had before the fix. **It asserts what V does when no body
+// arrives, which is unchanged and must stay unchanged**: twelve announcements
+// with no body is a ban, whoever the announcer is and whatever kept it silent.
+// The fix does not soften this; it stops an honest A from ever being the peer it
+// describes. See the file comment for why this is not the test to invert.
 //
 // The shape matters, and an earlier version of this test got it wrong in the
 // direction that flatters a fix. A real miner builds each block on **its own**
@@ -179,13 +201,20 @@ func TestAThirdPartyStillDrivesAnHonestPeerToABan(t *testing.T) {
 	}
 
 	got, _ := vPeers.Get(honest)
-	t.Logf("I8-H2 (open): %d announcements, %d named V's tip, addr score %d, addr banned=%v, identity banned=%v",
+	t.Logf("I8-H2 scorer half: %d announcements, %d named V's tip, addr score %d, addr banned=%v, identity banned=%v",
 		accepted, namedVsTip, got.Score, vPeers.Banned(honest), vPeers.BannedKey(key))
 
-	// **The open defect.** Invert this when I8-H2 is closed.
+	// **The charge, kept.** A peer that announces twelve bodies and serves none
+	// is banned on both tallies. This is the ghost-flood terminator seen from
+	// the inside, and the two candidates that failed by weakening it — bounding
+	// ScoreUnservedBody outright, and bounding it for a tip-extension — are the
+	// two this assertion refuses. It is NOT the assertion I8-H2's closure
+	// inverts; see the file comment.
 	if !vPeers.Banned(honest) || !vPeers.BannedKey(key) {
-		t.Fatalf("I8-H2 appears closed (addr score %d, addr banned=%v, identity banned=%v). "+
-			"If that is intended, invert this assertion and update docs/adversarial/I8-p2p.md",
-			got.Score, vPeers.Banned(honest), vPeers.BannedKey(key))
+		t.Fatalf("V no longer bans a peer that announced %d bodies and served none "+
+			"(addr score %d, addr banned=%v, identity banned=%v). The I8-H2 fix lives at "+
+			"the ANNOUNCER and must not have touched the scorer — if a charge was softened "+
+			"here, the ghost-flood terminator went with it.",
+			rounds, got.Score, vPeers.Banned(honest), vPeers.BannedKey(key))
 	}
 }
