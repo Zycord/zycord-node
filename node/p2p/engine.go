@@ -370,6 +370,27 @@ type Engine struct {
 type announcedBody struct {
 	peerAddr  string
 	announced time.Time
+	// atTip records that the announcement was a genuine tip-extension: its
+	// parent was this node's canonical tip, so the difficulty gate in
+	// OnBlockAnnounceFrom forced it to carry this node's real proof-of-work
+	// target. Only such a block reaches pending as a tip-extension — a cheap
+	// max-target one declaring the wrong target is refused ScoreInvalidMessage
+	// there. ReapUnservedBodies bounds the charge for these (I8-H2: an honest
+	// miner refused a legitimate request because a third party drained its
+	// shared reply budget must not be bannable on this ambiguous signal), while
+	// leaving an orphan/ghost announcement — cheap to mint and third-party
+	// floodable — able to ban, which is the ghost-flood terminator.
+	atTip bool
+}
+
+// UnservedCharge names a peer ReapUnservedBodies charged, and whether the
+// announcement it failed to serve was a genuine tip-extension. The caller
+// charges the identity behind the address (Node.reapUnservedBodies) and needs
+// AtTip to bound that half the same way the address half was bounded here, so
+// that a bound on only one tally does not still ban on the other.
+type UnservedCharge struct {
+	Addr  string
+	AtTip bool
 }
 
 // OrphanLimits bound the orphan pool.
@@ -1252,7 +1273,15 @@ func (e *Engine) OnBlockAnnounceFrom(peerAddr, payer string, raw []byte) Verdict
 	// memoized u256 refuses the ghost without a proof-of-work evaluation ever
 	// being paid for it.
 	tip := e.Chain.Tip()
-	if tipID, want, ok := e.tipNextTarget(tip); ok && ann.Header.ParentID == tipID {
+	tipID, want, tipTargetOK := e.tipNextTarget(tip)
+	// A genuine tip-extension: the announcement names this node's canonical tip
+	// as its parent, so the gate below forces it to carry this node's real
+	// proof-of-work target. Recorded on the pending entry (announcedBody.atTip)
+	// so ReapUnservedBodies can bound its unserved-body charge below a ban —
+	// see that field's comment. A cheap max-target header naming the tip is
+	// refused ScoreInvalidMessage below, so only real work reaches pending here.
+	atTip := tipTargetOK && ann.Header.ParentID == tipID
+	if atTip {
 		// **And it must be at that tip's successor height, which is the same
 		// branch and a different rule.**
 		//
@@ -1394,7 +1423,7 @@ func (e *Engine) OnBlockAnnounceFrom(peerAddr, payer string, raw []byte) Verdict
 		e.evictOldestSeenLocked()
 	}
 	e.seenBlocks[id] = now
-	e.pending[id] = announcedBody{peerAddr: peerAddr, announced: now}
+	e.pending[id] = announcedBody{peerAddr: peerAddr, announced: now, atTip: atTip}
 	e.mu.Unlock()
 	e.recordAnnounce(peerAddr, ann.Header)
 
@@ -4649,20 +4678,22 @@ func (e *Engine) reapSeenBlocksLocked(now time.Time) {
 // beside it — and a penalty that moved only the address-keyed half
 // would be shed by reconnecting on a fresh ephemeral port, which is the exact
 // hole identity-keyed scoring closed everywhere else.
-func (e *Engine) ReapUnservedBodies(now time.Time) []string {
+func (e *Engine) ReapUnservedBodies(now time.Time) []UnservedCharge {
 	e.mu.Lock()
 	var late []struct {
-		id   types.Hash
-		peer string
+		id    types.Hash
+		peer  string
+		atTip bool
 	}
 	for id, p := range e.pending {
 		if now.Sub(p.announced) < PendingBodyTimeout {
 			continue
 		}
 		late = append(late, struct {
-			id   types.Hash
-			peer string
-		}{id, p.peerAddr})
+			id    types.Hash
+			peer  string
+			atTip bool
+		}{id, p.peerAddr, p.atTip})
 		delete(e.pending, id)
 	}
 	// The seen-set is aged on the same sweep that reaps pending: pending
@@ -4672,14 +4703,22 @@ func (e *Engine) ReapUnservedBodies(now time.Time) []string {
 	e.reapSeenBlocksLocked(now)
 	e.mu.Unlock()
 
-	var charged []string
+	var charged []UnservedCharge
 	var forget []types.Hash
 	for _, s := range late {
 		if _, err := e.Chain.CanonicalHeader(s.id); err == nil {
 			continue
 		}
-		e.Peers.Adjust(s.peer, ScoreUnservedBody)
-		charged = append(charged, s.peer)
+		// A tip-extension carries this node's real proof-of-work, so its
+		// unserved-body charge is bounded below a ban (I8-H2). An orphan/ghost
+		// is cheap to mint and third-party floodable, so its charge is
+		// unbounded — the ghost-flood terminator wire.md §9 rule 5 asks for.
+		if s.atTip {
+			e.Peers.AdjustNotBelow(s.peer, ScoreUnservedBody, ScoreUnservedBodyFloor)
+		} else {
+			e.Peers.Adjust(s.peer, ScoreUnservedBody)
+		}
+		charged = append(charged, UnservedCharge{Addr: s.peer, AtTip: s.atTip})
 		forget = append(forget, s.id)
 	}
 	if len(forget) > 0 {

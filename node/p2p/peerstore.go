@@ -102,6 +102,34 @@ const (
 	// ScoreCeiling bounds accumulated goodwill, so a peer cannot bank a long
 	// history of good behaviour and then spend it on an attack.
 	ScoreCeiling = 100
+	// ScoreUnservedBodyFloor bounds how far the unserved-body charge may sink a
+	// peer's score when the unserved announcement was a genuine TIP-EXTENSION.
+	// It sits above ScoreBanThreshold, so a run of such charges cannot on its
+	// own ban a peer (I8-H2). Applied by the reap only for atTip announcements
+	// (announcedBody.atTip); an orphan/ghost is charged unbounded and still bans.
+	//
+	// ScoreUnservedBody prices "announced and would not serve", but a victim
+	// cannot tell an announcer that will not serve from an honest one that could
+	// not. I8-H2: an honest miner whose OnGetBlock refused a legitimate request
+	// only because a THIRD PARTY drained its node-wide reply budget — the shared
+	// `connSet × BlockByteCapacity` ceiling, third-party drainable and, on a
+	// small network, barely above the per-peer budget it backs — could be driven
+	// to a permanent, on-disk ban at a victim it never contacted. That case is a
+	// tip-extension: an honest miner announces a block extending the tip, which
+	// the difficulty gate forces to carry real proof-of-work, so it is expensive
+	// to mint and cannot be floored cheaply. Bounding it costs the attacker its
+	// ban and costs the network nothing it can measure.
+	//
+	// An orphan/ghost announcement is the opposite: cheap to mint (max-target,
+	// unheld parent), third-party floodable, and the reap ban is its ONLY
+	// terminator. So the bound is deliberately NOT applied there — it would
+	// disarm the ghost-flood defence the ghost-flood tests guard. And every
+	// attributable penalty — ScoreInvalidMessage, ScoreProtocolViolation,
+	// SyncPenalty (a peer that served bytes that were a lie), ScoreExcessRequest
+	// — is unbounded everywhere and still reaches ScoreBanThreshold. A peer at
+	// this floor that then earns an attributable charge still crosses into a ban
+	// on that charge's account, not this one. So no genuine ban is weakened.
+	ScoreUnservedBodyFloor = ScoreBanThreshold / 2
 )
 
 // MaxPeers bounds how many addresses the store will ever hold.
@@ -1392,6 +1420,40 @@ func (ps *PeerStore) Adjust(addr string, delta int) {
 	ps.retierLocked(p)
 }
 
+// AdjustNotBelow applies a negative delta to an address-keyed score but will
+// not carry it past `floor` in the downward direction. It is how a charge that
+// must not, by itself, ban a peer is applied — the unserved-body reap, whose
+// signal is not attributable to a misbehaving peer (see ScoreUnservedBodyFloor).
+//
+// A score at or above floor stops exactly at floor; a score already below floor
+// — driven there by other, ATTRIBUTABLE charges — is left unchanged, so this
+// charge neither bans on its own nor undoes a ban another charge earned. The
+// ceiling and ScoreFloor clamps still apply, exactly as Adjust.
+func (ps *PeerStore) AdjustNotBelow(addr string, delta, floor int) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	p, ok := ps.admitLocked(addr, "", false)
+	if !ok {
+		return
+	}
+	next := p.Score + delta
+	if next < floor {
+		if p.Score < floor {
+			next = p.Score
+		} else {
+			next = floor
+		}
+	}
+	if next > ScoreCeiling {
+		next = ScoreCeiling
+	}
+	if next < ScoreFloor {
+		next = ScoreFloor
+	}
+	p.Score = next
+	ps.retierLocked(p)
+}
+
 // MarkConnected records a successful connection.
 func (ps *PeerStore) MarkConnected(addr string) {
 	ps.mu.Lock()
@@ -2226,6 +2288,42 @@ func (ps *PeerStore) AdjustKey(key ed25519.PublicKey, delta int) {
 		delete(ps.identity, victim)
 	}
 	e.score = clampIdentityScore(e.score + delta)
+	e.lastSeen = ps.now().Unix()
+	ps.identity[k] = e
+}
+
+// AdjustKeyNotBelow is AdjustKey with AdjustNotBelow's bound: a negative delta
+// that will not carry the identity-keyed score past `floor` downward. Both
+// tallies the unserved-body reap charges — the address (Engine.ReapUnservedBodies)
+// and the identity (Node.reapUnservedBodies) — must be bounded, or the OR in the
+// ban check (Banned(addr) || BannedKey(key)) still bans on the unbounded half.
+func (ps *PeerStore) AdjustKeyNotBelow(key ed25519.PublicKey, delta, floor int) {
+	if len(key) == 0 {
+		return
+	}
+	k := string(key)
+	ps.identityMu.Lock()
+	defer ps.identityMu.Unlock()
+	if ps.identity == nil {
+		ps.identity = map[string]identityEntry{}
+	}
+	e, ok := ps.identity[k]
+	if !ok && len(ps.identity) >= MaxIdentities {
+		victim, found := ps.findEvictableIdentityLocked()
+		if !found {
+			return
+		}
+		delete(ps.identity, victim)
+	}
+	next := e.score + delta
+	if next < floor {
+		if e.score < floor {
+			next = e.score
+		} else {
+			next = floor
+		}
+	}
+	e.score = clampIdentityScore(next)
 	e.lastSeen = ps.now().Unix()
 	ps.identity[k] = e
 }

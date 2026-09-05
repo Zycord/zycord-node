@@ -58,7 +58,11 @@ func seedAnnouncement(e *Engine, id types.Hash, peerAddr string, at time.Time) {
 // reapAfterWindow runs the reaper far enough past the window that every seeded
 // entry is late, and reports who was charged.
 func reapAfterWindow(e *Engine, at time.Time) []string {
-	return e.ReapUnservedBodies(at.Add(PendingBodyTimeout + time.Second))
+	var addrs []string
+	for _, c := range e.ReapUnservedBodies(at.Add(PendingBodyTimeout + time.Second)) {
+		addrs = append(addrs, c.Addr)
+	}
+	return addrs
 }
 
 func chargedWith(charged []string, addr string) bool {
