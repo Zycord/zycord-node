@@ -94,6 +94,10 @@ type Manager struct {
 	started time.Time
 	log     *ring
 	logFile *os.File
+
+	// verOnce guards the one `zycordd --version` this manager ever runs.
+	verOnce sync.Once
+	version string
 }
 
 // proc is one child process and how it ended.
@@ -106,6 +110,23 @@ type proc struct {
 	cmd  *exec.Cmd
 	done chan struct{}
 	err  error
+	// log is the ring this process wrote to, read once when it exits to
+	// recover the reason it gives on its way out.
+	log *ring
+}
+
+// lastLine is the final non-empty line the process wrote.
+func (p *proc) lastLine() string {
+	if p == nil || p.log == nil {
+		return ""
+	}
+	lines := p.log.lines()
+	for i := len(lines) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(lines[i]); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // exited reports whether the process has ended, and how.
@@ -154,6 +175,9 @@ type Info struct {
 	// a crash, a refused network, a port it could not bind. Empty while it
 	// runs and after a Stop.
 	Exited string `json:"exited"`
+	// Version is what the bundled binary calls itself, so the wallet can show
+	// which node it is running beside which wallet.
+	Version string `json:"version"`
 	// Options are what the running node was started with.
 	Options Options `json:"options"`
 	// Log is the tail of the node's own output.
@@ -269,6 +293,12 @@ func (m *Manager) Start(network string, opts Options) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
+	// No --listen, so the node is periphery: it dials out and can never be
+	// dialled. That is what a wallet should be — it needs no forwarded port
+	// and offers no inbound surface — and it is a configuration the network
+	// already expects, so a seed cannot tell one of these from any other
+	// outbound-only node. No --no-seeds either: the built-in bootstrap seed
+	// is how a fresh install finds the network at all.
 	args := append([]string{"--dir", dir, "--rpc", fmt.Sprintf("127.0.0.1:%d", port), "--no-update-check"}, flags...)
 	if len(m.Peers) > 0 {
 		args = append(args, "--peers", strings.Join(m.Peers, ","))
@@ -293,14 +323,27 @@ func (m *Manager) Start(network string, opts Options) (string, error) {
 		m.closeLog()
 		return "", fmt.Errorf("localnode: starting %s: %w", m.Binary, err)
 	}
-	p := &proc{cmd: cmd, done: make(chan struct{})}
+	p := &proc{cmd: cmd, done: make(chan struct{}), log: m.log}
 	m.proc, m.network, m.opts, m.rpc, m.dir = p, network, opts, rpcURL(port), dir
 	m.adopted, m.started = false, time.Now()
 	go func() {
-		p.err = cmd.Wait()
-		if p.err == nil {
-			p.err = errors.New("the node exited")
+		err := cmd.Wait()
+		// "exit status 1" is not a reason, and the reason is right there: a
+		// node that refuses to start says why on its last line before it goes.
+		// Measured on a wallet packaged with the wrong node binary, where the
+		// process explained itself in one clear sentence and the interface
+		// showed "No node" — a wallet reporting an exit code it cannot act on,
+		// beside a log holding the sentence somebody needed to read.
+		if reason := p.lastLine(); reason != "" {
+			if err != nil {
+				err = fmt.Errorf("%s (%w)", reason, err)
+			} else {
+				err = errors.New(reason)
+			}
+		} else if err == nil {
+			err = errors.New("the node exited")
 		}
+		p.err = err
 		close(p.done)
 	}()
 	return m.rpc, nil
@@ -351,13 +394,58 @@ func (m *Manager) closeLog() {
 	}
 }
 
+// Version asks the bundled binary what it calls itself, once.
+//
+// Exec rather than a build-time constant: the wallet and the node are two
+// binaries built from one tree and packaged together, and the whole reason to
+// show this is to catch the case where they are not the pair anybody intended.
+// A constant compiled into the wallet would report what the wallet believes
+// rather than what is on disk, which is the opposite of the question.
+func (m *Manager) Version() string {
+	if m.Binary == "" {
+		return ""
+	}
+	m.verOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, m.Binary, "--version")
+		// WaitDelay, and it is load-bearing rather than tidy. Cancelling the
+		// context kills the process this started; it does not close a pipe a
+		// GRANDCHILD still holds, and Output waits for the pipe. A wrapper
+		// script that execs something else is enough to produce that, and
+		// without this the call blocks for as long as the grandchild lives --
+		// measured at a full minute against a stub, past a timeout that was
+		// supposed to bound it at five seconds. WaitDelay is what bounds the
+		// wait itself.
+		cmd.WaitDelay = 2 * time.Second
+		out, err := cmd.Output()
+		if err != nil && len(out) == 0 {
+			return
+		}
+		// "zycordd v1.2.3" -> "v1.2.3"; anything else is reported whole.
+		fields := strings.Fields(strings.TrimSpace(string(out)))
+		if len(fields) == 2 && fields[0] == "zycordd" {
+			m.version = fields[1]
+			return
+		}
+		m.version = strings.TrimSpace(string(out))
+	})
+	return m.version
+}
+
 // Info reports the manager's state.
 func (m *Manager) Info() Info {
+	// Resolved before the lock. Version runs a program the first time it is
+	// called, and a Manager whose mutex is held across an exec is a Manager
+	// that a slow binary can freeze for every other caller.
+	version := m.Version()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := Info{
 		Available: m.Binary != "",
 		Binary:    m.Binary,
+		Version:   version,
 		Adopted:   m.adopted,
 		Network:   m.network,
 		Options:   m.opts,

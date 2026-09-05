@@ -3,16 +3,18 @@ package webui_test
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"zycord/spec"
 	"zycord/wallet"
+	"zycord/wallet/localnode"
 	"zycord/wallet/webui"
 )
 
@@ -119,17 +121,70 @@ func TestCreateIsRefusedWhereConfigureIs(t *testing.T) {
 	}
 }
 
-// TestConfigureKnowsTheTestnet: the public testnet is one of the networks a
-// wallet can be pointed at, by the same name every other zcd command uses.
-func TestConfigureKnowsTheTestnet(t *testing.T) {
-	api := newFirstRunAPI(t, "http://127.0.0.1:9420")
-	state, err := api.Configure(webui.ConfigureRequest{RPC: "http://127.0.0.1:9420", Network: spec.Testnet().Name})
+// stubNode writes an executable that does nothing but stay alive, so that
+// Configure's node-starting path can be driven without compiling zycordd into
+// this package's tests. localnode.Manager.Start returns once the process is
+// started; it does not wait for RPC, which is what makes this enough.
+//
+// Skipped on Windows, where a shell script is not an executable. The path this
+// stands in for is covered there by wallet/localnode's own tests, which build
+// the real binary.
+func stubNode(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("no shell scripts on Windows; wallet/localnode covers this path with the real binary")
+	}
+	p := filepath.Join(t.TempDir(), "zycordd")
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in --version) echo 'zycordd v0.0.0-stub'; exit 0;; esac\n" +
+		"exec sleep 60\n"
+	if err := os.WriteFile(p, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestConfigureRunsTheWalletsOwnNodeForTheChosenNetwork: choosing a network is
+// the whole of what a person decides, and the wallet answers it by starting
+// its own node for that network and talking to whatever address it chose.
+func TestConfigureRunsTheWalletsOwnNodeForTheChosenNetwork(t *testing.T) {
+	mgr := &localnode.Manager{Binary: stubNode(t), DataRoot: t.TempDir(), Port: freeTestPort(t)}
+	t.Cleanup(func() { _ = mgr.Stop() })
+	api := webui.NewAPI(webui.Config{
+		Params: spec.Mainnet(), RPC: "http://127.0.0.1:9420",
+		LockAfter: time.Hour, Configurable: true, LocalNode: mgr,
+	})
+
+	state, err := api.Configure(webui.ConfigureRequest{
+		RPC:     "http://a-stranger.example:9420",
+		Network: spec.Testnet().Name,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if state.Network != spec.Testnet().Name || state.ChainID != spec.Testnet().ChainID {
 		t.Fatalf("configured for %q chain %d, want the testnet", state.Network, state.ChainID)
 	}
+	if state.NodeMode != "local" {
+		t.Fatalf("node_mode = %q, want local; this wallet has no other mode", state.NodeMode)
+	}
+	if state.RPC != mgr.RPC() || state.RPC == "http://a-stranger.example:9420" {
+		t.Fatalf("RPC = %q, want the address the wallet's own node was given", state.RPC)
+	}
+	info := mgr.Info()
+	if !info.Running || info.Network != spec.Testnet().Name {
+		t.Fatalf("the wallet did not start its own node for the chosen network: %+v", info)
+	}
+	if info.Version != "v0.0.0-stub" || state.NodeVersion != "v0.0.0-stub" {
+		t.Fatalf("the node's version should be read off the binary and reported: info %q, state %q",
+			info.Version, state.NodeVersion)
+	}
+}
+
+// TestTheWalletKnowsTheTestnet: the public testnet is one of the networks a
+// first run offers, by the same name every other zcd command uses.
+func TestTheWalletKnowsTheTestnet(t *testing.T) {
+	api := newFirstRunAPI(t, "http://127.0.0.1:9420")
 	var names []string
 	for _, n := range api.Networks() {
 		names = append(names, n.Name)
@@ -152,58 +207,43 @@ func TestConfigureKnowsTheTestnet(t *testing.T) {
 	}
 }
 
-// TestProbeTellsWrongNetworkApartFromNoNode: the two things a person gets
-// wrong on the first screen have different fixes, so the answer names which
-// one it was.
-func TestProbeTellsWrongNetworkApartFromNoNode(t *testing.T) {
-	// A node that says it is on the testnet.
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/status" {
-			http.NotFound(w, r)
-			return
-		}
-		fmt.Fprintf(w, `{"chain_id":%d,"height":77,"network":%q}`, spec.Testnet().ChainID, spec.Testnet().Name)
-	}))
-	defer node.Close()
-	api := newFirstRunAPI(t, node.URL)
+// TestAConfigurableWalletIsAlwaysItsOwnNode: this version offers no way to
+// name somebody else's node, so Configure ignores any address that reaches it
+// and refuses outright when the package has no zycordd to run.
+//
+// The refusal is the point. A wallet that fell back to "tell me a node" the
+// moment its own was missing would put a person's balance in a stranger's
+// gift at exactly the moment they are least able to judge the offer.
+func TestAConfigurableWalletIsAlwaysItsOwnNode(t *testing.T) {
+	api := newFirstRunAPI(t, "http://127.0.0.1:9420")
+	_, err := api.Configure(webui.ConfigureRequest{
+		RPC:     "http://a-stranger.example:9420",
+		Network: spec.Testnet().Name,
+	})
+	if !errors.Is(err, webui.ErrNoBundledNode) {
+		t.Fatalf("Configure with no bundled node = %v, want ErrNoBundledNode", err)
+	}
+	st := api.Wallet()
+	if st.RPC == "http://a-stranger.example:9420" {
+		t.Fatal("a refused Configure must not adopt the address it was handed")
+	}
+	if st.LocalNodeAvailable {
+		t.Fatal("a wallet built with no bundled node must not claim to have one")
+	}
+}
 
-	// Asked as mainnet: reachable, and a mismatch that names both sides.
-	res := api.Probe(webui.ProbeRequest{RPC: node.URL, Network: spec.Mainnet().Name})
-	if !res.Reachable || res.Matches {
-		t.Fatalf("expected reachable and mismatched, got %+v", res)
+// TestTheWalletReportsItsOwnVersion: the version is shown, so it has to reach
+// the state a front end renders.
+func TestTheWalletReportsItsOwnVersion(t *testing.T) {
+	api := webui.NewAPI(webui.Config{
+		Version: "v9.9.9-test", Params: spec.Mainnet(),
+		RPC: "http://127.0.0.1:9420", LockAfter: time.Hour,
+	})
+	if got := api.Wallet().Version; got != "v9.9.9-test" {
+		t.Fatalf("Wallet().Version = %q, want the configured version", got)
 	}
-	if res.Network != spec.Testnet().Name || res.ChainID != spec.Testnet().ChainID || res.Height != 77 {
-		t.Fatalf("the node's own answer must be reported: %+v", res)
-	}
-	if res.Expected != spec.Mainnet().Name || !strings.Contains(res.Error, spec.Mainnet().Name) {
-		t.Fatalf("the error must name what was expected: %+v", res)
-	}
-
-	// Asked as testnet: a match.
-	res = api.Probe(webui.ProbeRequest{RPC: node.URL, Network: spec.Testnet().Name})
-	if !res.Reachable || !res.Matches || res.Error != "" {
-		t.Fatalf("expected a clean match, got %+v", res)
-	}
-
-	// Nothing listening: unreachable, and not a mismatch.
-	dead := httptest.NewServer(http.NotFoundHandler())
-	dead.Close()
-	res = api.Probe(webui.ProbeRequest{RPC: dead.URL, Network: spec.Testnet().Name})
-	if res.Reachable || res.Matches || res.Error == "" {
-		t.Fatalf("expected unreachable, got %+v", res)
-	}
-
-	// An unknown network name is an error before any socket is opened.
-	res = api.Probe(webui.ProbeRequest{RPC: node.URL, Network: "moonnet"})
-	if res.Reachable || !strings.Contains(res.Error, "moonnet") {
-		t.Fatalf("expected the unknown network to be named, got %+v", res)
-	}
-
-	// The wallet's own node screen reports the same mismatch, with what the
-	// node said, so the interface can offer the switch.
-	info := api.Node()
-	if info.Reachable || !info.Mismatch || info.NodeNetwork != spec.Testnet().Name {
-		t.Fatalf("Node() on a mismatched node = %+v, want mismatch with the node's network", info)
+	if got := api.Wallet().NodeVersion; got != "" {
+		t.Fatalf("with no bundled node, NodeVersion = %q, want empty", got)
 	}
 }
 
@@ -215,7 +255,6 @@ func TestFirstRunRoutesExist(t *testing.T) {
 		method, path, body string
 	}{
 		{http.MethodGet, "/api/networks", ""},
-		{http.MethodPost, "/api/probe", `{"rpc":"http://127.0.0.1:1","network":"zycord"}`},
 	} {
 		w := do(t, srv, request(t, srv, tc.method, tc.path, tc.body))
 		if w.Code != http.StatusOK {
@@ -231,4 +270,16 @@ func TestFirstRunRoutesExist(t *testing.T) {
 	if !strings.Contains(w.Body.String(), spec.Testnet().Name) {
 		t.Fatalf("GET /api/networks does not list the testnet: %s", w.Body.String())
 	}
+}
+
+// freeTestPort is a port nothing is listening on, so a stub node can be
+// "started" on it without colliding with a real one.
+func freeTestPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
 }

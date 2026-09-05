@@ -84,18 +84,21 @@ a release, and after they do, a change is a fork.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M0 — The fold on paper** | pure state machine, golden vectors, griefing suite, differential re-implementation | ✅ implemented; 🟡 the 72 h fuzz run is **in flight since 2026-08-31**; ⬜ external review open |
+| **M0 — The fold on paper** | pure state machine, golden vectors, griefing suite, differential re-implementation | ✅ implemented; ✅ the 72 h fuzz run is **done** — 8.03 billion executions, no finding ([record](docs/adversarial/M0-M2-evidence.md)); ⬜ external review open |
 | **M1 — One node** | storage, mempool, RPC, wallet CLI, dev-PoW | ✅ implemented |
-| **M2 — A network** | p2p, hash-first relay, sync, reorg torture | ✅ implemented; 🟡 the multi-day chaos soak is **in flight since 2026-08-31** and is the thinnest evidence here |
+| **M2 — A network** | p2p, hash-first relay, sync, reorg torture | ✅ implemented; ✅ the multi-day chaos soak is **done** — 12.1 h, four tests, 51 epoch boundaries ([record](docs/adversarial/M0-M2-evidence.md)); ⬜ still the thinnest evidence here |
 | **M3 — Real work** | RandomX behind the `pow` interface, LWMA difficulty, the canonical build container | ✅ implemented; ✅ two adversarial passes over the binding ([I7](docs/adversarial/I7.md)); ⬜ external review of the binding open |
 | **M3.5 — A public testnet** | resettable testnet, faucetless self-mining, bootstrap seed, scrape-format metrics | 🟢 **live** — [how to join](docs/TESTNET.md); ⬜ the [§1 measurements](docs/decisions/testnet-measurements.md) it exists to produce are still being collected |
 | **M4 — Adversaries** | public attack-net, external review, reproducible-build attestations | ⬜ **open and wanted.** The attestation tooling ships ([attestations/](attestations/)); no external review has been done. If you can break it, [SECURITY.md](SECURITY.md) |
 | **M5 — Genesis** | parameter freeze, vector freeze, v1.0, announced launch | 🟡 date set; the freeze is what closes it, and the four genesis-irreversible numbers are re-verified at the freeze commit ([RELEASE.md](docs/RELEASE.md)) |
 
-**Two rows say "in flight" rather than "done", and that is deliberate.** Both
-runs had been done before and their logs were not kept. A green checkmark whose
-evidence nobody can open is worth less than a yellow one with a date on it, so
-they are running again and the row changes when there is a record to link.
+**Those two rows said "in flight" for a week, and now they do not.** Both runs
+had been done before and their logs were not kept, so the rows carried a date
+instead of a checkmark: a green checkmark whose evidence nobody can open is worth
+less than a yellow one with a date on it. They were run again, and the
+[record](docs/adversarial/M0-M2-evidence.md) is what the rows were waiting on. It
+also states what the two runs do **not** establish, and why three earlier attempts
+at the fuzz were discarded rather than reported.
 
 **Why the history is three commits.** It was squashed before publication, as
 [RELEASE.md §1](docs/RELEASE.md) requires: the public tree is built from the

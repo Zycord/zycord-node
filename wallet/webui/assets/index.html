@@ -56,33 +56,16 @@
     <!-- Network and node. Shared with the settings panel by id family:
          every setup-* field here has a settings-* twin below. -->
     <form id="gate-setup" class="screen hidden" autocomplete="off">
-      <h2>Network and node</h2>
-      <p class="muted small">This wallet keeps no copy of the chain. It asks a Zycord node for balances and hands it what you sign, so it needs one to talk to.</p>
-      <label>Network</label>
+      <h2>Choose a network</h2>
       <div id="setup-networks" class="net-cards"></div>
       <input type="hidden" id="setup-network" value="zycord">
       <input type="hidden" id="setup-key" value="">
-      <label>Node</label>
-      <div class="segmented" id="setup-mode-seg">
-        <label><input type="radio" name="setup-modeseg" value="local" checked><span>Built-in node</span></label>
-        <label><input type="radio" name="setup-modeseg" value="external"><span>Another node</span></label>
-      </div>
-      <input type="hidden" id="setup-mode" value="local">
-      <p class="muted small" id="setup-mode-note">The wallet runs its own full node on this computer. It downloads the chain once and keeps up from there; nothing outside this computer is trusted for your balance.</p>
-      <div id="setup-external">
-        <label for="setup-rpc">Node address</label>
-        <div class="input-row">
-          <input type="text" id="setup-rpc" spellcheck="false" value="http://127.0.0.1:9420">
-          <button type="button" id="setup-test" class="ghost">Test</button>
-        </div>
-        <div id="setup-test-result" class="probe hidden"></div>
-        <p class="muted small">If <code>zycordd</code> runs on this computer, the default address is right. Otherwise enter the address of a node you trust.</p>
-        <details>
-          <summary>Second node, for cross-checking balances (optional)</summary>
-          <input type="text" id="setup-confirm" spellcheck="false" placeholder="address of a second node">
-          <p class="muted small">A second, independent node whose answers must agree with the first before anything irreversible is signed.</p>
-        </details>
-      </div>
+      <p class="muted small">
+        The wallet is its own node. It joins the network, finds peers, downloads the chain and
+        works your balance out here, on this computer. Nothing is asked of anybody else's server,
+        and nothing outside this machine is trusted for what you hold.
+      </p>
+      <p class="error hidden" id="setup-nonode">This package is missing its node program, so the wallet cannot run one. Download the wallet again.</p>
       <div class="actions">
         <button type="button" id="setup-back" class="ghost">Back</button>
         <button type="submit" id="setup-next" class="primary">Continue</button>
@@ -162,6 +145,7 @@
     </form>
 
     <p id="gate-error" class="error hidden"></p>
+    <p class="version small muted" id="gate-version"></p>
   </div>
 </div>
 
@@ -301,23 +285,7 @@
           <label>Network</label>
           <div id="settings-networks" class="net-cards"></div>
           <input type="hidden" id="settings-network" value="zycord">
-          <label>Node</label>
-          <div class="segmented" id="settings-mode-seg">
-            <label><input type="radio" name="settings-modeseg" value="local"><span>Built-in node</span></label>
-            <label><input type="radio" name="settings-modeseg" value="external"><span>Another node</span></label>
-          </div>
-          <input type="hidden" id="settings-mode" value="local">
-          <p class="muted small" id="settings-mode-note"></p>
-          <div id="settings-external">
-            <label for="settings-rpc">Node address</label>
-            <div class="input-row">
-              <input type="text" id="settings-rpc" spellcheck="false">
-              <button type="button" id="settings-test" class="ghost">Test</button>
-            </div>
-            <div id="settings-test-result" class="probe hidden"></div>
-            <label for="settings-confirm">Second node <span class="muted">(optional, cross-checks balances)</span></label>
-            <input type="text" id="settings-confirm" spellcheck="false" placeholder="address of a second node">
-          </div>
+          <p class="muted small">Changing the network downloads that chain from scratch the first time.</p>
           <div id="settings-mining">
             <label class="checkbox"><input type="checkbox" id="settings-mine"> Mine with this computer</label>
             <p class="muted small">Rewards are paid to this wallet's persistent address. Mining uses every core by default and, on the public networks, about 3 GiB of memory for the RandomX dataset. The node syncs first and starts mining on its own.</p>
@@ -339,6 +307,7 @@
     <footer>
       <span class="muted small" id="foot-node"></span>
       <span class="muted small" id="foot-build"></span>
+      <span class="muted small" id="foot-version"></span>
     </footer>
   </div>
 </div>

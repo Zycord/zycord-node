@@ -79,6 +79,7 @@ func main() {
 	// double-clicking an icon and has nowhere else to be told which key file,
 	// which node and which network to use.
 	api := webui.NewAPI(webui.Config{
+		Version:      version,
 		Params:       saved.params(),
 		RPC:          saved.RPC,
 		ConfirmRPC:   saved.ConfirmRPC,
@@ -534,7 +535,6 @@ func saveSettings(path string, req webui.ConfigureRequest, state *webui.WalletSt
 		RPC:         req.RPC,
 		ConfirmRPC:  req.ConfirmRPC,
 		Network:     req.Network,
-		NodeMode:    req.NodeMode,
 		Mine:        req.Mine,
 		MineThreads: req.MineThreads,
 		Payout:      prev.Payout,
