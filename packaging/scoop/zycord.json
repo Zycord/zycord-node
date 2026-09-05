@@ -1,7 +1,7 @@
 {
     "version": "0.0.0",
     "description": "Zycord \u2014 a proof-of-work-launched L1 built from self-certifying state transitions. Node, CLI and wallet.",
-    "homepage": "https://github.com/thesimstoshi/zycord",
+    "homepage": "https://github.com/Zycord/zycord-node",
     "license": "MIT",
     "notes": [
         "There is no coin yet. Genesis has not happened. Anyone selling you ZCD today is scamming you.",
@@ -39,7 +39,7 @@
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/thesimstoshi/zycord/releases/download/v0.0.0/zycord-0.0.0-windows-amd64-randomx.zip",
+            "url": "https://github.com/Zycord/zycord-node/releases/download/v0.0.0/zycord-0.0.0-windows-amd64-randomx.zip",
             "hash": "0000000000000000000000000000000000000000000000000000000000000000",
             "extract_dir": "zycord-0.0.0-windows-amd64"
         }
@@ -49,12 +49,12 @@
         "zycordd.exe"
     ],
     "checkver": {
-        "github": "https://github.com/thesimstoshi/zycord"
+        "github": "https://github.com/Zycord/zycord-node"
     },
     "autoupdate": {
         "architecture": {
             "64bit": {
-                "url": "https://github.com/thesimstoshi/zycord/releases/download/v$version/zycord-$version-windows-amd64-randomx.zip",
+                "url": "https://github.com/Zycord/zycord-node/releases/download/v$version/zycord-$version-windows-amd64-randomx.zip",
                 "extract_dir": "zycord-$version-windows-amd64"
             }
         },

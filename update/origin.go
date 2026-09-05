@@ -24,7 +24,7 @@ import (
 //
 // A fork or a mirror overrides it, which is the mechanism install.sh already
 // offers.
-const defaultRepoURL = "https://github.com/thesimstoshi/zycord"
+const defaultRepoURL = "https://github.com/Zycord/zycord-node"
 
 // repoURLEnv names the override. Spelled the same as install.sh's, so an
 // operator who has set one for the installer does not discover a second name.

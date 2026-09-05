@@ -86,7 +86,7 @@ So there are two verification paths to the same root, for two different readers:
 
 | reader | path |
 |---|---|
-| a person, with `gh` installed | `gh attestation verify <archive> --repo thesimstoshi/zycord` |
+| a person, with `gh` installed | `gh attestation verify <archive> --repo Zycord/zycord-node` |
 | the binary itself | the manifest signature |
 
 Neither replaces the other, and neither claims more than that.

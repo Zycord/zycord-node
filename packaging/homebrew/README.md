@@ -18,7 +18,7 @@ Publishing a release:
 A tap is `<user>/homebrew-zycord`; users add it with
 `brew tap <user>/zycord <url>`.
 
-Every URL in both files says `thesimstoshi`, substituted at publication
+Every URL in both files says `Zycord`, substituted at publication
 ([RELEASE.md](../../docs/RELEASE.md) §3). A handle in a formula URL is published
 to everyone who installs.
 
