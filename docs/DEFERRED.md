@@ -1198,7 +1198,11 @@ what this section holds.
   cannot come back — it is a hosted runner starting what it built, which is exactly
   the shape the surviving rule forbids — and there is no other runner. The command
   list a contributor runs by hand instead is in `CONTRIBUTING.md`, including the four
-  regression tests those defects left behind. *Reopens:* any change touching file
+  regression tests those defects left behind, the `make ci` targets that port, and
+  `./update/`, whose four `_windows.go` files no Linux run compiles; a run of it is
+  recorded in `docs/localnet/soaks/windows-manual-run.md`, which is empty of runs
+  until somebody types the commands and is the honest state until then.
+  *Reopens:* any change touching file
   publication, log rotation, directory sync or the build's output names; and the next
   release, which ships Windows archives nothing has run.
 

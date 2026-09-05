@@ -125,22 +125,140 @@ pushed anyway is a red `dev`.
 **On Windows, `make` is not the entry point and is not expected to be.** GNU make
 is not installed on a stock Windows machine, and the recipes are POSIX `sh`
 throughout. The equivalent is this list, which is what a job on a Windows runner
-used to run and what a Windows contributor now runs by hand:
+used to run and what a Windows contributor now runs by hand. Type it in
+PowerShell, from the repository root, one line at a time — a list that stops at
+the first red line is the point, and `&&` is not a PowerShell operator on the
+versions Windows ships by default:
 
 ```
 go vet ./...
 gofmt -l .
 go test -timeout 30m ./...
 go test -count=1 -run 'TestRenameNoReplaceIsAnExclusiveRename|TestWriteFileNoClobberPublishesWithTheExclusiveRename|TestTruncateOpenLogWorksOnTheAppendHandle|TestSyncDirOnlyIgnoresUnsupportedPlatformErrors' -v ./wallet/ ./node/storage/
+go test -count=1 -v ./update/
+go test ./sim/wiring/ -count=1
+go build -tags zcdguard ./...
+go test -tags zcdguard ./...
+go test -run TestDifferential -v ./sim/
+go test -run XXX -bench . -benchtime 1x ./...
 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid=' -o bin/zcd.exe ./cmd/zcd
 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid=' -o bin/zycordd.exe ./cmd/zycordd
-cd desktop && go test -tags desktop ./...
+cd desktop
+go test -tags desktop ./...
+cd ..
 ```
 
 Run those before opening a pull request, and note that `go build -o` there needs
 an explicit `.exe`, because it does not add one. Windows is one of the six
 platforms every release ships and nothing else exercises it — there is no runner
 left that does.
+
+**The list is written in POSIX `sh` and one line of it does not survive being
+typed into PowerShell.** The whole document is `sh` throughout, which is right
+for the other platforms and is a trap on this one, so the differences are
+enumerated here rather than left to be discovered a line at a time. Windows
+PowerShell 5.1 is what a stock Windows machine has; PowerShell 7 fixes some of
+these and is not what is installed by default, so assume 5.1.
+
+- **`VAR=value command` does not exist.** PowerShell sets an environment
+  variable with `$env:`, on its own line, and `cmd.exe` uses `set VAR=value`.
+  The two `CGO_ENABLED=0` build lines are therefore three lines:
+
+  ```
+  $env:CGO_ENABLED = '0'
+  go build -trimpath -ldflags '-s -w -buildid=' -o bin/zcd.exe ./cmd/zcd
+  go build -trimpath -ldflags '-s -w -buildid=' -o bin/zycordd.exe ./cmd/zycordd
+  ```
+
+  The variable persists for the rest of the session either way, which is what
+  you want here and is worth knowing before the next command in that window.
+
+- **`&&` is a parse error, not a runtime one.** Windows PowerShell 5.1 rejects
+  it with *"The token '&&' is not a valid statement separator in this version"*,
+  so a line containing it never runs at all. Both places this document joins
+  commands with `&&` — the desktop module's `cd`, and the CRLF renormalise
+  below — are written as separate lines for that reason. Do not rejoin them.
+
+- **`cd desktop` is not scoped to one command.** In `sh`, `cd desktop && go
+  test …` leaves the shell where it started once the line finishes; typed as
+  two lines anywhere, it does not. The list ends with `cd ..` so the session is
+  back at the repository root, which is where every other line in it expects to
+  be. Getting this wrong is quiet: `go test ./...` from `desktop/` tests the
+  desktop module and reports success.
+
+- **Single quotes are fine, and are the safe choice.** PowerShell single quotes
+  are literal, like `sh`, so `-ldflags '-s -w -buildid='` needs no change. Its
+  *double* quotes interpolate `$`, which is why the quoting in this list is
+  single throughout and should stay that way.
+
+- **Path separators need no change.** Go's own tooling takes forward slashes on
+  every platform, and `./...`, `./wallet/` and `bin/zcd.exe` are all read
+  correctly by both shells. Only a path handed to a *Windows* program — the
+  `bin\zcd.exe` invocations in the run record — wants backslashes, and
+  PowerShell accepts either there too.
+
+- **Nothing in the list redirects, globs, substitutes or deletes.** There is no
+  `$(...)`, no `2>&1`, no `/dev/null`, no `rm` or `cp`, and no wildcard. That is
+  not an accident and is worth preserving: those are the constructs whose
+  `sh`-to-PowerShell translations are individually easy and collectively the
+  reason a ported script drifts. Keep new lines in the same shape — one
+  program, its flags, no shell.
+
+**How the list maps onto `make ci`, and what deliberately does not port.** The
+first four lines above are `lint` and the Windows regressions; the five that
+follow are `wiring`, `guard`, `differential` and `bench-smoke` re-expressed as
+the plain `go` invocations their recipes already are — cheap to add, so they are
+added. `./update/` is on the list on its own account rather than as part of
+`make ci`: it carries `replace_windows.go`, `exec_windows.go`,
+`guard_windows.go` and `syncdir_windows.go` — four files no Linux run compiles
+at all — and the rename-the-running-image technique in the first of them is
+Windows-only behaviour with no equivalent anywhere else in the tree.
+
+**That line is a targeted check rather than a generic one, and it is worth
+knowing what it reaches.** `update/install_test.go` has eight tests and exactly
+two of them skip on Windows: `TestTheExecutableIsStillThereAtEveryPointOfTheReplace`,
+because the platform must rename the running image aside and the two-syscall
+window that opens is documented rather than tested away, and
+`TestASymlinkIsFollowedAndLeftAlone`, because creating a symlink needs a
+privilege a test should not assume it has. **The other six run**, so
+`replaceBinary` — the rename-a-running-mapped-image path, which exists only on
+this platform and which no other test in the tree can reach — is genuinely
+exercised by this line and not merely compiled. If either of the two skips
+prints on a machine where you expected it not to, that is worth a note in the
+record; a skip that has become silent is how a platform stops being tested. Three targets stay
+behind, each for a reason rather than for convenience:
+
+- **`lint`'s Makefile wrapper.** Its substance — `go vet ./...` and `gofmt -l .`
+  — is the first two lines of the list. The wrapper around them (`tee
+  /dev/stderr`, `test -z`) is POSIX plumbing that turns a printed filename into
+  a non-zero exit; on Windows, read the output. `gofmt -l .` printing nothing is
+  the pass.
+- **`check-imports`.** It is POSIX shell with `grep -E` and `sort -u`, and a
+  PowerShell re-expression of it would be a second implementation of one guard,
+  which is a thing that drifts silently and then disagrees. What it checks is a
+  property of the *source* — which packages import which — and source does not
+  vary by operating system, so the Linux run covers it completely. Do not port
+  it.
+- **`race`.** The race detector on `windows/amd64` requires cgo, and cgo on
+  Windows requires a MinGW-w64 `gcc` on `PATH` ([docs/INSTALL.md](docs/INSTALL.md)
+  discusses that toolchain for the RandomX tier). **The decision, recorded here
+  rather than left to whoever is at the keyboard: `-race` is not part of the
+  Windows list, and Linux `-race` is what covers the tree.** The races this
+  project has had were in the miner, the peer goroutines, the sync driver and
+  the RPC server — none of that is platform-specific code, and all of it is
+  compiled and raced on Linux. What *is* Windows-specific is file publication,
+  log truncation, directory sync and process control, and those are exercised by
+  the regression tests and `./update/` above, under the platform's real
+  syscalls, which is the coverage that could not be had anywhere else. If you
+  have MinGW-w64 installed anyway, `go test -race -timeout 45m ./...` is worth
+  running and worth recording; it is not required, and its absence is accepted
+  rather than overlooked.
+
+A run of this list at a tagged commit is release evidence and is recorded as
+such — [docs/RELEASE.md](docs/RELEASE.md) §8 asks for it, and
+[docs/localnet/soaks/windows-manual-run.md](docs/localnet/soaks/windows-manual-run.md)
+is the template it is written into, alongside the other runs this tree keeps
+rather than quotes.
 
 **If you cloned before `.gitattributes` existed, rewrite the working tree once.**
 That file gives every text file LF, but only as git rewrites each file, so an
@@ -154,8 +272,9 @@ staged and nothing is considered changed (measured — "Updated 0 paths", and 17
 files still CRLF). What works is making git write every file again. **Commit or
 stash first: this discards uncommitted changes.**
 
-```sh
-git rm --cached -r . && git reset --hard
+```
+git rm --cached -r .
+git reset --hard
 ```
 
 Measured on such a clone: `gofmt -l .` from 173 files to 0. A fresh clone needs
