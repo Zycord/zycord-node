@@ -71,6 +71,32 @@ import (
 // is slack for the request's round trip and for the receiver's clock.
 const announcedTTL = 2 * PendingBodyTimeout
 
+// **The rule the value above must satisfy, asserted rather than argued:**
+//
+//	announcedTTL > PendingBodyTimeout
+//
+// The victim charges `ScoreUnservedBody` once `PendingBodyTimeout` has elapsed
+// since ITS announcement arrived. If a promise expires at or before that, the
+// promise is gone while the charge is still coming — this node refuses the very
+// request the ledger exists to serve, and **I8-H2 reopens in full** with the
+// ledger in the tree and every scenario test still green.
+//
+// This is a compile-time check because the paragraph above it was, until it was
+// pointed out, the only thing holding the constant down: every TTL assertion in
+// announceledger_internal_test.go is written relative to `announcedTTL` itself,
+// so shrinking the constant to 2s left the whole suite passing. That is this
+// repo's named recurring defect — a test that measures the scenario rather than
+// the rule — landing on the one constant the fix's correctness turns on. A
+// negative array length is the cheapest construction that cannot be skipped,
+// forgotten, or satisfied by a test that moved with it.
+//
+// TestTheAnnouncedTTLOutlastsTheVictimsChargeWindow states the same rule at
+// runtime, with the consequence named, because a build error alone tells the
+// next author what broke and not why it matters.
+// The array length is negative — and so a compile error — exactly when
+// announcedTTL <= PendingBodyTimeout.
+var _ [announcedTTL - PendingBodyTimeout - 1]struct{}
+
 // maxAnnouncedPerPeer bounds the ledger per peer.
 //
 // 32 against a ban distance of 10 charges: a peer would have to have 32 promises

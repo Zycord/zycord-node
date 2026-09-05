@@ -253,6 +253,49 @@ func TestAPromiseExpires(t *testing.T) {
 	}
 }
 
+// TestTheAnnouncedTTLOutlastsTheVictimsChargeWindow pins the one constant the
+// whole fix's correctness turns on, as a RULE rather than as a scenario.
+//
+// Property: announcedTTL > PendingBodyTimeout.
+//
+// **Why this test exists, and it is worth stating because the gap it closes was
+// real.** Every other TTL assertion in this file is written relative to
+// `announcedTTL` — advance the clock by the constant, assert the promise is
+// gone — so all of them move with the constant and none of them holds it down.
+// A reviewer shrank `announcedTTL` from `2 x PendingBodyTimeout` to 2s and the
+// entire suite still passed. That is this repo's named recurring defect, a test
+// that measures the scenario rather than the rule, landing on the one value the
+// fix depends on.
+//
+// **The consequence the rule prevents.** V charges ScoreUnservedBody once
+// PendingBodyTimeout has elapsed since its announcement arrived. A promise that
+// expires at or before that is gone while the charge is still coming: A refuses
+// the exact request the ledger exists to serve, and I8-H2 reopens in full — with
+// the ledger in the tree, and with every scenario test in this file still green,
+// because they would all have shrunk along with it.
+//
+// announceledger.go carries the same rule as a compile-time check, which is what
+// actually cannot be skipped. This one exists because a negative array length
+// tells the next author what broke and not why it matters.
+func TestTheAnnouncedTTLOutlastsTheVictimsChargeWindow(t *testing.T) {
+	if announcedTTL <= PendingBodyTimeout {
+		t.Fatalf("announcedTTL is %v against a PendingBodyTimeout of %v. A promise that "+
+			"expires at or before the victim's charge window means A refuses the body it "+
+			"announced while V is still about to charge for it: I8-H2 reopens, and every "+
+			"other TTL test in this file passes anyway because they are all written "+
+			"relative to announcedTTL.", announcedTTL, PendingBodyTimeout)
+	}
+	// The margin is asserted too, not just the inequality. A TTL one nanosecond
+	// past the charge window satisfies the rule and leaves nothing for the
+	// request's round trip or for clock skew between the two nodes, which is the
+	// slack the constant's own comment says the second PendingBodyTimeout buys.
+	if margin := announcedTTL - PendingBodyTimeout; margin < PendingBodyTimeout {
+		t.Fatalf("announcedTTL leaves a margin of %v past the charge window, want at least "+
+			"one PendingBodyTimeout (%v) of slack for the round trip and for clock skew",
+			margin, PendingBodyTimeout)
+	}
+}
+
 // TestTheAnnouncedLedgerIsBoundedPerPeer is the memory bound.
 //
 // Property: the promises held for one peer never exceed maxAnnouncedPerPeer,

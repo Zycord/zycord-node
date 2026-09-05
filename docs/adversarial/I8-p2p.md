@@ -404,10 +404,37 @@ widened for; it is the ceiling's own sizing rationale given priority over garbag
 instead of being consumed by it. The bytes are **still debited to both layers**,
 so the overshoot stays visible to the counter that exists to make it visible, and
 the ceiling is a leaky bucket (`refilledServed`) so an exempt reply drains at the
-refill rate and cannot be latched. At the committed parameters the exempt
-quantity is `BlockByteLimit` against a per-connection ceiling of
-`BlockByteCapacity` — 2.5 MB against 8 MB, **0.31×** — and that ratio drifts
-toward 1.0× if an era re-pin raises the elastic limit.
+refill rate and cannot be latched — its partial arm returns
+`served - credits*budget` rather than zero, so an overshoot is carried forward as
+debt and repaid out of the next window rather than forgiven.
+
+**The ratio, and it must be stated with the redemption factor in it.** The
+exempt quantity per announced peer per announced block is
+`BlockByteLimit × announcedRedemptionFactor`, not `BlockByteLimit` — the cap
+admits two bodies' worth, for the torn-transfer reason the constant documents —
+against a per-connection ceiling of `BlockByteCapacity`. At the committed
+parameters that is 5 MB against 8 MB, **0.62×**. An earlier revision of this
+paragraph said 0.31× by quoting the per-promise quantity and calling it the
+amplification, dropping the factor of two the fix's own cap introduces; the
+figure is corrected here because a factor-of-two error in an adversarial record
+is exactly what a later "still under the ceiling" argument would rest on without
+re-deriving it. `TestAPromiseIsSpentOnceAndTheSecondRequestIsRefusedAsBefore` is
+the measurement: a one-chunk body is served **twice** before the promise is spent.
+
+**And the re-pin case crosses 1.0×, which the earlier "drifts toward 1.0×"
+wording concealed.** If an era re-pin raises the elastic limit to
+`block_byte_capacity`, the exempt lane is `8 MB × 2 = 16 MB` against an 8 MB
+per-connection ceiling: **2.0×**, not a drift toward unity. That is a real
+change of regime and not a rounding of this one. Two things bound it and neither
+is the ceiling: the debt arithmetic above, which makes the overshoot a loan
+against the next window rather than a widening of the bucket; and the fact that
+the lane exists only where this node announced, once per `(peer, id)`, at
+chain-accept rate — so 2.0× is the instantaneous worst case within one window,
+not a sustained rate a peer can hold. **Whoever performs that re-pin should
+re-derive this paragraph rather than inherit it**, and should treat
+`announcedRedemptionFactor` as the knob: at factor 1 the same re-pin gives
+exactly 1.00×, and factor 2 is bought purely for the chunked-transfer retry that
+the re-pin is what makes reachable in the first place.
 
 **The safety precondition, named because it is what makes the promise
 honourable.** Every outbound `KindBlockAnnounce` stands behind a successful
@@ -602,8 +629,11 @@ because the next auditor should not re-run these.
   test that no test here does: whether the per-peer bound of 32 is comfortable
   under real reorg churn (it is sized against a ban distance of 10 and an
   announce rate bounded by proof of work, both arguments rather than
-  measurements); whether the 0.31× amplification stays where the arithmetic puts
-  it once real connection sets and real block sizes are involved; and the
+  measurements); whether the 0.62× amplification stays where the arithmetic puts
+  it once real connection sets and real block sizes are involved — and note that
+  the same arithmetic gives **2.0×** after an era re-pin to
+  `block_byte_capacity`, which is the one figure here that crosses 1.0× and the
+  one a re-pin must re-derive rather than inherit; and the
   multi-chunk redemption path, which **no test in this tree can reach** because
   `block_byte_limit_genesis` is below `BlockChunkBytes` at every committed
   parameter set. That last one is written from the rule rather than from a
