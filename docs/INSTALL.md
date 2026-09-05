@@ -163,8 +163,11 @@ renders the window is Microsoft's, installed on the user's machine, and is no
 more reproducible than the operating system it comes with.
 
 Every wallet archive also carries a `zycordd`: the wallet runs it as its own
-full node, so a download works without anybody's infrastructure and without a
-second program to install. That node is the RandomX build — it has to be, to
+full node — outbound-only, on its own data directory — so a download works
+without anybody's infrastructure and without a second program to install. The
+wallet offers no way to point at somebody else's node, which is deliberate:
+choosing whose word your balance is should not be the first thing a wallet asks
+of a person who has just installed it. That node is the RandomX build — it has to be, to
 join the public networks — and is therefore in the unattested tier on every
 platform, Windows included; the `UNATTESTED.txt` beside it says so. The claim
 about the Windows wallet binary is unchanged and is about that one file.

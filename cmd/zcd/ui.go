@@ -41,6 +41,7 @@ func cmdUI(args []string) error {
 	}
 
 	api := webui.NewAPI(webui.Config{
+		Version:    version,
 		KeyPath:    *keyPath,
 		Params:     expected,
 		RPC:        *n.rpc,

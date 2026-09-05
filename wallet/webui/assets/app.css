@@ -651,6 +651,7 @@ pre.log {
   word-break: break-all;
   color: var(--muted);
 }
+.version { text-align: center; margin: 18px 0 0; font-variant-numeric: tabular-nums; }
 .mini-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .mini-actions button { margin-top: 0; width: auto; }
 

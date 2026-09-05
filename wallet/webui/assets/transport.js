@@ -254,10 +254,6 @@
     networks: function () {
       return bridge ? viaBridge("Networks") : http("GET", "api/networks");
     },
-    /* Ask a node who it is, without saving anything. */
-    probe: function (req) {
-      return bridge ? viaBridge("Probe", req) : http("POST", "api/probe", req);
-    },
     /* Generate a key and write it encrypted. Refused by `zcd ui`, which was
      * given its key file on the command line; the desktop application is
      * where somebody without a command line starts. */

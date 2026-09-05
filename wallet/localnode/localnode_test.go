@@ -239,6 +239,43 @@ func TestMiningIsARestartWithAPayout(t *testing.T) {
 	waitLog(t, m, "mining to")
 }
 
+// TestAnExitedNodeReportsItsOwnReason: a node that refuses to start explains
+// itself on its last line, and that sentence is what the wallet has to show.
+// An exit status is a number nobody can act on.
+func TestAnExitedNodeReportsItsOwnReason(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no shell scripts on Windows")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "zycordd")
+	script := "#!/bin/sh\n" +
+		"echo 'starting up'\n" +
+		"echo 'zycordd: zycord requires the randomx-v2 engine' >&2\n" +
+		"exit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{Binary: bin, DataRoot: t.TempDir(), Port: freePort(t)}
+	t.Cleanup(func() { _ = m.Stop() })
+	if _, err := m.Start(spec.Devnet().Name, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	var info Info
+	for time.Now().Before(deadline) {
+		if info = m.Info(); info.Exited != "" {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if info.Exited == "" {
+		t.Fatal("a process that exited must be reported as exited")
+	}
+	if !strings.Contains(info.Exited, "randomx-v2 engine") {
+		t.Fatalf("Exited = %q; it must carry the node's own last line, not just a status", info.Exited)
+	}
+}
+
 func TestFindLooksBesideTheApplicationFirst(t *testing.T) {
 	dir := t.TempDir()
 	name := "zycordd"
