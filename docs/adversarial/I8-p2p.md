@@ -183,7 +183,7 @@ test that could not fail; this is a guard that could not see. Both were written
 by someone who had just read the rule they broke: the file naming this evasion
 is the file the new test was added to.
 
-### I8-H2 — The same charge, aimed by a third party ⚠️ *demonstrated, NOT fixed*
+### I8-H2 — The same charge, aimed by a third party ✅ *fixed, at the announcer*
 
 The mechanism above needs no adversary. It also **has** one, and the attacker
 never has to touch the node that does the banning.
@@ -217,7 +217,20 @@ against it**, so A's silence is caused by a third party and is unattributable at
 V. `TestAThirdPartyStillDrivesAnHonestPeerToABan` then drives the consequence at
 the Node seam, where both tallies move: **12 announcements accepted, address
 score −120, banned on the address AND the identity.** That test asserts the
-defect; closing I8-H2 means inverting its last assertion.
+defect as it stood.
+
+**Superseded, and the correction matters more than the reframing.** That
+sentence used to read *"closing I8-H2 means inverting its last assertion"*, and
+following it would have produced a vacuous test. Both tests in
+`thirdpartyban_internal_test.go` drive **V's engine and nothing else** — there is
+no A-side engine anywhere in the file — so a fix that lives in A's serve path
+cannot change either outcome. Pointed one way the assertion fails for the fix;
+pointed the other it is a guard that cannot fail, which is I8-L1's defect
+arriving for the third time in this document. Both tests are therefore **kept
+as they are and retitled**: they pin what the transport shows the scorer, which
+the fix deliberately does not change, and the second is now the *ghost-flood
+terminator seen from the inside* — the assertion that refuses the two candidates
+below that failed by weakening the charge.
 
 **The shape the attack actually has, which is the part that defeats the obvious
 fixes.** A real miner builds each block on **its own** tip. Under the drain A
@@ -305,12 +318,152 @@ of an id suppresses every other peer's announcement of it with `CostDeduped`
 until the entry is cleared — which for a charged entry is the reap at
 `PendingBodyTimeout`. The first announcer holds the floor for the window.
 
-**Status for the freeze.** This is open, and publishing this document publishes a
-live, reachable defect with a working recipe. That is a decision for the owner
-rather than something this section can dispose of: close it with the verified-work
-anchoring above, accept it as a known open finding at launch, or hold the
-publication. What is *not* available is marking it fixed — the two fixes that
-would let us do that were built, and both were measured failing.
+**Status for the freeze — superseded.** This section used to end by saying the
+finding was open, that publishing this document published a live recipe, and
+that marking it fixed was *not* available. The fix below is the fifth candidate,
+and it is the one that closes it. The paragraph is kept rather than deleted
+because the four failures it rests on are still the reason this shape and not
+another one.
+
+**The fix: an announcer never refuses what it announced.**
+
+All five candidates before this one worked on **V's side of the asymmetry**,
+teaching the *scorer* leniency, and every one of them either spared the
+ghost-flooder, covered 1/12 of the traffic, or died against a sustained
+drain.
+This one reframes the defect at the other endpoint. V charges A for an unserved
+body **that A volunteered**: the announcement was A's own discretionary act, and
+the shared ceiling then makes A break the promise the announcement is. So the
+obligation is attached to the announcement:
+
+> **An outbound block announcement reserves the right of each announced peer to
+> fetch that body once, and the node-wide ceiling cannot starve that lane.**
+
+Two chokepoints, no wire change, no scoring change, nothing in the consensus
+zone. `node/p2p/announceledger.go` holds the rule and its reasoning; the
+mechanics are:
+
+- **Record at send.** `Node.Broadcast` is the single funnel every outbound
+  `KindBlockAnnounce` passes through — `AnnounceBlock` for this node's own mined
+  block, the gossip and fork-choice forwards through `Node.serve`'s `Forward`
+  arm, and `relayReleased` for a withheld block that matured — so the promise is
+  recorded there and a fifth producer added later still lands on it. It is
+  recorded **after** a successful send, keyed on `replyBudgetKey(Conn.Addr,
+  Conn.PeerKey)`, which is exactly the `payer` string the serve path is handed.
+- **Redeem at serve.** In `OnGetBlock`, at the call site of
+  `replyBudgetExhausted` and **not inside it** — that function is shared with
+  `OnGetHeaders`, and a header range is not something this node ever promised
+  anybody, so an exemption that leaked there would be a hole in the ceiling
+  rather than a lane through it. The promise is *looked up* before the chain
+  read (a map read, so an unpromised peer still buys nothing) and *spent* after
+  the payload exists, because it is denominated in bytes.
+
+**Why the four known failures do not arise.**
+
+- *Ghost flood (killed candidate 1, the blanket bound).* Untouched, for two independent
+  reasons. The fix changes which requests **A serves** and never what **V
+  scores**, so no leniency exists at the scorer at all; and the ledger is keyed
+  on A's own outbound announcements, so a ghost's block — which A never
+  announced — has no entry to redeem. `TestAGhostFloodReachesNeitherForwardNorReframe`
+  passes unchanged, and `TestAThirdPartyStillDrivesAnHonestPeerToABan`
+  is now retained precisely as the assertion that this stayed true.
+- *The tip-extension bound's 1-in-12 (candidate 2).* Does not apply: the
+  discriminator here is "did A announce this body to this peer", which is true of
+  **all twelve** announcements rather than the one that happened to extend V's
+  tip. Measured end to end below.
+- *The sustained drain (candidate 4, requester retry).* The drain is re-applied
+  every round in the two-engine test, after the announcement, so the ceiling is
+  empty at every single request. A promise is not a retry.
+- *Forgeability (the wire answer).* There is nothing to forge. The ledger is A's
+  memory of A's own sends; no peer can write to it, no new frame exists, and an
+  un-upgraded peer sees only that A serves where it used to refuse — which was
+  always protocol-legal, since the refusal was discretionary.
+
+**Bounds, because an exemption without them is a hole.** Redemption is
+once-per-`(payer, block id)`, capped by *cumulative bytes* at
+`announcedRedemptionFactor` (2) times the body's real on-wire size, read from
+this node's own store and never from the request. Bytes rather than requests
+because the budget gate runs per chunk: a promise consumed on first use would
+serve chunk 0 past the ceiling and refuse the rest, leaving the receiver holding
+a partial it still gets charged for — strictly worse than the defect. Inert
+today (`block_byte_limit_genesis` 2,500,000 against `BlockChunkBytes` 4,194,304,
+so every body is one chunk) and live after an era re-pin toward
+`block_byte_capacity`; the rule is written for both regimes because only one is
+testable. Promises expire at `announcedTTL` = `2 × PendingBodyTimeout`, stated
+against that constant rather than in block intervals, which invert between
+devnet at 5 s and mainnet at 30 s. The ledger is bounded per peer at
+`maxAnnouncedPerPeer` (32, against a ban distance of 10 charges) and across
+peers by expiry on the sweep that already reaps `pending` and `seenBlocks`.
+
+**Amplification, sized rather than asserted.** A redemption exists only where
+this node announced, once per `(peer, id)`, byte-capped. The node-wide ceiling is
+already `connSet × BlockByteCapacity` — *"every connection fetches one maximal
+block"* — and the reserved lane's worst case is the same quantity: each announced
+peer redeems once per announced block. It is not new egress the ceiling must be
+widened for; it is the ceiling's own sizing rationale given priority over garbage
+instead of being consumed by it. The bytes are **still debited to both layers**,
+so the overshoot stays visible to the counter that exists to make it visible, and
+the ceiling is a leaky bucket (`refilledServed`) so an exempt reply drains at the
+refill rate and cannot be latched. At the committed parameters the exempt
+quantity is `BlockByteLimit` against a per-connection ceiling of
+`BlockByteCapacity` — 2.5 MB against 8 MB, **0.31×** — and that ratio drifts
+toward 1.0× if an era re-pin raises the elastic limit.
+
+**The safety precondition, named because it is what makes the promise
+honourable.** Every outbound `KindBlockAnnounce` stands behind a successful
+`Chain.Apply`: `cmd/zycordd` announces after `miner.MineOne`, `node/stratum`
+after `chain.Apply` (**two** `AnnounceBlock` call sites, not one — an earlier
+statement of this precondition said one and was wrong; both are past an apply, so
+the argument survives the correction), the tip-extension forward is returned only
+in the `err == nil` arm, the fork-choice forward carries `reorg.Adopted`, and the
+withhold release re-propagates a body this node accepted. So an announcement
+implies the body is held and every entry is redeemable. If a future change ever
+emits an announcement ahead of holding the body, the TTL stops being
+belt-and-braces and becomes load-bearing.
+
+**Measured, at both endpoints.** The closure is asserted in
+`announceledger_internal_test.go`, and the headline is
+`TestAThirdPartyDrainDoesNotBanAnHonestMinerAcrossTwoEngines`: A and V as
+separate engines, a third party draining A's node-wide ceiling **every round
+after the announcement**, twelve rounds on the same shape the V-side test uses.
+Result: **12 announcements, 12 served by A, V's address score 0, banned on
+neither tally.**
+
+**And the shape inverts, which is the result rather than a complication.** The
+V-side test asserts V's tip never advances and that exactly 1 of 12
+announcements names it — that frozen-V shape is what the drain *causes* and what
+made the tip-extension discriminator cover the wrong 1/12. With the promise
+honoured V is not frozen: it receives each body, applies it, and tracks A block
+for block, so **all 12** announcements are tip-extensions and V ends at A's own
+height. The test asserts that too, and it is what stops it passing for a lazy
+reason: a fix that made A serve nothing while V happened not to charge would
+leave V at height 0, and a fix that stopped V charging without A serving would
+leave the count at 1. Both are caught.
+
+**Every assertion is mutation-proven**, which this document has three times over
+recorded as the only thing that catches an instrument measuring nothing. Eight
+mutants, each killed: removing the exemption (all five tests); dropping the byte
+cap (redeemed 5 times, want 2); making redemption peer-unscoped, then
+id-unscoped (each caught by its own bound); disabling the TTL; removing the
+per-peer cap (128 promises held, want 32); making `reapAnnouncedLocked` a no-op
+(64 payers survived); and unhooking the `Broadcast` seam so the ledger is correct
+but unreachable from production — that last one is I8-H1b's lesson applied in
+advance, since a guard proven against a direct call says nothing about whether
+the production path reaches it. One of these bugs was real rather than injected:
+the first version deleted a payer's bucket from the map when expiry emptied it,
+including on the very first record, so every promise landed in an orphaned map.
+The tests caught it immediately.
+
+**What it deliberately does not fix, and the coupling that follows.**
+Sync-path refusals stay uncharged by construction (`syncdriver.go` exempts
+`ErrTransport`), so no ban rides them today — but whoever closes *"a peer that
+refuses a body during sync is never charged"* must route that charge around
+budget refusals or through this same ledger, **or this attack returns through the
+new door.** And this does not replace the cumulative-work verification described
+above: that one hardens V against shapes no ledger at A can address, and it
+should still happen post-freeze with its own review. This is the transport-local
+half, and it is pre-freeze-safe because it touches no consensus surface, no wire
+kind and no scoring rule.
 
 ---
 
@@ -437,16 +590,34 @@ because the next auditor should not re-run these.
 
 ## Confidence
 
-- **I8-H2 is now demonstrated rather than merely reachable, and it is OPEN.**
-  The upgrade in this pass is evidence, not a repair: the whole chain is driven
-  end to end and an honest peer reaches −120, banned on both tallies, on the
-  shape the attack actually has. Two candidate fixes were built and both were
-  measured failing — a blanket bound disarms the ghost-flood ban, and the
-  tip-extension bound converts 1 charge in 12 and never engages — and two more
-  were costed off (retry, decay). The wire answer was costed off as well, on
-  forgeability rather than on compatibility alone. **The tree carries no fix for
-  this finding**; the test in `thirdpartyban_internal_test.go` asserts the defect
-  and is the regression test for whoever closes it.
+- **I8-H2 is CLOSED, at the announcer, and the previous entry here is
+  superseded.** It used to read *"the tree carries no fix for this finding"*.
+  It does now: the announced-body ledger, driven end to end across two engines
+  under a drain re-applied every round, with eight mutants killed. What has
+  **not** changed, deliberately, is anything at the scorer — V is exactly as
+  strict as it was, which is what keeps the ghost-flood terminator armed and is
+  the property the four failed candidates each traded away.
+- **What I am least sure of on the fix is its behaviour on a real network, not
+  its logic.** Everything here is unit-driven. The three things a soak would
+  test that no test here does: whether the per-peer bound of 32 is comfortable
+  under real reorg churn (it is sized against a ban distance of 10 and an
+  announce rate bounded by proof of work, both arguments rather than
+  measurements); whether the 0.31× amplification stays where the arithmetic puts
+  it once real connection sets and real block sizes are involved; and the
+  multi-chunk redemption path, which **no test in this tree can reach** because
+  `block_byte_limit_genesis` is below `BlockChunkBytes` at every committed
+  parameter set. That last one is written from the rule rather than from a
+  measurement and is the first thing an era re-pin should re-examine.
+- **The `payer` key is the fix's single point of agreement, and it is
+  unpinned across a reconnect.** Record and redeem both use `replyBudgetKey`, so
+  they agree by construction — but a peer connected *without* an authenticated
+  key falls back to `Conn.Addr`, which for an inbound peer is an ephemeral port.
+  Such a peer's promises are unredeemable after a reconnect. That is the
+  fallback path `replyBudgetKey`'s own comment calls "the fallback and not the
+  design", reached only by callers that never completed a handshake, so it does
+  not arise in production — but it is the seam where a future change could make
+  the two halves disagree silently, since a promise that is never found looks
+  exactly like a promise that was never made.
 - **What I am least sure of on I8-H2 is the size of the real fix, not its
   shape.** Verified forward-chain anchoring is the only unforgeable
   discriminator I could construct, and I did not build it, so its cost is
@@ -466,7 +637,10 @@ because the next auditor should not re-run these.
   precisely so an operator can tell those apart, but that is a diagnostic and
   not a recovery. The documented self-isolation incident's *shape* therefore
   survives even with I8-H1 closed: what changed is one way of entering it, and
-  I8-H2 remains a second, still open. A slow decay toward zero, and suspending
+  I8-H2's announce-path entry is now closed too, so both known ways in are shut —
+  but the *class* is not, and that is the part unchanged by either fix: a node
+  that has banned every peer able to tell it it is behind still has no way back.
+  A slow decay toward zero, and suspending
   bans when the candidate set would empty, are the two changes that would close
   the class rather than an instance — and I8-H2's own section records why the
   decay half cannot be tuned to close it without disarming the ghost-flood ban.

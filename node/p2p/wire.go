@@ -438,9 +438,19 @@ type BlockChunk struct {
 	Data  []byte
 }
 
+// blockChunkOverhead is what a chunk frame costs beyond the body bytes it
+// carries: the 32-byte block id and the two uint32 counters.
+//
+// Named because two things now have to agree with it rather than one. The
+// codec below has always spelled it 40 in three places; the announced-body
+// ledger (announceledger.go) has to convert a body size into the bytes a
+// delivery of it actually sends, and a cap that used the raw body size would
+// refuse the tail of the very first delivery.
+const blockChunkOverhead = 40
+
 // MarshalBlockChunk encodes a block chunk.
 func (c BlockChunk) MarshalBlockChunk() []byte {
-	out := make([]byte, 0, 40+len(c.Data))
+	out := make([]byte, 0, blockChunkOverhead+len(c.Data))
 	out = append(out, c.ID[:]...)
 	out = binary.LittleEndian.AppendUint32(out, c.Chunk)
 	out = binary.LittleEndian.AppendUint32(out, c.Total)

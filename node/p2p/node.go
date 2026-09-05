@@ -1924,6 +1924,14 @@ func (n *Node) Broadcast(kind MessageKind, payload []byte, except string) {
 	}
 	n.mu.Unlock()
 
+	// The single chokepoint every outbound block announcement passes through,
+	// which is why the promise is recorded here rather than at the four
+	// producers: AnnounceBlock for this node's own mined block, the gossip
+	// forward and the fork-choice forward through Node.serve's Forward arm, and
+	// relayReleased for a withheld block that matured. A fifth producer added
+	// later still lands here. See announceledger.go for the rule.
+	announced := n.announcedID(kind, payload)
+
 	for _, c := range targets {
 		// SendDeadline sets the deadline and performs the write atomically
 		// under c.writeMu, so a concurrent Broadcast or reply on the same
@@ -1931,8 +1939,48 @@ func (n *Node) Broadcast(kind MessageKind, payload []byte, except string) {
 		// — see Conn.SendDeadline.
 		if err := c.SendDeadline(kind, payload, time.Now().Add(writeTimeout)); err != nil {
 			n.log("send to %s failed: %v", c.Addr, err)
+			continue
+		}
+		// After the send and not before it. A promise this node failed to
+		// deliver is one the peer cannot act on, so recording it would reserve
+		// egress against a request that will never arrive — and it is the send
+		// that makes the announcement a promise in the first place.
+		if announced != nil {
+			// The engine's clock seam and not time.Now, so that the promise and
+			// the receiver's PendingBodyTimeout window are read off the same
+			// clock a test can drive — Engine.Now's doc calls itself the only
+			// wall clock in the block path, and a direct time.Now here would
+			// make that false in the same way withhold.go records it once being.
+			n.Engine.recordAnnounced(replyBudgetKey(c.Addr, c.PeerKey), *announced, n.Engine.wallClock())
 		}
 	}
+}
+
+// announcedID returns the block id an outbound frame promises a body for, or
+// nil for a frame that promises nothing.
+//
+// Only KindBlockAnnounce. A KindBlock frame carries the body itself, so there is
+// nothing left to promise; a certificate is not a block; a header range is
+// served from this node's own chain and was never advertised. The id is
+// re-derived from the header rather than passed alongside the payload, so what
+// is recorded is a promise about the frame this node actually sends and cannot
+// drift from it.
+//
+// A frame this node built and cannot parse is a bug in this node, so it records
+// no promise and says so, rather than being silently dropped — the visible
+// consequence would otherwise be an honest peer banned somewhere else, sixty
+// seconds later, with nothing in this node's log connecting the two.
+func (n *Node) announcedID(kind MessageKind, payload []byte) *types.Hash {
+	if kind != KindBlockAnnounce {
+		return nil
+	}
+	ann, err := UnmarshalAnnounce(payload)
+	if err != nil {
+		n.log("broadcast: cannot read back an announcement this node built: %v", err)
+		return nil
+	}
+	id := ann.Header.ID()
+	return &id
 }
 
 // AnnounceBlock gossips a newly mined block, hash-first.
