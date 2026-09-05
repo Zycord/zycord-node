@@ -315,14 +315,14 @@ release host is compiled in; the trusted keys are compiled in too, and **they di
 not move with the address**. So point the binary at the new host and restart it:
 
 ```sh
-ZYCORD_REPO_URL=https://github.com/<new-owner>/<new-repo> zcd update --check
+ZYCORD_REPO_URL=https://github.com/Zycord/zycord-node zcd update --check
 ```
 
 Once you are satisfied it finds the manifest, make it stick for the service. For
 systemd, in the unit:
 
 ```
-Environment=ZYCORD_REPO_URL=https://github.com/<new-owner>/<new-repo>
+Environment=ZYCORD_REPO_URL=https://github.com/Zycord/zycord-node
 ```
 
 then `systemctl daemon-reload && systemctl restart zycordd`. That is the whole
@@ -331,8 +331,11 @@ the override — the keys are in the binary, not on the host — so the node ver
 the next release exactly as it always would. `zcd update --repo <url>` does the
 same thing for a single command without setting anything.
 
-`packaging/install.sh` reads the same variable, and takes `--repo <url>`, if you
-are installing fresh rather than rescuing an existing install.
+**This is only for a binary installed from the old address.** Anything installed
+since the move already has the URL above compiled in, and setting the variable to
+it changes nothing. If `zcd update --print-source` already prints that address,
+your binary is not stranded and there is nothing here for you to do — a failing
+check is then an ordinary network problem, not a moved host.
 
 The override, and what it does and does not change about verification, is in
 [UPDATES.md](UPDATES.md#where-the-check-goes-and-how-to-move-it).
