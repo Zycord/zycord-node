@@ -47,6 +47,8 @@ usage: sh install.sh --version vX.Y.Z [options]
   --version VERSION   release tag to install (required)
   --prefix DIR        install into DIR (default: /usr/local/bin)
   --repo URL          release host (default: the public repository)
+                      Also settable as ZYCORD_REPO_URL, which the installed
+                      binaries read for the same purpose; --repo wins.
 
 What this proves depends on what is installed. The checksum check always runs
 and shows the files match this release's own list. If `gh` is present the build

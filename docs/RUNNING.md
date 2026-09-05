@@ -288,6 +288,10 @@ ExecStart=/usr/local/bin/zycordd --dir /var/lib/zycord --update notify
 to replace itself and print the sequence to run instead — a node runs
 unprivileged on purpose.
 
+That is a unit you wrote. **If you installed the `.deb`, put the flag in
+`ZYCORDD_ARGS` in `/etc/zycord/zycordd.conf` instead** — the packaged unit is
+replaced on upgrade, and only that file is a conffile.
+
 Nothing is ever replaced while the node is running. In `auto`, the check,
 download and replacement all happen **before the data directory is opened**,
 which is the only point in the process's life where nothing is holding the chain
@@ -305,6 +309,60 @@ zcd update --rollback   # go back to the previous binary
 trusts, and contacts nothing to do it. The full trust model — including exactly
 what the signature is worth, and what a check discloses — is in
 [UPDATES.md](UPDATES.md).
+
+### A stranded node: the check 404s
+
+If `zcd update` reports that the release host cannot be reached, or your node
+logs `update: check failed`, and the address `zcd update --print-source` prints
+is gone, your binary is not broken — it is asking an address that moved. The
+release host is compiled in; the trusted keys are compiled in too, and **they did
+not move with the address**. So point the binary at the new host and restart it:
+
+```sh
+ZYCORD_REPO_URL=https://github.com/Zycord/zycord-node zcd update --check
+```
+
+Once you are satisfied it finds the manifest, make it stick for the service.
+**If you installed the `.deb`, it goes in `/etc/zycord/zycordd.conf`** — that file
+is a dpkg conffile, so a package upgrade preserves what you put in it, and the
+unit already reads it through `EnvironmentFile=`:
+
+```sh
+# /etc/zycord/zycordd.conf — add this as a line of its own
+ZYCORD_REPO_URL=https://github.com/Zycord/zycord-node
+```
+
+Then `systemctl restart zycordd`. No `daemon-reload` — you have not changed a
+unit file.
+
+That file already has a `ZYCORDD_ARGS=` line, and this is **not** part of it.
+`ZYCORDD_ARGS` holds command-line flags for `zycordd`; `ZYCORD_REPO_URL` is an
+environment variable the updater reads. Add a separate line and leave
+`ZYCORDD_ARGS` as it is.
+
+**Do not put it in the unit file** at `/lib/systemd/system/zycordd.service`. That
+unit is not a conffile, so dpkg replaces it wholesale on the next package
+upgrade and an `Environment=` line you added there is silently gone. That failure
+is worth picturing, because the mechanism this section re-arms is the one that
+causes it: the fix works, the node updates, and the update installs a package
+that reverts the unit and strands the node again — with no error, and nothing
+pointing at the reason. If you wrote the unit by hand rather than installing the
+package, it is yours and an `Environment=` line in it is the right place.
+
+That is the whole remedy: **no reinstall, no hand-download.** The signature check
+is unchanged by the override — the keys are in the binary, not on the host — so
+the node verifies the next release exactly as it always would.
+`zcd update --repo https://github.com/Zycord/zycord-node` does the same thing for
+a single command without setting anything.
+
+**This is only for a binary installed from the old address.** Anything installed
+since the move already has the URL above compiled in, and setting the variable to
+it changes nothing. If `zcd update --print-source` already prints that address,
+your binary is not stranded and there is nothing here for you to do — a failing
+check is then an ordinary network problem, not a moved host.
+
+The override, and what it does and does not change about verification, is in
+[UPDATES.md](UPDATES.md#where-the-check-goes-and-how-to-move-it).
 
 ## Data directory
 

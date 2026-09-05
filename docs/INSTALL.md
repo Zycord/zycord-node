@@ -459,6 +459,20 @@ testnet, and the script says so as the last thing it prints. For a server that
 is meant to join a network, unpack the `-randomx` archive by hand as shown under
 [Linux](#linux) above.
 
+**Installing from a fork or a mirror.** `--repo <url>` sets the release host for
+one run, and the environment variable `ZYCORD_REPO_URL` sets it for all of them:
+
+```sh
+ZYCORD_REPO_URL=https://example.org/owner/repo sh install.sh --version v<version>
+```
+
+It is spelled the same for the binaries themselves, which read it to decide where
+to check for updates — so an operator who sets it here does not later discover a
+second name. What it does and does not change about verification is in
+[UPDATES.md](UPDATES.md#where-the-check-goes-and-how-to-move-it); the short
+version is that the trusted keys are compiled into the binaries and a base URL
+cannot supply one.
+
 To use the wallet interface on a server, do not expose a port. `zcd ui` binds
 loopback and refuses anything else; forward it over ssh — the full procedure,
 and what the token in the printed URL is, are in
