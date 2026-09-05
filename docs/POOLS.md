@@ -310,7 +310,8 @@ never reaches the chain.
 **It filters on the commitment.** This is the one thing in this document that
 will cost you the whole integration if you assume the Monero answer, and it is
 recorded in `docs/decisions/randomx-v2.md` §8.1, re-verified from
-`xmrig/xmrig` v6.26.0 (commit `b2ca72480c58d197e18c885d9fc1a0c8d517e60a`):
+`xmrig/xmrig` v6.26.0, upstream commit
+b2ca72480c58d197e18c885d9fc1a0c8d517e60a:
 
 - `RandomX_ConfigurationMoneroV2`'s constructor sets `Tweak_V2_COMMITMENT = 1`
   (`src/crypto/randomx/randomx.cpp:55–63`), and `RxAlgo::base()` returns that
@@ -714,9 +715,12 @@ blob[32:39]   == 00 00 00 00 00 00 00      # anything else: you fork on your fir
 blob[39:43]   == 00 00 00 00               # anything else: silent nicehash mode, 256x loss
 ```
 
-The session id `3f1c9a70b2e4d581` also determines this connection's ExtraNonce:
-the first four bytes, `3f1c9a70`, read big-endian → `0x3f1c9a70`. That value is
-already inside the seed at `blob[0:32]`; the miner never learns it.
+The session id above, `"3f1c9a70b2e4d581"`, also determines this connection's
+ExtraNonce: `extraNonceFromSession` in `node/stratum/conn.go` hex-decodes the id
+and reads its first four bytes big-endian, so this session yields ExtraNonce
+`0x3f1c9a70`. (A short or malformed id yields `0`, which is the solo miner's
+ExtraNonce and a correct value rather than a special case.) That value is already
+inside the seed at `blob[0:32]`; the miner never learns it.
 
 ### Step 5 — a share
 
@@ -769,21 +773,23 @@ ramp is mainnet's and the testnet is rehearsing it.
 
 ## 9. Mine with XMRig
 
-> ## ⚠️ UNVERIFIED — pending issue #12
+> ## ⚠️ UNVERIFIED — no stock miner has mined a block against this chain
 >
 > **The command line below is derived from the source in this tree and from
 > XMRig's own compiled-in constants. It has NOT been proven end to end: no
-> stock XMRig has yet mined a block against this chain.** Issue #12 ("Prove it
-> end to end: stock XMRig mines a testnet block") is open and is the work that
-> will replace this notice with a version, a command line and a log excerpt
-> that were actually observed.
+> stock XMRig has yet mined a block against this chain.** The outstanding work
+> is the end-to-end proof itself — running an unpatched XMRig against a testnet
+> node until it mines a block — and it is that run which will replace this
+> notice with a version, a command line and a log excerpt that were actually
+> observed.
 >
-> Until that issue closes, treat this section as a well-founded prediction, not
-> a proven recipe. If you run it and it works, or does not, that is exactly the
-> evidence #12 is asking for.
+> Until that run has happened, treat this section as a well-founded prediction,
+> not a proven recipe. If you run it and it works, or does not, that observation
+> is exactly the evidence this notice is waiting for.
 
 Stock XMRig, no patches, no fork. The version the compatibility work was read
-against is **v6.26.0** (commit `b2ca72480c58d197e18c885d9fc1a0c8d517e60a`).
+against is **v6.26.0**, upstream commit
+b2ca72480c58d197e18c885d9fc1a0c8d517e60a.
 
 ```sh
 xmrig \
