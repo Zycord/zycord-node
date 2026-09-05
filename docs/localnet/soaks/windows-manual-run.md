@@ -4,7 +4,7 @@
 anywhere: `release.yml` cross-compiles the Windows archives and every job in it
 runs on Linux or macOS, and the reusable workflow that once ran the whole suite
 natively on `windows/amd64` is gone with every other job that executed something
-([CONTRIBUTING.md](../../../CONTRIBUTING.md), [RELEASE.md](../RELEASE.md) §0).
+([CONTRIBUTING.md](../../../CONTRIBUTING.md), [RELEASE.md](../../RELEASE.md) §0).
 Compiling for a platform proves nothing a defect on that platform would show —
 the four that got the deleted job written in the first place were green on every
 Linux runner. So the run is done by hand, on a real Windows machine or a virtual
@@ -56,6 +56,19 @@ bin\zcd.exe wallet address --key smoke.json
 bin\zcd.exe genesis
 ```
 
+**Three of those block on a passphrase prompt, and the document would otherwise
+not say so.** `version` and `genesis` take no key and simply print and exit.
+`wallet new` prompts for a passphrase and then prompts *again* to confirm it —
+twice, on stderr, with no echo. `wallet address` and the `wallet balance` below
+each prompt once, to open the key file they were handed. There is deliberately
+no flag to supply a passphrase, because one on a command line lands in the shell
+history and in the process table, so **this block cannot be scripted as
+written**. If you must drive it non-interactively, `readPassphrase` falls back to
+reading a plain line from stdin when stdin is not a terminal — that is a pipe
+rather than a flag, and the passphrase then lives in whatever produced the pipe.
+It is not recoverable either way, so use a throwaway one on a throwaway VM and
+reuse nothing.
+
 `wallet new` must refuse to overwrite an existing `smoke.json` rather than
 clobbering it — that refusal is publish tier 1, `renameNoReplace`, and it is the
 one the exclusive-rename regression tests pin. Run `wallet new --out smoke.json`
@@ -84,7 +97,7 @@ a visible failure.
 
 If the release's own `.zip` is what is being checked rather than a local build,
 unpack the published archive and run the same walk against the binaries inside
-it — that is [RELEASE.md](../RELEASE.md) §8's released-binary item, and the two
+it — that is [RELEASE.md](../../RELEASE.md) §8's released-binary item, and the two
 overlap on purpose.
 
 **Unverified as written.** Every command in this section is derived from the
@@ -107,7 +120,7 @@ machine:      e.g. Windows 11 23H2, x86-64, 8 GiB, VM under <hypervisor>
 go:           go version   (must be the version Makefile pins; see the toolchain
               header there — a different patch version is a different result)
 clone:        fresh clone / existing clone renormalised (CONTRIBUTING.md's
-              `git rm --cached -r . && git reset --hard`, if it was needed)
+              `git rm --cached -r .` then `git reset --hard`, if it was needed)
 race:         not run — accepted (CONTRIBUTING.md) / run, with MinGW-w64 <version>
 
 | line | result | notes |
@@ -116,7 +129,7 @@ race:         not run — accepted (CONTRIBUTING.md) / run, with MinGW-w64 <vers
 | `gofmt -l .` | | printed nothing = pass |
 | `go test -timeout 30m ./...` | | |
 | the four regression tests | | |
-| `go test ./update/` | | |
+| `go test ./update/` | | 2 of 8 in `install_test.go` skip; the other 6 exercise `replaceBinary` |
 | `go test ./sim/wiring/` | | |
 | `go build -tags zcdguard ./...` | | |
 | `go test -tags zcdguard ./...` | | |
@@ -124,7 +137,7 @@ race:         not run — accepted (CONTRIBUTING.md) / run, with MinGW-w64 <vers
 | `go test -run XXX -bench . -benchtime 1x ./...` | | |
 | `zcd.exe` build | | |
 | `zycordd.exe` build | | |
-| `cd desktop && go test -tags desktop ./...` | | |
+| `cd desktop`, `go test -tags desktop ./...`, `cd ..` | | |
 | wallet: `version`, `new`, `address`, `genesis` | | |
 | wallet: second `new` refused | | the tier-1 refusal |
 | node: devnet mined blocks | | |
