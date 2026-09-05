@@ -125,13 +125,22 @@ pushed anyway is a red `dev`.
 **On Windows, `make` is not the entry point and is not expected to be.** GNU make
 is not installed on a stock Windows machine, and the recipes are POSIX `sh`
 throughout. The equivalent is this list, which is what a job on a Windows runner
-used to run and what a Windows contributor now runs by hand:
+used to run and what a Windows contributor now runs by hand. Type it in
+PowerShell, from the repository root, one line at a time — a list that stops at
+the first red line is the point, and `&&` is not a PowerShell operator on the
+versions Windows ships by default:
 
 ```
 go vet ./...
 gofmt -l .
 go test -timeout 30m ./...
 go test -count=1 -run 'TestRenameNoReplaceIsAnExclusiveRename|TestWriteFileNoClobberPublishesWithTheExclusiveRename|TestTruncateOpenLogWorksOnTheAppendHandle|TestSyncDirOnlyIgnoresUnsupportedPlatformErrors' -v ./wallet/ ./node/storage/
+go test -count=1 -v ./update/
+go test ./sim/wiring/ -count=1
+go build -tags zcdguard ./...
+go test -tags zcdguard ./...
+go test -run TestDifferential -v ./sim/
+go test -run XXX -bench . -benchtime 1x ./...
 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid=' -o bin/zcd.exe ./cmd/zcd
 CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid=' -o bin/zycordd.exe ./cmd/zycordd
 cd desktop && go test -tags desktop ./...
@@ -141,6 +150,64 @@ Run those before opening a pull request, and note that `go build -o` there needs
 an explicit `.exe`, because it does not add one. Windows is one of the six
 platforms every release ships and nothing else exercises it — there is no runner
 left that does.
+
+**`CGO_ENABLED=0 go build …` is one command in POSIX `sh` and two in
+PowerShell**, which sets an environment variable with `$env:` and has no
+`VAR=value command` form at all. The two build lines above are therefore three
+lines when typed there:
+
+```
+$env:CGO_ENABLED = '0'
+go build -trimpath -ldflags '-s -w -buildid=' -o bin/zcd.exe ./cmd/zcd
+go build -trimpath -ldflags '-s -w -buildid=' -o bin/zycordd.exe ./cmd/zycordd
+```
+
+`cmd.exe` needs `set CGO_ENABLED=0` on its own line instead. Either way the
+variable then persists for the rest of the session, which is what you want here
+and is worth knowing about before the next command in some other window.
+
+**How the list maps onto `make ci`, and what deliberately does not port.** The
+first four lines above are `lint` and the Windows regressions; the five that
+follow are `wiring`, `guard`, `differential` and `bench-smoke` re-expressed as
+the plain `go` invocations their recipes already are — cheap to add, so they are
+added. `./update/` is on the list on its own account rather than as part of
+`make ci`: it carries `replace_windows.go`, `exec_windows.go` and
+`guard_windows.go`, three files no Linux run compiles at all, and the
+rename-the-running-image technique in the first of them is Windows-only
+behaviour with no equivalent anywhere else in the tree. Three targets stay
+behind, each for a reason rather than for convenience:
+
+- **`lint`'s Makefile wrapper.** Its substance — `go vet ./...` and `gofmt -l .`
+  — is the first two lines of the list. The wrapper around them (`tee
+  /dev/stderr`, `test -z`) is POSIX plumbing that turns a printed filename into
+  a non-zero exit; on Windows, read the output. `gofmt -l .` printing nothing is
+  the pass.
+- **`check-imports`.** It is POSIX shell with `grep -E` and `sort -u`, and a
+  PowerShell re-expression of it would be a second implementation of one guard,
+  which is a thing that drifts silently and then disagrees. What it checks is a
+  property of the *source* — which packages import which — and source does not
+  vary by operating system, so the Linux run covers it completely. Do not port
+  it.
+- **`race`.** The race detector on `windows/amd64` requires cgo, and cgo on
+  Windows requires a MinGW-w64 `gcc` on `PATH` ([docs/INSTALL.md](docs/INSTALL.md)
+  discusses that toolchain for the RandomX tier). **The decision, recorded here
+  rather than left to whoever is at the keyboard: `-race` is not part of the
+  Windows list, and Linux `-race` is what covers the tree.** The races this
+  project has had were in the miner, the peer goroutines, the sync driver and
+  the RPC server — none of that is platform-specific code, and all of it is
+  compiled and raced on Linux. What *is* Windows-specific is file publication,
+  log truncation, directory sync and process control, and those are exercised by
+  the regression tests and `./update/` above, under the platform's real
+  syscalls, which is the coverage that could not be had anywhere else. If you
+  have MinGW-w64 installed anyway, `go test -race -timeout 45m ./...` is worth
+  running and worth recording; it is not required, and its absence is accepted
+  rather than overlooked.
+
+A run of this list at a tagged commit is release evidence and is recorded as
+such — [docs/RELEASE.md](docs/RELEASE.md) §8 asks for it, and
+[docs/localnet/soaks/windows-manual-run.md](docs/localnet/soaks/windows-manual-run.md)
+is the template it is written into, alongside the other runs this tree keeps
+rather than quotes.
 
 **If you cloned before `.gitattributes` existed, rewrite the working tree once.**
 That file gives every text file LF, but only as git rewrites each file, so an

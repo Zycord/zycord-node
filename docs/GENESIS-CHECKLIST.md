@@ -338,6 +338,20 @@ commit, `make soak-long` green over hours and then a multi-day run,
 release published by the workflow rather than assembled by hand, and a released
 binary started against the tagged mainnet parameters that did not refuse.
 
+**One of those is worth naming here rather than leaving inside the list, because
+it is the only one no machine will do for anybody.** `make ci` green on the
+tagged commit is green *on Linux*; nothing has executed this tree on Windows
+since the runner was removed, and Windows is one of the six platforms genesis
+ships. So the gate includes a manual Windows run — the command list in
+[CONTRIBUTING.md](../CONTRIBUTING.md) plus the wallet smoke test, on a real
+machine or a VM, at the tagged commit — recorded in
+[`docs/localnet/soaks/windows-manual-run.md`](localnet/soaks/windows-manual-run.md)
+the way every other run this project keeps is recorded. It is listed as its own
+box in RELEASE.md §8. It is called out again here because it is the one item in
+that list that a person can silently skip: every other box is ticked after a
+command exited zero, and this one is ticked after somebody walked to a different
+computer.
+
 **One item inside that gate is a genesis-specific hazard worth naming here.** The
 launch transition preserves genesis byte for byte, so it is the one reset that
 cannot retreat to a new network id — which makes every rehearsal participant a

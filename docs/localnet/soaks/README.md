@@ -17,6 +17,13 @@ makes at length.
 | [`devnet-convergence.md`](devnet-convergence.md) | a multi-node dev-engine devnet under chaos: convergence by block id, propagation, and resource growth — the written record |
 | [`devnet-convergence-samples.tsv`](devnet-convergence-samples.tsv) | its per-node series, single-miner regime |
 | [`devnet-convergence-contention-samples.tsv`](devnet-convergence-contention-samples.tsv) | its per-node series, continuous contention |
+| [`windows-manual-run.md`](windows-manual-run.md) | the manual Windows verification run — the template, and the record of each run |
+
+One entry is not a soak and says so in its own header:
+[`windows-manual-run.md`](windows-manual-run.md) records a manual run of the
+Windows command list, which takes minutes rather than hours. It lives here
+because this is where this tree keeps runs it wants checkable rather than
+quoted, and that is the property it needs.
 
 ## What these are not
 
@@ -24,6 +31,6 @@ makes at length.
 whether an invariant holds and whether anything grows without bound, and both
 are questions a slow machine answers as well as a fast one.
 
-**Not mainnet.** Every run is a local network on a parameter set chosen to
+**Not mainnet.** Every soak here is a local network on a parameter set chosen to
 reach a boundary quickly. The rules exercised are the shipped ones; the
 *timings* are not mainnet's and were never meant to be.
