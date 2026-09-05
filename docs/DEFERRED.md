@@ -6,6 +6,16 @@ tracker to consult alongside it. Items that are the owner's alone to discharge �
 anything that has to be announced, deployed or measured rather than written — are
 marked as such where they sit.
 
+**There is no tracker because the one this project used is gone, not because it
+was never wanted.** The forge account was permanently suspended with no appeal —
+workflow jobs computed proof-of-work hashes and the abuse detection read that as
+mining — and every issue, pull request and discussion under it went with the
+account. Nothing there was exported. So an entry below that reads as though it
+were written from scratch usually was: what a reader would once have followed a
+number to has to be restated here in full, and a bare number in this repository
+identifies nobody. That is also why the convention is to name a dependency by its
+subject: a number is no longer a thing anyone can look up.
+
 An entry here outlives whatever raised it, because what it records is a residual
 and the condition that reopens it, not a ticket — the chain-reset procedure and
 the class epics themselves are the cases to expect.
@@ -255,6 +265,129 @@ launch, because none changes shipped behaviour.
   has to happen **before** that, not after; and immediately if the file-only
   publication of §1 is ever replaced by pushing this history.
 
+- **A fixture that cannot express the failure it guards against has had no
+  dedicated pass over `node/stratum`.** The nicehash-nonce test asserted that a
+  served blob carries a zero nonce and drove the endpoint through the package's
+  own fake assembler, which produces a header whose nonce is already zero — so it
+  asserted exactly the precondition it declared it was not relying on, and
+  deleting the whole nonce-clearing loop from `blobFor` left it green. It is
+  replaced by a test that hands the fake assembler a dirty nonce and an
+  `ExtraNonce` and reads the blob off the wire on all three paths that serve one,
+  and the constraint itself is confirmed intact. *Deferred:* the replacement
+  closes the instance; the *shape* is unclosed, because five bounds of that
+  package's thirty-nine tests were mutation-checked and no amount of reading finds
+  this class — the assertion is correct and the harness is incapable of violating
+  it. This is the third vacuous test this tree has shipped and the first whose
+  fault was the fixture rather than the assertion. *Reopens:* before the freeze —
+  the service-surface audit names it the highest-value thing left undone there,
+  and the question to ask of each fixture is what the test would look like if the
+  code under it were deleted.
+- **The three-path ingress differential is read-verified and never observed.**
+  The two time rules and the target rule are enforced at `node/sync.ValidateHeaders`,
+  `node/p2p`'s tip-extension branch and `node/chain.validateBranchDifficultyLocked`,
+  and the shared kernel is now proved path-independent — the rules read nothing but
+  the window's values, driven through four representations differing in length,
+  capacity and backing array. What is not written is a test that feeds one
+  bad-timestamp header into all three ingress paths and requires three identical
+  verdicts. *Deferred:* it belongs in `node/p2p`, whose suite is ~23 minutes; the
+  claim it would check is the one already falsified once, for `pow.CheckWork`,
+  which had no call site at all on the path blocks arrive by. *Reopens:* the day a
+  fourth ingress path is added, or an ingress path stops calling both rules —
+  neither of which anything currently notices.
+- **Two consensus surfaces were named as unattacked rather than left implicit.**
+  A *sustained* timestamp campaign that varies its manipulation in response to the
+  target it is moving has not been tried by anyone, here or in any prior pass; the
+  existing sweeps measure a fixed strategy. And what a future-dated block does to
+  branch assembly, to the orphan pool's bounds, or to an accumulated-work
+  comparison *while it waits* in the withhold queue is untested and carries no
+  finding anywhere. *Deferred:* neither is a defect claim — they are statements
+  that nobody has evidence either way, which is a different thing from a residual
+  with a fix. *Reopens:* the day the retarget's dynamics or the withhold queue is
+  given an adversarial pass of its own.
+- **`CheckCommitment`'s `Gt` boundary is load-bearing text no test can defend.**
+  Flipping it to `Gte` — turning `commitment <= target` into `<` — survives the
+  whole tree including the cross-vector tests, because the rule differs only where
+  `commitment == target` exactly, and `Target` sits inside the seed preimage, so
+  such a header is a fixed point of BLAKE2b∘BLAKE3 at 1-in-2^256. Measured: five
+  rounds of "set the target to the commitment and re-seal" walk to five unrelated
+  values. *Deferred:* a test for it was written, found to pass under the mutation,
+  and deleted rather than shipped — covering an unreachable rule produces a vacuous
+  test, which is the failure this tree keeps finding. Nothing is exploitable by it
+  in either direction. *Reopens:* the day either that `<=` or `Solver.TryHash`'s
+  `!...Gt` is edited — flipping **one** of them gives a miner that disagrees with
+  its own verifier on a set of headers of measure zero, and nothing would say so.
+- **Real arm64 silicon has never run this engine, and the hard-AES half of the
+  emulated sweep is a tenth as deep as the soft-AES half.** The conformance work
+  cross-compiles the vendored sources and runs upstream's vectors under
+  `qemu-aarch64` on the interpreter and the a64 JIT, under soft AES, hard AES and
+  hard AES with `SECURE`. That rules out *wrong code generation*; it says nothing
+  about *wrong execution* on a real core — qemu-user does not reproduce memory
+  ordering, instruction-cache coherency or `__builtin___clear_cache` behaviour,
+  which is exactly where a self-modifying code generator goes wrong, and the a64
+  cache-maintenance review reasons from assembled label offsets rather than from a
+  chip. Hard AES has 40 swept inputs against soft AES's 400, the full-dataset
+  cells are wired under `RX_FAST=1` and have only ever been run under soft AES,
+  and no soak has run on arm64 under emulation or otherwise. *Deferred:* the
+  hardware run needs an aarch64 machine rather than an edit — it is one command,
+  `sh core/pow/randomx/arm64/run.sh`, which takes the native path on such a box —
+  and deepening the emulated sweep needs nothing but emulator time. The full
+  reasoning and every measurement are in
+  [randomx-v2](decisions/randomx-v2.md) §8.8, which is where this residual is
+  argued rather than only listed. *Reopens:* the day an aarch64 machine is
+  available, and immediately if an arm64 release archive is published — the
+  emulator agreeing is not the chip agreeing.
+- **The RISC-V half of the rx/2 delta is unread, and it is unread deliberately.**
+  The line-by-line read covered the compiled surface — ~1,650 changed lines across
+  32 files, all 32 read — and stopped at ~2,450 lines of RISC-V that `vendor.sh`
+  puts in no source list; the exclusion was checked against the built artefact
+  rather than inferred, by counting RISC-V symbols in the tagged test binary and
+  finding zero. The MASM variant of the x86 assembly is unread for the same
+  reason: the GNU `.S` is what builds here. *Deferred:* reading code that does not
+  compile buys nothing, and the audit record is the standing statement that it is
+  unaudited. *Reopens:* the day this chain ships a RISC-V build, at which point
+  that code is in the trusted computing base and has never been looked at.
+- **Two invariants are held at a distance, and one of them still has no
+  instrument.** `State.Undo`'s seen handling is correct only because `UndoLog`'s
+  `SeenAdded` and `SeenRemoved` are disjoint, and they are disjoint only because
+  B1 enforces `c.TTL >= h.Height` while `PruneSeen` removes only
+  `ttl < h.Height - 1` and `markSeen` runs strictly before the prune — three facts
+  in two packages, none of which cites the others. Weakening B1 to admit
+  `c.TTL < h.Height` would make `Undo` lossy, which is a replay window, with
+  nothing failing. The sibling half, `Select` against the per-block signature
+  ceiling, *is* asserted now; what is still unasserted there is the margin, which
+  belongs to the freeze-time parameter pairing recorded under the genesis freeze.
+  *Deferred:* neither is a defect today, and the general form — a safety property
+  whose argument lives in a comment in another package is a property with no
+  instrument — is already named in this file's own history. *Reopens:* the day B1's
+  TTL bound or `PruneSeen`'s horizon is edited; both want a test that fails when
+  the coupling breaks, not a paragraph.
+- **`--rpc` accepts a routable address with no validation and no warning, and that
+  listener has no connection cap.** The `Host` guard that closed the browser class
+  is a rebinding defence and not access control: with `--rpc 0.0.0.0`, a plain
+  `curl` sending a loopback `Host` from the network is answered 200, `/submit`
+  included, and a forged header costs an attacker one flag. The Stratum endpoint
+  validates its own bind and warns loudly and unconditionally when it is not
+  loopback; the RPC — the older surface, and the one shown to be more reachable
+  than it looked — prints nothing. There is also no `MaxConns` on it, which is
+  irrelevant while it is loopback-bound and is not irrelevant if it is not.
+  *Deferred:* the default is loopback, so the claim holds by default, and no header
+  check can distinguish a legitimate remote operator from an attacker — a second
+  guard would be the same mistake a password on the Stratum socket would have been.
+  What is owed is the warning, one line beside the one Stratum already has.
+  *Reopens:* the day an operator is known to bind a routable address, or a
+  connection cap is wanted on that listener.
+- **The update path's signature verification is an external-input surface no audit
+  has examined.** The service-surface pass reached the RPC, Stratum and the
+  wallet's key handling, and recorded `cmd/zcd/update.go` — along with
+  `wallet/session`'s spend logic, `wallet/policy.go` and `desktop/` — as not
+  reached. The update path fetches bytes from a remote host and verifies a
+  signature over them before replacing the running binary, which is the widest
+  external-input surface in the tree by consequence. *Deferred:* stated as
+  unaudited rather than assumed sound, which is the honest form; nothing suggests a
+  defect and nothing has looked. *Reopens:* before the freeze, or the first time an
+  auto-mode update actually installs a release on a machine that is not the
+  author's — see also the entry on deployed nodes that cannot self-update.
+
 ---
 
 ## 3. Genesis freeze
@@ -331,6 +464,110 @@ by their fix nature.
   vector at all; the conformance corpus does not catch either today. *Reopens:*
   before the corpus is frozen — an implementation that gets either wrong derives a
   different `T` and forks.
+
+- **Whether a testnet measurement may *set* `block_byte_capacity` or only
+  *confirm* it is undecided. — OWNER-ONLY.** The value is the inherited 8,000,000,
+  retained on a comparison with a data-availability network carrying 8 MB per
+  6 seconds in production — 2.1 Mbit/s sustained at a 30-second interval here,
+  conservative by roughly 5× in byte rate. The challenge to that comparison is
+  that a DA network's nodes carry opaque blobs while a node here must carry *and*
+  fold, verify and write every byte, so the two are not the same load per byte.
+  Both [ARCHITECTURE](ARCHITECTURE.md) §20 and the
+  [measurement list](decisions/testnet-measurements.md) §1 record it as disputed
+  and reserved to the owner, and neither answers it in either direction.
+  *Deferred:* it is a decision about what evidence is allowed to move a
+  genesis-frozen number, not a defect — and two things make it expensive to get
+  wrong. `Validate` pins `SeqGasCapacity / SeqGasTargetGenesis` to
+  `BlockByteCapacity / BlockByteLimitGenesis`, so moving one moves two consensus
+  values and with them the genesis id; and the transport pairing is held in both
+  directions by `TestBlockByteCapacityFitsChunkedTransfer` over every parameter set
+  `spec/` embeds, so a re-pin has to raise the transport constants in the same
+  release. *Reopens:* the freeze — and, unlike the rest of this group, again at the
+  first era boundary: the whitepaper §8.1 and §14 make byte capacity the one
+  capacity value with a repair path, re-pinned at era boundaries against propagation
+  the health gate has measured, never inside an era and never by vote. Until it is
+  decided the value is a genesis-frozen number retained on an argument under
+  challenge, which is what a gate is for.
+- **The health gate is specified end to end and nothing produces its signal. —
+  OWNER-ONLY, and not separable from the byte-capacity decision above.** The
+  carrier is complete: `Header.CitesRoot` and `Block.Cites` are in the encoding,
+  B15–B17 bound and root the list, C0–C5 constrain each citation exhaustively, and
+  a cited header's own proof of work is checked in `node/` alongside the block's.
+  Every reference in the tree *consumes* the field; `node/miner` leaves `Cites`
+  empty and says so at the site, so this miner never supplies the signal, and a
+  ceiling that is never told it is unhealthy can only ever grow. §20 states the
+  consequence: `BlockByteCapacity` becomes the sole backstop holding capacity
+  growth short of the transport's bound — which is precisely the number the entry
+  above cannot yet justify, so neither can be decided alone. The whitepaper §8.1
+  makes the gate one of exactly three conditions the capacity curve rests on, and
+  its security argument presumes somebody cites. *Deferred:* nothing is unsound —
+  an empty `Cites` list is always valid and the gate withholds growth against an
+  empty signal rather than forcing decay — so this is a decision that must be
+  *taken*, either to gather real competing headers before genesis or to ship
+  without and say so, rather than reached by default. A further limit is already
+  recorded beside the genesis-irreversible consequences above and is not repeated
+  here: the citation window is one block, against §8.1's "recent", so the gate fails
+  permissive in the regime it exists to catch. *Reopens:* the freeze. A ceiling rule
+  is genesis-frozen, so this cannot be added afterwards without a hard fork.
+- **Two parameter values the freeze must move together, and nothing in the tree
+  would refuse either edit.** `max_sigs_per_block_genesis` is 6,000 and the
+  signature-densest Era-0 shape the builder can pack reaches 4,528, because B5 —
+  the sequential gas ceiling — binds first at 99.9% of its own limit. The margin is
+  **24.5%** and it is structural rather than lucky: `SeqGasLimit(t) = 2t` and
+  `MaxSigsPerBlock(t)` both scale linearly and unclamped in `T`, so the ratio holds
+  across the whole range the epoch controller can move `T` through, from
+  `seq_gas_target_genesis` to the `seq_gas_capacity` clamp at 3.2×. Two one-line
+  edits to `spec/params.json` cross it: `max_sigs_per_block_genesis` below 4,528,
+  or the binding gas ceiling raised by 33%. *Deferred:* the consequence changed and
+  the coupling did not. `miner.Select` now enforces the signature ceiling in its
+  packing loop, so a signature-dense pool costs block *space* rather than block
+  *production*; before that it stopped the node entirely, through the
+  unattributable-refusal stall recorded among the deferred code defects. So the
+  24.5% is now spent silently on throughput instead of loudly on liveness, and
+  nothing asserts that B5 keeps binding first — the test that landed with the fix
+  pins that `Select` respects the ceiling, not that the margin exists. *Reopens:*
+  any freeze-time edit to either number. Two things bound how far the measurement
+  goes: the sweep covered two signature-dense families at four widths and is a
+  sweep rather than a search over the shape space, and whether mainnet's aggregate
+  deposit screen would shed such a flood before it reached `Select` was priced in
+  capital but never measured.
+- **The median-time-past convention is unpinned on the windows a young chain
+  actually uses, and one sentence is owed to [ARCHITECTURE](ARCHITECTURE.md) §12.**
+  `params.Validate` requires `median_time_blocks` to be odd *so the median is
+  unambiguous*, but `pow.MedianTime` truncates the window when fewer headers exist,
+  so for the first ten blocks of any chain the length is whatever it is, even
+  lengths included, and `times[len(times)/2]` takes the **upper** of the two middle
+  elements. *Deferred:* recorded and not fixed because the code is right — the
+  convention is a pure function of the window so every node computes the same value
+  and there is no fork, and it is the stricter of the two conventions so it cannot
+  be used to date a block earlier than a lower-median implementation would allow;
+  both are asserted rather than argued. What is wrong is the specification's
+  silence. The gas-target median has its convention written normatively — the
+  element at sorted index `(EpochLength−1)/2`, one real sample, never an
+  interpolation — and this one has no such sentence anywhere, and `spec/` cannot
+  carry it, because a chain past height 11 never exhibits an even window again and
+  no corpus of blocks distinguishes the two conventions. A second implementer has
+  even odds of choosing the lower element and would then accept headers this tree
+  rejects for the first ten blocks of **every** network it launches, its own
+  devnets included. It is named here rather than written into the normative
+  document by the pass that found it, because a consensus sentence added during an
+  audit should be reviewed as a consensus change and not slipped in beside its own
+  evidence. *Reopens:* before the conformance surface is frozen — this is the one
+  place a second implementation can silently diverge on a rule nothing else pins.
+- **This chain would be rx/2's first production user, and the class of bug that
+  motivates the caution is not excluded by anything done so far.** Monero has
+  neither activated nor vendored rx/2, and the newest XMRig tag carrying it is a
+  single release rather than a maintained patch series, so no other production
+  traffic has found its bugs. The v2.0 defect that v2.0.1 fixed was wrong on
+  roughly one input in 268 million and would have read as correct: reading finds
+  defects that are wrong on their face, and the emulated sweeps are hundreds of
+  inputs against that density. *Deferred:* only volume closes it, and the
+  relaunched testnet is the volume — this is an item being worked off by the
+  network rather than one waiting on a decision, and "a stock XMRig binary found a
+  block on this chain" remains unproven for rx/2 because nothing in this tree can
+  run XMRig. *Reopens:* the freeze, as the standing risk the freeze decision is
+  taken against; see [randomx-v2](decisions/randomx-v2.md) §8.8 and §8.9 for what
+  the differential, mutation and line-by-line passes did and did not close.
 
 ---
 
@@ -540,6 +777,154 @@ and is not claimed.
 
 ## 5. Deferred code defects
 
+- **A third party drains an honest miner's shared reply budget, and the victim
+  bans the miner permanently for it. Demonstrated, not fixed.** `OnGetBlock`
+  refuses an over-budget request through `refuseUnbudgeted`, which returns no
+  reply and — correctly, since a budget refusal is a price and not a judgement —
+  no score. The budget's second arm is node-wide: a ceiling of
+  `connSet × BlockByteCapacity`, keyed on nothing and shared by every asker, so a
+  peer that has spent none of its own budget can be refused. An attacker floods
+  honest miner **A** until that shared ceiling is spent; A announces a block to
+  victim **V**; V asks for the body, A's refusal sends nothing, and sixty seconds
+  later V charges A the unserved-body penalty. Twelve blocks and A is banned at V
+  — **and the attacker is never connected to V at all.** The score rides the peer
+  store to disk and there is no decay and no unban path, so the ban is permanent.
+  Driven end to end: two identities drain a two-connection ceiling and a fresh
+  victim's request comes back with no reply and no score against it, and at the
+  node seam twelve announcements take an honest peer to −120, banned on the
+  address **and** the identity. Closing this means inverting that test's last
+  assertion.
+
+  **A small network is the cheap case, not the safe one.** The node-wide arm is
+  read first and scales with the connections a node *actually holds*, not with the
+  48-connection adversarial maximum: at two connections that is 16,000,000 bytes
+  against a per-identity budget of 8,000,000 — two identities' worth, not
+  forty-eight. A ceiling sized as a node-wide backstop sits barely above the
+  per-peer budget it stands behind, so the smaller the network the cheaper this is.
+
+  *Deferred:* four candidate fixes were built or costed and each fails, recorded
+  here so the next author does not re-derive them. **Bounding the charge outright**
+  below the ban threshold disarms the ghost-flood defence — that same charge is the
+  only terminator of a peer spraying cheap `max_target` announcements at an unheld
+  parent — and was rejected by measurement rather than by argument. **Bounding it
+  only for a tip-extension** was built and mutation-proven in both directions and
+  is ineffective: under the drain A serves nothing on any path, so V's tip never
+  advances while A runs away from it, and of twelve announcements exactly **one**
+  names V's tip — the bound never engages, and the score is −120 with the fix in
+  place. That is not an edge case but the normal condition of a lagging receiver;
+  the difficulty gate's own comment measures it from the other side, at 19 of 20
+  honest announcements naming an unheld parent for a node one block behind.
+  **Retrying before charging** is defeated by a sustained drain: the bucket refills
+  every block interval and holding it empty costs the attacker about 530 KB/s at
+  two connections, so every retry meets the same refusal. **Decay or a bounded
+  unban** cannot be tuned — the ghost-flood test drives its charges in ~0 s of wall
+  clock, so any decay slow enough to leave that ban intact is far too slow to save
+  A under a drain measured in block intervals.
+
+  **The wire answer fails too, and that is the finding's real sting.** An explicit
+  "budgeted, ask later" reply — making A's refusal legible to V — is not
+  backward-tolerant, since an unknown message kind is scored a protocol violation
+  and would ban its sender at any node not yet upgraded. Worse, the claim is
+  **forgeable**: a ghost flooder answers "budgeted" to every request and escapes
+  the ban outright, reopening the flood the charge exists to terminate, and
+  bounding how often a peer may claim it re-bans the honest A, whose whole
+  situation is being unable to serve for a long time. The indistinguishability
+  moves one message along and survives.
+
+  What would close it is V establishing that A is genuinely ahead without trusting
+  A's word, and the only unforgeable evidence is cumulative work V verifies itself:
+  a forward header chain rooted at V's own tip with each successive target
+  *derived* by V rather than read out of the header. An honest miner's run-away
+  chain anchors and validates; a ghost chain never does; an attacker wanting the
+  leniency has to mine at real difficulty, which is participation rather than a
+  flood. That is branch difficulty derivation plus bounded per-peer header state on
+  the hostile gossip ingress path — consensus-adjacent, and the difficulty gate
+  deliberately stops at the tip today for a measured liveness reason. It wants its
+  own review and is not a pre-freeze change. *Reopens:* immediately, for anyone
+  building that anchoring — the two tests in
+  `node/p2p/thirdpartyban_internal_test.go` assert the defect and fail until it is
+  closed. **OWNER-ONLY, for the disposition rather than the fix:** publishing this
+  tree publishes a live, reachable defect with a working recipe, and the choice
+  between closing it, accepting it as a known open finding at launch, and holding
+  the publication is the owner's. What is not available is marking it fixed.
+- **`Merkleize` can index past `zeroHashes` on an operator's own parameters.**
+  `ssz.Merkleize` derives `depth` by `for 1<<depth < limit { depth++ }` and then
+  reads `zeroHashes[depth]`, a 64-entry array: a `cert_list_capacity` above 2^63
+  drives `depth` to 64 and indexes out of range, with `1<<depth` overflowing
+  alongside it. `Params.Validate` requires that value to be positive, to be at
+  least `max_certs_per_block_genesis` and to survive the `seq_gas_capacity`
+  cross-multiplication, and imposes **no ceiling**; the same argument applies to
+  `max_cites_per_block`. *Deferred:* latent, and not reachable from the network —
+  checked rather than assumed, since parameters reach this code only through
+  `Chain.Params()` and nothing anywhere decodes a parameter set off the wire, and
+  the committed sets are far below the bound. Recorded because `Validate` already
+  refuses far less exotic things and the guard is one comparison, and because this
+  is the same function whose panic was once a critical finding. *Reopens:* the day
+  a parameter set is written by anyone but the tree's own authors, or the day
+  `Validate` is next extended — add the ceiling then rather than for its own sake.
+- **`dropTheDrops`' non-attributable arm returns a generic error, so the
+  truncating fallback cannot act and the node stops producing blocks.** A
+  block-level rule with no culpable certificate — the sequential and parallel gas
+  ceilings, the certificate count, the byte ceiling, the per-block signature
+  ceiling — reports through `invalid()` rather than with an index. The recovery
+  matches on a certificate-scoped rule error, finds no index, reaches the "not
+  attributable to any one certificate" arm and returns the error; `Assemble`
+  propagates it and the mining loop returns without retrying, because the
+  empty-block floor sits *inside* the branch such a rule never enters. The same
+  failure reaches `node/stratum`, where a failed assembly means no job and every
+  connected miner stops receiving work. Measured on devnet before the builder fix:
+  twenty-five signature-dense certificates, funded for real and admitted 25 of 25
+  by the node's own mempool, produced three identical failed attempts and nothing
+  shed them — they were individually valid and the pool's clearing path runs only
+  downstream of a successful apply, which never happened. *Deferred:* the builder
+  now packs against all five ceilings, so the signature ceiling can no longer be
+  the rule that reaches this arm, and the guarantee is structural rather than
+  empirical — the builder's output satisfies the ceiling and `dropTheDrops` only
+  ever removes certificates, which can only lower the sum. Making the rules
+  attributable was rejected on its merits: inventing a culpable index for a sum
+  over every certificate is a consensus edit bought for a builder-side error
+  message. *Reopens:* the next block-level rule to ship after the builder's packing
+  loop was last read — the three bullets above are still true of the code as it
+  stands, and any such rule reproduces this stall exactly. The cheap fix is the
+  durable half of the finding: that arm should fall back to a truncated list rather
+  than to no block.
+- **The `getjob` flood still costs a node roughly twenty to forty times its idle
+  work, after the assembly bound closed the expensive half.** A single pipelined
+  connection issues about 16,500 calls a second, and each one used to buy a chain
+  snapshot, a difficulty-window walk, a mempool selection, a dry-run fold to a
+  fixpoint, a certificate root and — at an epoch boundary — a full state-root seal,
+  priced at ~570 µs. Serving from a one-second cache takes that to **zero**
+  assemblies. What is left is measured rather than assumed: a CPU profile of the
+  flood after the fix puts 36% of the process in syscalls and most of the remainder
+  in JSON, with the work function at 2%. *Deferred:* the residual is the socket and
+  the encoding — the ordinary cost of serving a client that sends as fast as it
+  can, which every network service pays — and it is two orders of magnitude cheaper
+  per unit than the assembly it replaced and bounded by the connection cap. The
+  end-to-end test asserts the *assembly* bound and records the wall-clock figure as
+  a measurement, because asserting a ratio there would be asserting the speed of
+  the Go poller on whichever machine ran it. Whether sixteen connections at line
+  rate is acceptable is an operational question the audit declined to settle, and
+  the answer it gives is the one that was already the advice: rate-limit in front
+  of it. *Reopens:* the day a pool operator exposes this endpoint and the connection
+  cap is measured to be insufficient.
+- **The rx/2 x86 JIT advances its write cursor by the v1 dataset-read size on both
+  branches, and the two sizes happen to be equal.** `generateProgram` copies either
+  the v1 or the v2 dataset-read block and then adds a constant naming only the
+  first. Both sizes are label distances in hand-written assembly, so neither is a
+  number in the source; assembling it and reading the symbol table gives 66 for
+  both, because the v2 block is the same seven instructions in a different order
+  and reordering identical instructions does not change their encoded length. So
+  the line is correct. *Deferred:* patching it means editing the vendored tree,
+  which `vendor.sh`'s own header forbids for reasons the pinning pipeline depends
+  on — the tree is byte-identical to upstream's tag, verified by archive diff, and
+  that is what makes auditing the work function a `diff` rather than a review of
+  somebody's copy. The cost of it going wrong is asymmetric: one added instruction
+  upstream makes the line under-advance, the next emit overwrites the tail of the
+  dataset read with the program epilogue, and the result is a JIT computing a wrong
+  hash **on the mining path only**, on a build where every published vector still
+  passes because the light path advances by the size it actually copied. *Reopens:*
+  the day the RandomX tag is bumped — re-measure those two labels before accepting
+  the new tree.
 - **Charging a `DROPPED` certificate at `F3`, so a producer pays for what receivers verify** — the
   decision that added `V5`'s upper bound on `Deposit.Amount` and restated
   `docs/ARCHITECTURE.md` §10 two-sidedly explicitly did **not** take this
@@ -757,10 +1142,84 @@ decision to abandon a chain is not a fact about the chain.
 
 ---
 
-## Not classifiable into the five groups
+## 6. Operational residuals — discharged by a release, an announcement, or a machine
+
+A sixth group, added because these fit none of the five and share a real class of
+their own: **none of them is closed by editing this tree.** Each is discharged by
+something happening outside it — a release going out, an announcement being made,
+a machine being available — and each is the owner's to discharge for that reason.
+They are here because nothing else records them: the surviving workflow file and
+`CONTRIBUTING.md` carry the *rules*, and the residual risk those rules leave is
+what this section holds.
+
+- **Already-deployed nodes will not self-update, and the repository they would ask
+  is gone. — OWNER-ONLY.** The release host is a constant in the source, for the
+  reasons the constant's own comment gives: the repository is published, so the
+  account is not a secret this program could keep, and a placeholder substituted at
+  release time is a step that has to actually happen. A binary already installed
+  therefore carries the *old* address, and the old account was suspended, so its
+  update check is a dead request whatever mode the operator set. *Deferred:* nothing
+  in the tree can reach those machines — that is the whole shape of the problem, and
+  it is why it wants saying at the next announcement rather than fixing in a commit.
+  One correction to the obvious reading, because it changes the advice: reinstalling
+  by hand is **not** the only path. `ZYCORD_REPO_URL` overrides the constant, is
+  spelled the same as the installer's variable, and the trusted release keys are
+  embedded in the binary and did not move with the address — so an operator who sets
+  it and restarts gets a working update check from the binary they already have.
+  That variable is documented for the installer and **nowhere for the node**, which
+  is the part that is actually missing. *Reopens:* the next announcement, which
+  should name both paths; and immediately if the release keys are ever rotated,
+  since the override stops working the moment the embedded keys and the published
+  ones disagree.
+- **There is no hosted test CI, by decision, and the pre-push local run is
+  therefore the only gate. — OWNER-ONLY to revisit.** The previous forge account was
+  permanently suspended with no appeal because workflow jobs computed proof-of-work
+  hashes and the platform's abuse detection read repeated hash computation in a
+  runner log as mining. Every job died with the account. One workflow remains, it
+  fires on a version tag, it compiles and ships artefacts, and it runs nothing. The
+  rule that replaced the deleted jobs is a shape rather than a list, so that it
+  still decides cases nobody thought of: **compiling a binary containing the work
+  function is fine, and hashing a finished artefact to show two builds agree is
+  ordinary build practice; running the work function on a hosted runner is not,
+  whatever the job is called.** *Deferred:* this is not a defect to fix but a
+  constraint to work inside, and the cost of being wrong a second time is the
+  account. What it leaves is that the local run before a push is load-bearing rather
+  than a formality — a red run pushed anyway is a red default branch and nobody
+  downstream will find it. `sim/wiring`'s workflow test holds the surviving file to
+  an equality over its files, its jobs and its commands, so a job that starts what it
+  built cannot be added quietly. *Reopens:* the day a runner exists that this project
+  may run its own test suite on — self-hosted, or a platform whose terms are read
+  first rather than after.
+- **A hosted CI would download a Go toolchain over the network on every job, and
+  that failed intermittently before the jobs were deleted.** `go.mod` declares
+  `go 1.25.0` and `toolchain go1.26.2`, so a runner whose image ships anything older
+  fetches 1.26.2 before compiling anything, and the fetch failed with a connection
+  reset often enough to be noticed. *Deferred:* moot while there is no hosted test
+  CI — nothing fetches a toolchain on a developer's machine that already has one.
+  *Reopens:* standing up CI anywhere. The fix is to pin the runner's toolchain in the
+  job rather than to let the directive fetch one, and it is cheaper to do while
+  writing the first job than to diagnose as flakiness afterwards.
+- **Nothing executes on Windows anywhere any more, and the deleted job is the only
+  place this tree ever did.** Windows is one of the six platforms every release
+  ships. The removed workflow existed because four defects were green on every Linux
+  runner and only failed on a Windows one: a directory fsync that cannot succeed
+  there, a log handle opened `O_APPEND` that cannot be truncated through, a node
+  binary built without `.exe` because `go build -o` does not add one, and a publish
+  tier that silently degraded on exFAT. Cross-compiling still works and every release
+  still produces the archives; **executing** is what stopped. *Deferred:* the job
+  cannot come back — it is a hosted runner starting what it built, which is exactly
+  the shape the surviving rule forbids — and there is no other runner. The command
+  list a contributor runs by hand instead is in `CONTRIBUTING.md`, including the four
+  regression tests those defects left behind. *Reopens:* any change touching file
+  publication, log rotation, directory sync or the build's output names; and the next
+  release, which ships Windows archives nothing has run.
+
+---
+
+## Not classifiable into any group
 
 - **[epic] Post-launch hygiene backlog.** This is the tracking epic that the
   `post-launch` findings hang under — a container, not a deferred defect, so it fits
-  none of the five classes. Its members are all closed, under the working rule that a
+  none of the classes above. Its members are all closed, under the working rule that a
   picked-up item is re-derived from scratch and that anything found
   launch-relevant on re-derivation is promoted. Left here rather than forced into a class.

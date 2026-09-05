@@ -162,8 +162,15 @@ Measured on such a clone: `gofmt -l .` from 173 files to 0. A fresh clone needs
 none of this.
 
 Windows is not a second-class target: it is one of the six platforms every
-release ships. It went untested for a long time, and what that cost is written
-up in the pull request that added the job.
+release ships. It went untested for a long time, and the cost is stated here
+rather than pointed at, because the job that measured it no longer exists and
+neither does the discussion it was opened in. Four defects were green on every
+Linux runner and failed only on a Windows one: a directory fsync that cannot
+succeed there, a log handle opened `O_APPEND` that cannot be truncated through, a
+node binary built without `.exe`, and a publish tier that silently degraded on
+exFAT. The four tests in the command list above are what those left behind; run
+them, because nothing else will. `docs/DEFERRED.md` carries the standing residual
+that no runner executes this tree on Windows at all any more.
 
 - Code and comments in **English**, always.
 - Comments explain *why*, not *what*. A comment that restates the line above it is noise; a comment that records the attack a rule prevents is the most valuable thing in the file.
