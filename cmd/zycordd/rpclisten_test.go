@@ -119,3 +119,86 @@ func TestRPCListeningLineIsPrintedOnlyAfterASuccessfulBind(t *testing.T) {
 			"only after the bind succeeds, not before it", marker)
 	}
 }
+
+// The property, in one sentence: **a --rpc value that is not loopback is
+// announced by a warning, and that warning is guarded by rpc.IsLoopbackBind
+// rather than emitted unconditionally or not at all.**
+//
+// The defect: --rpc accepted a routable address in silence, where
+// --stratum-listen one flag over had carried a loud exposure warning since it
+// existed. The RPC is the older and the more reachable surface, and
+// node/rpc.guardHost does not cover the case: it stops a browser, because a
+// page cannot forge Host, and it stops nothing at all against a caller that
+// sets the header itself. docs/adversarial/I8-services.md ~:320 records the
+// demonstration — `--rpc 0.0.0.0:9420` plus `curl -H "Host: 127.0.0.1"` is
+// answered 200, /submit included.
+//
+// Read from main's source for the reason the test above gives: main binds a
+// socket and opens a store, so it is not callable from a test. This pins that
+// the warning exists and that it is conditional on the bind check; it says
+// nothing about the wording, and deliberately nothing about warn-versus-refuse
+// — warn is the decision, and the reason it is not a refusal is that a reverse
+// proxy setting Host: 127.0.0.1 is a documented deployment that a refusal would
+// break on upgrade.
+//
+// It notices the absence of what it claims: delete the warning and the marker
+// is gone; hoist it out of its `if` and the guard check fails; swap the guard
+// for `true` and the IsLoopbackBind requirement fails.
+func TestARoutableRPCBindIsWarnedAbout(t *testing.T) {
+	_, _, mainFn := mainFiles(t)
+
+	const marker = "rpc: WARNING"
+
+	// The innermost `if` enclosing the warning, and whether its condition
+	// consults the bind check.
+	var enclosing []*ast.IfStmt
+	var stack []ast.Node
+	guarded := false
+	seen := false
+	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		stack = append(stack, n)
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		s, err := strconv.Unquote(lit.Value)
+		if err != nil || !strings.Contains(s, marker) {
+			return true
+		}
+		seen = true
+		enclosing = enclosing[:0]
+		for _, a := range stack {
+			if ifs, ok := a.(*ast.IfStmt); ok {
+				enclosing = append(enclosing, ifs)
+			}
+		}
+		for _, ifs := range enclosing {
+			ast.Inspect(ifs.Cond, func(m ast.Node) bool {
+				call, ok := m.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok &&
+					sel.Sel.Name == "IsLoopbackBind" {
+					guarded = true
+				}
+				return true
+			})
+		}
+		return true
+	})
+
+	if !seen {
+		t.Fatalf("main no longer logs a %q line: a routable --rpc bind is accepted "+
+			"in silence again, which is the whole of the defect this guards", marker)
+	}
+	if !guarded {
+		t.Errorf("the %q line is not conditional on rpc.IsLoopbackBind(...): it must "+
+			"fire for a non-loopback bind and stay quiet for the loopback default, "+
+			"or operators learn to ignore it", marker)
+	}
+}

@@ -256,7 +256,12 @@ scrape_configs:
 
 **The RPC stays on loopback.** Scrape it over an ssh tunnel or from the same
 host. Exposing the node's RPC to reach its metrics would put a consensus process
-on the internet and move its rate limit onto one proxy's address.
+on the internet and move its rate limit onto one proxy's address. `--rpc` will
+not stop you — it accepts a routable address and warns loudly instead of
+refusing — and the `Host` check that answers only loopback names is a
+DNS-rebinding defence, not access control: a caller that is not a browser sets
+that header itself, and `/submit` is then reachable by anyone who can reach the
+port. See [RUNNING.md](RUNNING.md#what-the-node-does-not-have).
 
 Worth graphing, and why:
 

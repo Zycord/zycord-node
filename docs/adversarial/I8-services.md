@@ -99,8 +99,9 @@ if the RPC is exposed at all; that advice now carries a requirement.
 closes the browser class completely, because a page cannot forge `Host`. It stops nobody
 who can reach the port with a tool of their own: with `--rpc 0.0.0.0`, a plain
 `curl -H "Host: 127.0.0.1"` from the network is answered 200, `/submit` included. Binding
-this socket to a routable address is still exactly as dangerous as it was, and I8-L10
-carries what remains of that.
+this socket to a routable address is still exactly as dangerous as it was: no guard here
+makes it safe, and the answer is the operator knowing they did it. I8-L10 carries what
+remains of that, and is now closed by the exposure warning it asked for.
 
 ---
 
@@ -317,7 +318,7 @@ The constraint itself is **confirmed intact** on every path.
   that the order cannot be inverted. Body cap 1 MiB, 600 req/min, a 256 MiB/min block-byte
   budget, and no `Content-Encoding` handling anywhere, so there is no decompression bomb.
 - **I8-L10 — `--rpc` accepts a routable address with no validation and no warning, and
-  the `Host` guard does not cover that case.** ⚠ *open.* The default is loopback, so the
+  the `Host` guard does not cover that case.** ✅ *fixed.* The default is loopback, so the
   claim holds by default. But the Stratum endpoint validates its own bind and warns loudly
   when it is not loopback, and the RPC — the older surface, and the one I8-C1 shows is more
   reachable than it looked — prints nothing.
@@ -330,13 +331,28 @@ The constraint itself is **confirmed intact** on every path.
   with `--rpc 0.0.0.0`, a plain `curl -H "Host: 127.0.0.1"` from the network is answered
   **200**, `/submit` included. A forged header costs an attacker one flag.
 
-  So the two halves are independent and only one of them is fixed. What remains is the
-  exposure warning: an operator who binds a routable address gets no line saying so, where
-  the same operator binding Stratum to one gets a loud unconditional warning that names the
-  consequence. That is one line beside the one that already exists for Stratum, and it is
-  the honest close for this finding — not a second guard, because there is no header check
-  that can distinguish a legitimate remote operator from an attacker, and pretending
-  otherwise is what a password on the Stratum socket would have been (I8-L1).
+  So the two halves are independent and only one of them was fixed at the time of this
+  pass. What remained was the exposure warning: an operator who binds a routable address
+  got no line saying so, where the same operator binding Stratum to one gets a loud
+  unconditional warning that names the consequence. That is one line beside the one that
+  already exists for Stratum, and it is the honest close for this finding — not a second
+  guard, because there is no header check that can distinguish a legitimate remote operator
+  from an attacker, and pretending otherwise is what a password on the Stratum socket would
+  have been (I8-L1).
+
+  **Closed since.** `cmd/zycordd` now prints that line, guarded by `rpc.IsLoopbackBind`, on
+  the same successful-bind branch as `rpc listening on`. It warns and does not refuse: a
+  reverse proxy setting `Host: 127.0.0.1` is a documented deployment, so refusing would
+  break, on upgrade, the one remote shape that is legitimate — which is the difference
+  between this flag and `--stratum-listen`, whose socket has no legitimate remote shape at
+  all. There is no acknowledgement flag, because a flag passed once and forgotten records
+  the acknowledgement rather than the exposure. `guardHost`'s own doc comment now states
+  outright that it is not access control and must not be described as such, and
+  `TestTheHostGuardIsNotAccessControl` pins the demonstration above as an executable fact:
+  it fails the day a real access control lands there, which is exactly when every paragraph
+  in this file and in `docs/RUNNING.md` saying "not access control" would need revisiting.
+  What is still open is the missing `MaxConns` on that listener, recorded in
+  `docs/DEFERRED.md`.
 
 ---
 
@@ -371,11 +387,13 @@ The constraint itself is **confirmed intact** on every path.
   depth, nor `desktop/`, nor the update path's signature verification (`cmd/zcd/update.go`)
   — that last one is a genuine external-input surface and it is unexamined here. I did not
   test the RPC under connection exhaustion: there is no `MaxConns` on that listener, which
-  is irrelevant while it is loopback-bound and is not irrelevant if I8-L10 is ever
-  exercised.
+  is irrelevant while it is loopback-bound and is not irrelevant if a routable bind is ever
+  chosen — which is now warned about (I8-L10) but still permitted. The cap remains open in
+  `docs/DEFERRED.md`.
 
 **Disposition.** I8-C1, I8-H1, I8-M1, I8-M2 and I8-L2 are fixed, each with a test that
-fails against the unfixed code. I8-L3 is accepted and recorded. I8-L10 is open and small.
+fails against the unfixed code. I8-L3 is accepted and recorded. I8-L10 was open and small
+and is now fixed the way this note argued it should be: a warning, not a second guard.
 The Stratum endpoint's stated bounds — the cap, the score, the line limit, the keepalive,
 the light-mode verification, and the zero nonce — are all real; one of them was being
 guarded by a test that could not fail, and that is the finding this surface contributes to
