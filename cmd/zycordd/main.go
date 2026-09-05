@@ -103,7 +103,21 @@ func main() {
 	testnet := fs.Bool("testnet", false, "use the embedded public testnet parameters")
 	mine := fs.Bool("mine", false, "mine blocks")
 	payoutHex := fs.String("payout", "", "payout address for mining: a persistent (0x02) address, hex. A one-shot (0x01) address is refused — it burns every reward once it is spent (docs/WALLET.md rule 3).")
-	rpcAddr := fs.String("rpc", rpc.DefaultConfig().Addr, "RPC listen address; localhost by default")
+	// The default is loopback, and a routable value is accepted rather than
+	// refused — but never silently. Refusing outright would break the one
+	// deployment that is legitimate and already documented (a reverse proxy in
+	// front, setting Host: 127.0.0.1), and it would break it on upgrade, for a
+	// node whose operator meant it. So this follows --stratum-listen exactly:
+	// the address is whatever the operator typed, and a non-loopback one earns
+	// a loud line naming the exposure. See the warning at the bind below, and
+	// node/rpc's guardHost for why that guard is a rebinding defence and not
+	// the access control a routable bind would need.
+	rpcAddr := fs.String("rpc", rpc.DefaultConfig().Addr,
+		"RPC listen address; loopback (127.0.0.1:9420) by default. Binding a "+
+			"routable address serves /submit to anyone who can reach the port — "+
+			"the Host guard stops browsers, not tools — so bind loopback and use "+
+			"an SSH tunnel or an authenticating reverse proxy unless you control "+
+			"every host on this network.")
 	noRPC := fs.Bool("no-rpc", false, "do not serve RPC")
 	listen := fs.String("listen", "", "peer-to-peer listen address; empty means outbound-only")
 	advertise := fs.String("advertise", "", "address to advertise to peers; defaults to --listen. Set this when the address peers can reach is not the one this process binds (a forwarded port, a proxy).")
@@ -317,6 +331,34 @@ func main() {
 			// cfg.Addr the two read identically. Listen has returned nil here, so
 			// Addr() is non-nil.
 			log.Printf("rpc listening on %s (read-only; submission is the only write)", srv.Addr())
+			// The exposure warning, beside the one --stratum-listen already
+			// carries and for the same reason: an operator who meant it loses
+			// one line to a log, and one who did not mean to type 0.0.0.0 gets
+			// the only chance anything will ever give them to notice.
+			//
+			// Warn rather than refuse. --stratum-listen's socket has no
+			// legitimate remote shape at all, so a warning there is the whole
+			// story; this one does — a reverse proxy setting Host: 127.0.0.1 is
+			// the documented way to expose the RPC — and refusing would break
+			// that deployment on upgrade for an operator who had chosen it
+			// deliberately. Deliberately not behind an acknowledgement flag
+			// either: a flag an operator passes once and forgets records the
+			// acknowledgement, not the exposure.
+			//
+			// cfg.Addr, not srv.Addr(): the warning is about the address the
+			// operator typed. For a ":0" request the kernel's chosen port is
+			// what srv.Addr() carries, and the host part — the part that
+			// decides exposure — is the one this reads either way.
+			if !rpc.IsLoopbackBind(cfg.Addr) {
+				log.Printf("rpc: WARNING: %s is not loopback. This RPC is "+
+					"UNAUTHENTICATED and /submit is reachable by anyone who can "+
+					"reach the port: the Host guard is a DNS-rebinding defence, "+
+					"not access control, and a caller that is not a browser sets "+
+					"that header itself. Bind 127.0.0.1 and use an SSH tunnel, or "+
+					"put an authenticating reverse proxy in front, unless you "+
+					"control every host on this network.",
+					cfg.Addr)
+			}
 			go func() {
 				if err := srv.ListenAndServe(); err != nil {
 					log.Printf("rpc stopped: %v", err)

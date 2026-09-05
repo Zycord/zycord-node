@@ -361,21 +361,24 @@ launch, because none changes shipped behaviour.
   instrument — is already named in this file's own history. *Reopens:* the day B1's
   TTL bound or `PruneSeen`'s horizon is edited; both want a test that fails when
   the coupling breaks, not a paragraph.
-- **`--rpc` accepts a routable address with no validation and no warning, and that
-  listener has no connection cap.** The `Host` guard that closed the browser class
-  is a rebinding defence and not access control: with `--rpc 0.0.0.0`, a plain
-  `curl` sending a loopback `Host` from the network is answered 200, `/submit`
-  included, and a forged header costs an attacker one flag. The Stratum endpoint
-  validates its own bind and warns loudly and unconditionally when it is not
-  loopback; the RPC — the older surface, and the one shown to be more reachable
-  than it looked — prints nothing. There is also no `MaxConns` on it, which is
-  irrelevant while it is loopback-bound and is not irrelevant if it is not.
-  *Deferred:* the default is loopback, so the claim holds by default, and no header
-  check can distinguish a legitimate remote operator from an attacker — a second
-  guard would be the same mistake a password on the Stratum socket would have been.
-  What is owed is the warning, one line beside the one Stratum already has.
-  *Reopens:* the day an operator is known to bind a routable address, or a
-  connection cap is wanted on that listener.
+- **A routable `--rpc` listener has no connection cap.** *Half of this item is
+  now fixed and the other half is not, so the wording is split.* The `Host` guard
+  that closed the browser class is a rebinding defence and not access control:
+  with `--rpc 0.0.0.0`, a plain `curl` sending a loopback `Host` from the network
+  is answered 200, `/submit` included, and a forged header costs an attacker one
+  flag. **Fixed:** the silence is gone — `cmd/zycordd` now prints an exposure
+  warning for any non-loopback `--rpc`, guarded by `rpc.IsLoopbackBind`, beside
+  the one `--stratum-listen` already had. It warns rather than refuses, because a
+  reverse proxy setting `Host: 127.0.0.1` is a documented deployment and a refusal
+  would break it on upgrade for an operator who chose it deliberately; and there
+  is no acknowledgement flag, because a flag passed once and forgotten records the
+  acknowledgement rather than the exposure. **Still deferred:** there is no
+  `MaxConns` on that listener, which is irrelevant while it is loopback-bound and
+  is not irrelevant once it is not. No second header guard is owed and none should
+  be added — no header check can distinguish a legitimate remote operator from an
+  attacker, and pretending otherwise is the mistake a password on the Stratum
+  socket would have been. *Reopens:* the day an operator is known to bind a
+  routable address, which the warning now makes visible.
 - **The update path's signature verification is an external-input surface no audit
   has examined.** The service-surface pass reached the RPC, Stratum and the
   wallet's key handling, and recorded `cmd/zcd/update.go` — along with

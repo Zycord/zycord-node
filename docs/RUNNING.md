@@ -16,7 +16,14 @@ There is **no key material in the node process, ever**. It accepts no seed, no p
 
 There is also **no privileged endpoint**, because there is nothing to privilege. No key can pause, upgrade, censor or mint, so there is no call to expose.
 
-The RPC binds to localhost by default and rate-limits by default. If you expose it, you are exposing a read-only view of public data — but you are also exposing a rate limit that now applies to a proxy's address rather than to each caller. Put a real reverse proxy in front of it or leave it alone.
+The RPC binds to localhost by default and rate-limits by default. `--rpc` will accept a routable address — `--rpc 0.0.0.0:9420` is not refused — and the node prints a loud warning naming the exposure when you give it one, the same way `--stratum-listen` does. Read that warning rather than filtering it out: what you are exposing is not only a read-only view of public data. `/submit` is a write, it is reachable, and an admitted certificate is gossiped on to real peers.
+
+**Two different guards protect this port, and only one of them is a barrier to a person.** Confusing them is the mistake this section exists to prevent:
+
+- **The rate limiter** is a barrier, and behind a proxy it is a weak one — it keys on the transport peer, so every request arrives with the proxy's address. See below.
+- **The `Host` check is a DNS-rebinding defence and it is not access control.** The RPC answers only requests whose `Host` header names loopback. That closes the browser class completely, because a page cannot forge `Host` without giving up the rebinding it needs. It closes nothing against anyone holding a tool of their own: `curl -H "Host: 127.0.0.1"` from anywhere on the network is answered `200`, `/submit` included. A forged header costs an attacker one flag.
+
+So a routable `--rpc` is an unauthenticated write endpoint open to everyone who can reach the port, and nothing in the node changes that. Bind loopback and reach it over an ssh tunnel, or put a reverse proxy in front that does its own authentication and rate limiting — the proxy must set `Host: 127.0.0.1`, which is the same header rule and the reason the port is deliberately not compared, so `ssh -L 9999:127.0.0.1:9420` keeps working.
 
 The limiter keys on the transport peer and never on `X-Forwarded-For`. A limiter that trusts a header the client sets is a limiter the client turns off, so the header is ignored rather than half-honoured.
 
@@ -231,10 +238,14 @@ the *hostname* in the `Host` header and deliberately not the port, so
 `-L 9999:127.0.0.1:9430` works. The hostname is what matters: it is what blocks
 DNS rebinding, which is the real attack against a server on loopback — any page
 in your browser can make requests to `127.0.0.1`, and the one thing it cannot
-forge is the name it was navigated to.
+forge is the name it was navigated to. As with the node's RPC, that check is a
+rebinding defence and not access control; it is not what keeps this interface
+off the network. What keeps it off the network is that it refuses to bind
+anything but loopback in the first place, with no flag to override — which is
+the difference between this surface and `--rpc`.
 
 **Do not put a reverse proxy in front of `zcd ui`.** The advice above about the
-node's RPC — rate-limit at the proxy, expose read-only data if you must — is
+node's RPC — rate-limit and authenticate at the proxy if you must expose it — is
 about a surface that holds no key and grants no authority. This one holds a key.
 There is no version of exposing it that is a good idea, and the tunnel costs one
 flag.

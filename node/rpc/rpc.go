@@ -275,11 +275,22 @@ func (s *Server) Handler() http.Handler {
 // documented way to reach this RPC on a remote host. Same reasoning, same
 // wording, as wallet/webui's own loopbackHost.
 //
-// An operator who deliberately exposes the RPC on a routable address is
-// refused by this too, which is correct rather than incidental: reaching it
-// then requires naming a loopback Host, which a reverse proxy does by setting
-// it, and an unproxied public RPC is the configuration this guard should be
-// refusing anyway.
+// **This is a rebinding defence and it is NOT access control.** The distinction
+// is not pedantry, it is the whole security boundary: the guard closes the
+// browser class, because a page cannot forge Host without giving up the
+// rebinding, and it closes nothing at all against a caller with a tool of their
+// own. Demonstrated in review and recorded in docs/adversarial/I8-services.md:
+// with the node bound to 0.0.0.0, a plain `curl -H "Host: 127.0.0.1"` from the
+// network is answered 200 — /submit included. A forged header costs an attacker
+// one flag.
+//
+// So nothing here makes a routable bind safe, and no header check could: there
+// is no field that distinguishes a legitimate remote operator from an attacker,
+// and a second guard pretending otherwise would be the mistake a password on
+// the Stratum socket would have been. What answers a routable bind is the
+// operator knowing they made one, which is cmd/zycordd's exposure warning (see
+// IsLoopbackBind below), not this wrapper. Do not describe this function as
+// access control anywhere, in code or in docs.
 func guardHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !loopbackHost(r.Host) {
@@ -329,6 +340,45 @@ func loopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(name)
 	return ip != nil && ip.IsLoopback()
+}
+
+// IsLoopbackBind reports whether a BIND address reaches only the loopback
+// interface. It is the question the wiring asks before deciding whether to
+// print the exposure warning for --rpc, and it is deliberately NOT the question
+// loopbackHost above answers.
+//
+// **The two are a fourth and a first entry in the same family and still are not
+// duplicates**, for the reason loopbackHost's comment already gives: this one
+// reads a value the OPERATOR typed on their own command line, where the empty
+// host in ":9420" means "every interface" and must therefore be reported as
+// exposed; loopbackHost reads a value an ATTACKER chooses, where an empty
+// string is a missing header. Folding them together would have to pick one
+// meaning for the empty host, and either choice is wrong for one of the two
+// callers. stratum.IsLoopback asks exactly this question for its own bind and
+// is spelled separately there for the same package-coupling reason.
+//
+// It answers conservatively: anything it cannot parse, and the empty host, are
+// reported as NOT loopback. A spurious warning costs one line in a log; a
+// missing one costs an operator a routable /submit they did not know they had.
+//
+// A hostname other than "localhost" is treated as exposed rather than resolved.
+// Resolving arbitrary names at startup would make whether the warning appears
+// depend on DNS, which is not a property of the address the operator typed.
+func IsLoopbackBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "" {
+		// ":9420", and the "0.0.0.0:9420" below it, are the two spellings this
+		// warning exists for and the ones an operator is most likely to have
+		// copied from a tutorial written for a service that has authentication.
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return host == "localhost"
 }
 
 // Listen binds cfg.Addr. It is split out of ListenAndServe so a caller can
