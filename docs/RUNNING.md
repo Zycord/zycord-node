@@ -306,6 +306,37 @@ trusts, and contacts nothing to do it. The full trust model — including exactl
 what the signature is worth, and what a check discloses — is in
 [UPDATES.md](UPDATES.md).
 
+### A stranded node: the check 404s
+
+If `zcd update` reports that the release host cannot be reached, or your node
+logs `update: check failed`, and the address `zcd update --print-source` prints
+is gone, your binary is not broken — it is asking an address that moved. The
+release host is compiled in; the trusted keys are compiled in too, and **they did
+not move with the address**. So point the binary at the new host and restart it:
+
+```sh
+ZYCORD_REPO_URL=https://github.com/<new-owner>/<new-repo> zcd update --check
+```
+
+Once you are satisfied it finds the manifest, make it stick for the service. For
+systemd, in the unit:
+
+```
+Environment=ZYCORD_REPO_URL=https://github.com/<new-owner>/<new-repo>
+```
+
+then `systemctl daemon-reload && systemctl restart zycordd`. That is the whole
+remedy: **no reinstall, no hand-download.** The signature check is unchanged by
+the override — the keys are in the binary, not on the host — so the node verifies
+the next release exactly as it always would. `zcd update --repo <url>` does the
+same thing for a single command without setting anything.
+
+`packaging/install.sh` reads the same variable, and takes `--repo <url>`, if you
+are installing fresh rather than rescuing an existing install.
+
+The override, and what it does and does not change about verification, is in
+[UPDATES.md](UPDATES.md#where-the-check-goes-and-how-to-move-it).
+
 ## Data directory
 
 ```

@@ -207,6 +207,74 @@ file and break whatever manages it.
 
 ---
 
+## Where the check goes, and how to move it
+
+The release host is a **constant compiled into the binary**, not a setting read
+from a file beside it. `zcd update --print-source` prints the one your binary
+carries, and contacts nothing to do it.
+
+Two things override that constant:
+
+```sh
+ZYCORD_REPO_URL=https://example.org/owner/repo   # environment; every binary, every check
+zcd update --repo https://example.org/owner/repo # one command only, and it wins
+```
+
+`--repo` is `zcd update`'s flag and applies to that invocation. `ZYCORD_REPO_URL`
+is read by `zcd` and by `zycordd`, so it is the one that changes what a *service*
+does — a node picks it up on its next start, along with `packaging/install.sh`,
+which honours the same variable under the same name so an operator who sets one
+does not discover a second.
+
+### When you would use it
+
+- **A fork or a mirror.** The ordinary case, and the one the mechanism was built
+  for: you run someone else's build line, or your own.
+- **A local mirror on the same machine.** `http://` is accepted for a loopback
+  host and refused for every other host — a plaintext URL to `localhost` cannot
+  be reached by a network attacker at all, and everything else is refused rather
+  than warned about.
+- **The published address has moved.** This is the case worth spelling out. A
+  binary installed before a move carries the old address and its check is a dead
+  request whatever mode is set. The trusted keys are compiled in and **do not
+  move with the address**, so pointing an already-installed binary at the new
+  host and restarting restores its update check *from the binary you already
+  have*. No reinstall, no hand-download, no re-verification of anything.
+
+`docs/RUNNING.md` has that as a one-liner for a stranded node.
+
+### The signature is not affected by it
+
+This is the part to be clear about, because "point it somewhere else" sounds like
+it should weaken something, and it does not:
+
+- **The keys are `go:embed`-ed into the binary** and are the only keys it can
+  ever accept. A base URL is a place to fetch bytes from; it is not a place to
+  fetch a key from, and there is no code path by which a host can supply one.
+- **Every step of "What is checked, in order" above runs unchanged.** The
+  manifest signature is verified over the exact bytes as fetched, the downgrade
+  check is made on the parsed version, the archive's SHA-256 must match what the
+  signed manifest declares, and the tier rule still picks the asset.
+- **An overridden host that is not trusted gets nothing extra.** It can serve a
+  404 or a stale signed manifest — which is refused as a downgrade and reported —
+  but it cannot serve a manifest that verifies unless it holds a private key the
+  embedded set names.
+- **The URL itself is validated.** `https`, or `http` to a loopback address;
+  anything else is refused with a reason rather than silently accepted, and a
+  redirect that leaves `https` is refused at every hop.
+
+So the override changes **where** the bytes come from and changes **nothing**
+about what has to be true of them before a binary is replaced. Which is exactly
+why it is safe to hand to a stranded operator over an announcement.
+
+**The one thing that does break it: a key rotation.** The override works because
+the embedded keys and the published ones still agree. If the release keys are
+rotated while a fleet is pointed at a new host by an old binary, that binary
+cannot verify the new manifests and there is no path back except a hand-download.
+See "Key rotation, and its two limits" above.
+
+---
+
 ## What the network sees
 
 This is the first unprompted outbound request `zycordd` makes, and the repository
