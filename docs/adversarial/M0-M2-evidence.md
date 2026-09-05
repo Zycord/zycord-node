@@ -21,7 +21,7 @@ a number is not in a log it is not here.
 | Verdict | **PASS**, `exit=0` on both | **PASS**, `ok`, `exit=0` |
 | Wall clock | 129 600.131 s + 129 600.137 s | 43 573.776 s |
 | Host | dedicated 2-core build host, nothing else running | a 6-core developer machine |
-| Tree | `bdf1604` | `ede62da` |
+| Tree | after the self-updater landed — `update/` present | before it — no `update/` in the tree |
 
 `129600` is exactly 36 h. Both targets exited on the time budget rather than on a
 finding, which is the outcome the budget was chosen to produce.
@@ -81,8 +81,15 @@ evidence that the reachable space is clean, not that the space is small. The cor
 from 25 entries to 112 during the block run — 108 of those newly interesting — so the
 frontier was still moving when the budget expired.
 
-**The M2 tree is one commit behind the M0 tree.** The soak ran at `ede62da` and the fuzz
-at `bdf1604`. They are recorded separately rather than averaged into one claim.
+**The two runs are on different trees, and are recorded separately rather than averaged
+into one claim.** The soak ran on the tree as it stood before the self-update mechanism
+landed; the fuzz ran after it, on a tree with `update/` in it. Everything separating the
+two is that work and the desktop, wallet and packaging changes beside it: `core/` and
+`node/` are byte-identical across the pair, and the only change anywhere under `sim/` is
+the line adding `update/` to the swept-path list of the guard in
+`sim/wiring/history_reference_test.go`. Neither the decoder the fuzz targets drive nor the
+chaos harness moved between them, so the gap does not bear on either result — but a
+measurement is reported against the tree it ran on, not against a tree chosen afterwards.
 
 **Neither ran on a hosted runner, and neither can.** Everything that exercises this tree
 now runs on a developer machine before a push; see
