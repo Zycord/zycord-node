@@ -47,7 +47,7 @@ func TestReapingAnUnservedAnnouncementForgetsItsSeenEntryToo(t *testing.T) {
 	// The window elapses with no body: the announcer is charged and the
 	// announcement must be forgotten — both halves of it.
 	charged := e.ReapUnservedBodies(time.Now().Add(PendingBodyTimeout + time.Second))
-	if len(charged) != 1 || charged[0].Addr != slow {
+	if len(charged) != 1 || charged[0] != slow {
 		t.Fatalf("the reap charged %v, want exactly [%s]: this test is about the "+
 			"charging branch, and any other outcome means it did not run", charged, slow)
 	}

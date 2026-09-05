@@ -438,20 +438,11 @@ func (n *Node) pendingBodyLoop() {
 // ten-point penalty can outlive the connection — buys less than it costs.
 // Separated from the loop so a test can drive one sweep rather than a clock.
 func (n *Node) reapUnservedBodies(now time.Time) {
-	for _, ch := range n.Engine.ReapUnservedBodies(now) {
+	for _, addr := range n.Engine.ReapUnservedBodies(now) {
 		n.mu.Lock()
-		c := n.conns[ch.Addr]
+		c := n.conns[addr]
 		n.mu.Unlock()
-		if c == nil {
-			continue
-		}
-		// The identity tally is bounded exactly as the address tally the engine
-		// already moved: a tip-extension below a ban (I8-H2), an orphan/ghost
-		// unbounded so the ghost-flood terminator still fires. Bounding only one
-		// tally would still ban on the other, since the check is an OR.
-		if ch.AtTip {
-			n.Peers.AdjustKeyNotBelow(c.PeerKey, ScoreUnservedBody, ScoreUnservedBodyFloor)
-		} else {
+		if c != nil {
 			n.Peers.AdjustKey(c.PeerKey, ScoreUnservedBody)
 		}
 	}

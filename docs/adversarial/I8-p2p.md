@@ -183,10 +183,10 @@ test that could not fail; this is a guard that could not see. Both were written
 by someone who had just read the rule they broke: the file naming this evasion
 is the file the new test was added to.
 
-### I8-H2 — The same charge, aimed by a third party ✅ *fixed*
+### I8-H2 — The same charge, aimed by a third party ⚠️ *demonstrated, NOT fixed*
 
-The mechanism above needs no adversary. It also **had** one, and the attacker
-never had to touch the node that did the banning.
+The mechanism above needs no adversary. It also **has** one, and the attacker
+never has to touch the node that does the banning.
 
 `OnGetBlock` refuses over-budget requests through `refuseUnbudgeted`, which
 returns a verdict carrying **no `Reply`** — correctly unscored, since a budget
@@ -199,109 +199,118 @@ peer that has spent nothing of its own budget can be refused."*
 So: an attacker floods honest miner **A** with requests until A's shared
 ceiling is spent. A then announces a block to victim **V**. V asks for the
 body; A's `OnGetBlock` refuses on the node-wide arm and sends nothing; sixty
-seconds later V charges A −10. Ten blocks and A was banned at V — **and the
-attacker was not connected to V at all.** The score persisted to disk with no
-decay, so the ban was permanent.
+seconds later V charges A −10. Twelve blocks and A is banned at V — **and the
+attacker is not connected to V at all.** The score persists to disk with no
+decay, so the ban is permanent.
 
 I8-H1's fix does not close this one, and should not be read as though it did:
-here V's request genuinely *was* sent, so V's books are correct. What was wrong
+here V's request genuinely *was* sent, so V's books are correct. What is wrong
 is that a refusal A was not at fault for is indistinguishable at V from a
 refusal to serve.
 
-**Why the small network was the cheap case, not the safe one — the reason the
-fix mattered before a small-network launch.** `replyBudgetExhausted` reads the
-node-wide arm **first**, and the ceiling is `connSet × BlockByteCapacity` over
-the connections a node *actually holds* — not over the 48-connection
-adversarial maximum the first write-up reasoned from. At `connSet = 2`, the
-live testnet, that is 16,000,000 bytes against a per-identity budget of
-8,000,000: **two identities' worth, not forty-eight.** The ceiling sized as a
-node-wide backstop is, on a small network, barely above the per-peer budget it
-sits behind — so the smaller the network, the cheaper this is, and a two-node
-testnet is the cheapest case rather than the safest. This stays true; it is now
-the reason the fix was taken rather than an open measurement.
-
-**The fix: the ambiguous signal can no longer ban on its own.** The honest root
-fix is to make A's refusal *legible* to V — an explicit "budgeted, ask later"
-answer rather than silence. That is a wire change and it is **not
-backward-tolerant**: `ReadFrame` rejects an unknown message kind and the
-dispatch scores it `ScoreProtocolViolation` (−50), so a new response kind sent
-to an un-upgraded node bans the *sender* faster than the hole it closes. On a
-live network about to be published that is a coordination cost, not a free
-repair, so it is deferred to its own review (see the residual below).
-
-What was taken instead is smaller and keys on the one fact that separates A's
-case from a genuine offender: **A's block is a tip-extension.** An honest miner
-announces a block that extends V's own tip, and the difficulty gate in
-`OnBlockAnnounceFrom` forces such an announcement to carry V's real
-proof-of-work target — a `max_target` header naming the tip is refused
-`ScoreInvalidMessage` there, so only a real block reaches `pending` as a
-tip-extension. That fact is recorded on the pending entry (`announcedBody.atTip`),
-and `ReapUnservedBodies` **bounds the unserved-body charge for a tip-extension**
-at `ScoreUnservedBodyFloor` (−50, above `ScoreBanThreshold`): however long a
-third party sustains the drain, A's real-block announcements can leave it
-heavily penalised (disfavoured in sync selection) but never ban it. Both tallies
-are bounded — the address (`Engine.ReapUnservedBodies` → `AdjustNotBelow`) and
-the identity (`Node.reapUnservedBodies` → `AdjustKeyNotBelow`) — because the ban
-check is `Banned(addr) || BannedKey(key)` and a bound on one half alone still
-bans on the other.
-
-**Why bounding only the tip-extension is what keeps the ghost-flood ban intact.**
-The unserved-body charge is also the *only* terminator of a ghost flood — a peer
-spraying cheap `max_target` announcements naming an **unheld** parent at tip+100,
-which it will never back (`TestAGhostFloodReachesNeitherForwardNorReframe`, and
-the multi-node `announceforward` case). Those are the opposite of a
-tip-extension: cheap to mint and third-party floodable, so the charge on them is
-left **unbounded** and still bans. The two are indistinguishable at V by
-magnitude or rate — which is why a blanket bound, a decay or a retry each either
-disarms the ghost ban or fails against a sustained drain — but they are cleanly
-separable by whether the announcement carried real work for V's own next block.
-An attacker cannot borrow the tip-extension's leniency for a flood: a cheap
-tip-child is refused `ScoreInvalidMessage` at the gate before it ever reaches
-`pending`, and a real one costs a real block's work.
-
-**What it gives up, stated rather than implied.** A peer that mines real blocks
-extending V's tip and then will not serve them can no longer be *banned* on that
-signal — it settles at the floor. That is deliberate and it is the honest case:
-withholding a real block gains an attacker nothing (it propagates via every other
-peer), and body-availability withholding was already carried by sync rotation
-rather than score (`ScoreUnservedBody`'s own doc), with the reachable ban for a
-peer that serves bytes that are a lie being `SyncPenalty`, untouched. Every
-*attributable* penalty — `ScoreInvalidMessage` (−20), `ScoreProtocolViolation`
-(−50), `SyncPenalty`, `ScoreExcessRequest` — is unbounded and still reaches
-`ScoreBanThreshold`; a peer at the floor still crosses into a ban the moment it
-earns one. So **no genuine ban is weakened**: the orphan-flood ban fires
-unchanged, and the attributable bans are untouched.
-
-**Reproduced, and mutation-proven both ways.**
-`TestAThirdPartyDrainingTheSharedBudgetCannotBanAnHonestPeer` drives twelve
-unserved tip-extensions at the Node seam so both tallies move (it asserts each is
-`atTip`, or it would exercise the wrong path). It reached −120, banned on both,
-against the pre-fix tree, and settles at −50, unbanned, now. Forcing the reap to
-charge every entry *unbounded* bans it again — the address half at −120, the
-identity half through `BannedKey`. Forcing it to bound *every* entry makes the
-ghost-flood test stop banning. So the discriminator is load-bearing in both
-directions and neither test is vacuous.
+**No longer merely read — demonstrated.** The earlier text called this confirmed
+as a mechanism and unmeasured as an exploit. It is now driven end to end.
 `TestAThirdPartyDrainsTheSharedBudgetSoAnHonestNodeRefusesALegitimateRequest`
-pins the premise: two identities drain the `connSet = 2` node-wide ceiling and a
-fresh victim's get-block is refused with no reply and **no score against it**.
-`TestTheUnservedBodyFloorDoesNotWeakenAnAttributableBan` pins the attributable
-side. The set runs clean under `-race` (CGO is available).
+establishes the premise: two identities drain the `connSet = 2` node-wide
+ceiling and a fresh victim's `get-block` comes back with no reply and **no score
+against it**, so A's silence is caused by a third party and is unattributable at
+V. `TestAThirdPartyStillDrivesAnHonestPeerToABan` then drives the consequence at
+the Node seam, where both tallies move: **12 announcements accepted, address
+score −120, banned on the address AND the identity.** That test asserts the
+defect; closing I8-H2 means inverting its last assertion.
 
-**Residual, stated plainly.** Three things are not closed here. The wire-level
-"budgeted, ask later" answer — the root fix that makes A's refusal *legible* —
-is deferred to its own pre-freeze review for the compatibility reason above; the
-bound makes it no longer urgent, not unnecessary. The discriminator is the tip:
-if V is a block or more **behind**, A's real announcement names a parent V does
-not yet hold, so V classifies it as an orphan and the charge is unbounded — the
-same lagging-fringe case the difficulty gate itself declines to judge, and the
-one a rejoining node produces. On the healthy mesh I8-H2 targets, V holds the
-tip A extends; the residual is the syncing/partitioned node, where a slow-decay
-or minimum-peer floor is the class-level answer the Confidence section records.
-And the fix is forward-looking: it stops the mechanism *forming* a ban but does
-not retroactively lift one already on disk from before the upgrade — a peer an
-earlier tree drove below the floor stays where it was left, because healing an
-existing score needs that same decay / bounded-unban path, a larger freeze-gated
-change not made here.
+**The shape the attack actually has, which is the part that defeats the obvious
+fixes.** A real miner builds each block on **its own** tip. Under the drain A
+serves nothing on any path — `KindGetBlock` is the single dispatch case for both
+the announce fetch and the sync body fetch — so **V's tip never advances** and A
+runs away from it. Measured in that test: of 12 announcements, exactly **1**
+names V's tip. Every later one is, at V, an orphan whose parent V does not hold.
+That is not an edge case but the normal condition of a lagging receiver, and the
+difficulty gate's own comment already measured it from the other side: a node one
+block behind sees *19 of 20* honest announcements name a parent it does not hold,
+and a rejoining node 14 of 15.
+
+**Why the small network is the cheap case, not the safe one.**
+`replyBudgetExhausted` reads the node-wide arm **first**, and the ceiling is
+`connSet × BlockByteCapacity` over the connections a node *actually holds* — not
+over the 48-connection adversarial maximum the first write-up reasoned from. At
+`connSet = 2`, the live testnet, that is 16,000,000 bytes against a per-identity
+budget of 8,000,000: **two identities' worth, not forty-eight.** The ceiling
+sized as a node-wide backstop is, on a small network, barely above the per-peer
+budget it sits behind — so the smaller the network, the cheaper this is, and a
+two-node testnet is the cheapest case rather than the safest.
+
+**Four fixes were built or costed, and each fails. Recorded so the next author
+does not re-derive them.**
+
+- **Bound `ScoreUnservedBody` outright**, below `ScoreBanThreshold`, so the
+  charge can never ban. Built, and it **disarms the ghost-flood defence**: that
+  same charge is the *only* terminator of a peer spraying cheap `max_target`
+  announcements at an unheld parent, and with the bound in place
+  `TestAGhostFloodReachesNeitherForwardNorReframe` stops banning. Rejected by
+  measurement, not by argument.
+- **Bound it only for a tip-extension** — an announcement naming V's own tip,
+  which the difficulty gate forces to carry real work, so it cannot be minted
+  cheaply and the ghost flood keeps its ban. Built, mutation-proven in both
+  directions, and **ineffective against the attack**: on the shape above only 1
+  of 12 charges qualifies, and that one lands at −10, far above the floor, so the
+  bound never even engages. Score with the fix in place: **−120, still banned on
+  both tallies.** This is the reason the finding is not marked closed. The
+  discriminator is sound and cannot be gamed upward — `pending` has exactly one
+  production write site, behind height `tip+1`, `Target.Eq(want)` and
+  `work.Check` — it simply covers the wrong 1/12 of the traffic.
+- **Retry on the requester side before charging.** Keeps the ghost ban (a
+  flooder has no body to serve on the retry either), but a *sustained* drain
+  defeats it: the node-wide bucket refills every `TargetBlockSeconds` and holding
+  it empty costs the attacker roughly 530 KB/s at `connSet = 2`, so every retry
+  meets the same refusal.
+- **Score decay, or a bounded unban path.** The ghost-flood test drives its
+  charges in ~0 s of wall clock, so any decay slow enough to leave that ban
+  intact is far too slow to save A under a drain measured in block intervals. A
+  general decay is also the freeze-gated behaviour change the Confidence section
+  below already declines to make unmeasured.
+
+**And the wire change does not close it either, which is the finding's real
+sting.** An explicit "budgeted, ask later" answer was the standing recommendation
+— make A's refusal *legible* to V. It fails twice. It is **not
+backward-tolerant**: `ReadFrame` rejects an unknown message kind and the dispatch
+scores it `ScoreProtocolViolation` (−50) before the node drops the peer, so the
+new frame bans its sender at any node not yet upgraded — a coordinated upgrade,
+not a free repair. Worse, the claim is **forgeable**: a ghost flooder answers
+"budgeted" to every `get-block` and escapes the ban outright, reopening the flood
+this charge exists to terminate; and bounding how often a peer may claim it
+re-bans the honest A, whose whole situation is being unable to serve for a long
+time. The indistinguishability moves one message along and survives.
+
+**What would actually close it.** V has to establish that A is genuinely ahead
+*without trusting A's word*, and the only unforgeable evidence is **cumulative
+work V verifies itself**: a forward header chain rooted at V's own tip, with each
+successive target *derived* by V (as `node/sync.ValidateHeaders` and
+`chain.ConsiderBranch` already do along a branch) rather than read out of
+`Header.Target`. An honest miner's run-away chain anchors at V's tip and
+validates; a ghost chain is unanchored and never does; and an attacker who wants
+the leniency has to mine at real difficulty, which is not a flood but
+participation. That is the shape of the fix. It is also branch difficulty
+derivation plus bounded per-peer header state on the hostile gossip ingress path
+— consensus-adjacent, and the difficulty gate deliberately stops at the tip today
+for a measured liveness reason (refusing the lagging fringe's unheld-parent
+announcements is the failure that reverted I7-H4's tip window). It wants its own
+review and is not a pre-freeze change.
+
+**A claim from the rejected fix that was wrong, corrected here.** It argued that
+withholding a real block gains an attacker nothing because "it propagates via
+every other peer". On the announce path it does not: the seen-set dedup read at
+the top of `OnBlockAnnounceFrom` fires **across peers**, so the first announcer
+of an id suppresses every other peer's announcement of it with `CostDeduped`
+until the entry is cleared — which for a charged entry is the reap at
+`PendingBodyTimeout`. The first announcer holds the floor for the window.
+
+**Status for the freeze.** This is open, and publishing this document publishes a
+live, reachable defect with a working recipe. That is a decision for the owner
+rather than something this section can dispose of: close it with the verified-work
+anchoring above, accept it as a known open finding at launch, or hold the
+publication. What is *not* available is marking it fixed — the two fixes that
+would let us do that were built, and both were measured failing.
 
 ---
 
@@ -428,17 +437,23 @@ because the next auditor should not re-run these.
 
 ## Confidence
 
-- **I8-H2 is fixed and the fix is unit-proven, not soak-proven.** The whole
-  chain is now driven, not only read: an honest peer's tip-extensions ban it on
-  both tallies against the pre-fix tree and do not after the bound. The
-  discriminator is mutation-proven in both directions — charge every entry
-  unbounded and the honest peer bans; bound every entry and the ghost flood
-  stops banning — so the tip-extension axis is load-bearing rather than
-  decorative. What is *not* exercised is a live network, the same gap I8-H1's
-  fix has, and the lagging-node edge in the residual is reasoned, not driven.
-  The bound is deliberately narrower than the wire "budgeted, ask later" answer
-  it defers: it does not make A's refusal legible to V, and it does not un-ban a
-  peer an earlier tree already banned.
+- **I8-H2 is now demonstrated rather than merely reachable, and it is OPEN.**
+  The upgrade in this pass is evidence, not a repair: the whole chain is driven
+  end to end and an honest peer reaches −120, banned on both tallies, on the
+  shape the attack actually has. Two candidate fixes were built and both were
+  measured failing — a blanket bound disarms the ghost-flood ban, and the
+  tip-extension bound converts 1 charge in 12 and never engages — and two more
+  were costed off (retry, decay). The wire answer was costed off as well, on
+  forgeability rather than on compatibility alone. **The tree carries no fix for
+  this finding**; the test in `thirdpartyban_internal_test.go` asserts the defect
+  and is the regression test for whoever closes it.
+- **What I am least sure of on I8-H2 is the size of the real fix, not its
+  shape.** Verified forward-chain anchoring is the only unforgeable
+  discriminator I could construct, and I did not build it, so its cost is
+  reasoned rather than measured — in particular how the bounded per-peer header
+  state interacts with the orphan pool and the key-epoch budgets, and whether
+  deriving targets along a branch on the announce path can be done without
+  reintroducing the lagging-fringe refusal that reverted I7-H4.
 - **The fix for I8-H1 is unit-proven and has not run on a network.** Both tests
   are mutation-proven and the p2p suite is green around them, but neither the
   chaos soak nor the live testnet has exercised the new teardown path. The
@@ -450,12 +465,11 @@ because the next auditor should not re-run these.
   tip — the `Health` struct exposes the raw counts upstream of the ban filter
   precisely so an operator can tell those apart, but that is a diagnostic and
   not a recovery. The documented self-isolation incident's *shape* therefore
-  survives even with I8-H1 and I8-H2 closed: what changed is two ways of
-  entering it, both by bounding a specific charge rather than by adding
-  recovery. A peer already banned on disk before those fixes is not healed by
-  either. A slow decay toward zero, and suspending bans when the candidate set
-  would empty, are the two changes that would close the class rather than an
-  instance.
+  survives even with I8-H1 closed: what changed is one way of entering it, and
+  I8-H2 remains a second, still open. A slow decay toward zero, and suspending
+  bans when the candidate set would empty, are the two changes that would close
+  the class rather than an instance — and I8-H2's own section records why the
+  decay half cannot be tuned to close it without disarming the ghost-flood ban.
   Neither is made here; both are larger than an audit's follow-up commit and
   both change behaviour a freeze should not absorb unmeasured.
 - **`ScoreUnservedBody` was the only charge I traced end to end.** The other
