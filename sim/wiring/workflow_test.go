@@ -1,33 +1,67 @@
-// The workflow is a copy of the Makefile that nothing was comparing.
+// The one workflow that is left, and the equality that keeps it that way.
 //
-// This file exists because CI carried its own inline copy of the whole-tree
-// test command instead of calling the Makefile, and the shape of that defect is
-// the one this package was built for: a thing that was correct, complete, and
-// connected to nothing that would notice it drifting.
+// # What this file is now, and why it changed shape
 //
-// A commit added `-timeout 30m` to the Makefile's `race` target, with a comment
-// explaining precisely why Go's ten-minute default is the wrong number for
-// `node/mempool` under the race detector. The commit message was "fix race test
-// timeout". It did not fix the race test timeout, because
-// `.github/workflows/ci.yml` did not call `make race` — it carried its own
-// inline `go test -race ./...`, which Go runs at the ten-minute default. So the
-// fix landed in one file, the job kept failing in the other, and `main`'s own
-// run at that very commit is red for exactly the thing the commit claims to
-// have fixed.
+// It began as a duplication check. CI carried its own inline copy of the
+// whole-tree test command instead of calling the Makefile: a commit gave `make
+// race` an explicit `-timeout 30m`, with a comment explaining exactly why Go's
+// ten-minute default is wrong for `node/mempool` under the race detector, and
+// the workflow kept running `go test -race ./...` at the default. The fix
+// landed in one file and the job kept failing in the other. So this file pinned
+// a golden set of the CI commands naming `./...`, and argued at length that an
+// equality is the only form that survives contact with a reviewer.
 //
-// Nothing caught it. Not `make lint`, which vets Go and not YAML; not `make ci`,
-// whose stages never read the workflow that invokes them; not review, twice. The
-// duplication was invisible *because* both copies were correct when written —
-// they diverged later, silently, in the direction of a red check everyone had
-// learned to skim.
+// **That premise is gone, and it is worth saying exactly how.** This project's
+// forge account was permanently suspended, with no appeal: workflow jobs
+// computed proof-of-work hashes, and the forge's abuse detection read that as
+// using its runners to mine cryptocurrency. Every workflow but one was deleted
+// in response, and the survivor builds release artefacts and does nothing else.
+// There is no `go test` in CI to duplicate the Makefile, because there is no
+// testing in CI. The whole tree is tested on the developer's machine, before
+// the push, and that is the only gate there is.
 //
-// # Why this is a golden list and not a rule
+// So the question this file answers changed, and the answer it gives did not:
+// **an equality, over data somebody had to write down.** What is pinned now is
+// five of them, in the order a reader should meet them.
+//
+//	the files    `.github/workflows/` holds exactly the files named below.
+//	             This is the check that most directly encodes the ban: putting
+//	             `ci.yml` back is a diff here before it is anything else.
+//
+//	the jobs     that file defines exactly the jobs named below. A job added to
+//	             an existing workflow is the second way the pattern returns, and
+//	             it is invisible to the check above.
+//
+//	the Go tool  no command invokes `go test`, `go run` or `go generate`. This
+//	             one is a rule and not a list, deliberately: it is a policy
+//	             rather than a judgement about shell, there is no honest reason
+//	             for a build workflow to execute Go code, and a list would
+//	             invite somebody to add a line to it.
+//
+//	the targets  every `make <target>` in a workflow names a target from the
+//	             allow-list below. The Makefile is where running and building
+//	             are told apart -- `dist` compiles, `release-smoke` starts a
+//	             node -- so an allow-list over target names is an equality with
+//	             the grain of the tree rather than against it.
+//
+//	the binaries every command whose raw text names a program this repository
+//	             builds is one of the commands written down below, and there are
+//	             no others. This is the old check with the marker changed:
+//	             `./...` meant "runs the whole tree", and `zcd` / `zycordd` /
+//	             `zycord-wallet` mean "touches something we compiled". It is the
+//	             one that catches the pattern arriving with no Makefile and no
+//	             Go tool in sight, which is precisely how the deleted
+//	             `randomx-smoke-windows` job was written: PowerShell, a
+//	             downloaded artefact, `Start-Process`, and a loop waiting for the
+//	             engine to name itself.
+//
+// # Why equalities and not rules
 //
 // The first three versions of this file tried to *decide* whether a shell
 // command invokes a whole-tree `go test`: a prefix match, then a substring
-// match, then an anchored regular expression with exemptions for the `windows`
-// job and the `desktop` module. Two hostile reviews put nine evasions through
-// them, and the ninth was created by the fix for the eighth:
+// match, then an anchored regular expression with exemptions. Two hostile
+// reviews put nine evasions through them, and the ninth was created by the fix
+// for the eighth:
 //
 //	prefix      `CGO_ENABLED=0 go test ./...`
 //	substring   the positive half satisfied by `make test-randomx`
@@ -41,55 +75,32 @@
 //	multi-line  a `\` continuation, and a folded `run: >` body
 //	scope       a job id containing `_` inherited the previous job's exemption
 //
-// None needed special knowledge. That is the answer to whether the surface is
-// closable, and CONTRIBUTING.md names the pattern it was following: a check that
-// is patched round after round accrues exactly the debt it exists to prevent,
-// and "flagged-but-unfixed compounds silently".
+// None needed special knowledge. Every one of them lands in the diff of a
+// golden list, because every one of them contains the marker — which is the
+// property of the thing rather than a guess about it. That reasoning is why the
+// lists below are lists, and it is unchanged by the change of subject.
 //
-// So the deciding is gone. What is pinned instead is an equality: **the set of
-// CI commands naming the whole-tree package pattern is exactly the set written
-// down here.** Equality has no evasions — every command above lands in the
-// diff of this list, because every one of them contains `./...`, which is the
-// marker of the thing rather than a guess about it.
-//
-// Two consequences worth stating plainly.
-//
-// The exemptions stop being logic. The `windows` job and the `desktop` module
-// were rules with a granularity, and getting that granularity wrong was itself
-// two of the nine findings — a job-wide `desktop` exemption excused a step in
-// that job running against the *root* module. They are now five lines of data
-// that somebody had to write down. There is no granularity left to get wrong.
-//
-// Editing the workflow now requires editing this list. That is the cost, and it
+// Editing a workflow now requires editing this file. That is the cost, and it
 // is the point: the failure is a prompt to read this comment before adding a
-// whole-tree command, not an assertion about a shell string that may be wrong.
-// It is the same trade `spec/vectors` already makes — a golden corpus,
-// regenerated by hand, whose diff is the review.
+// job, not an assertion about a shell string that may be wrong. It is the same
+// trade `spec/vectors` already makes — a golden corpus, regenerated by hand,
+// whose diff is the review.
 //
-// The two known limits, stated rather than discovered — CONTRIBUTING.md's rule
-// is to write the conditions next to the number, and "equality has no evasions"
-// is true of the nine forms above but not of the property.
+// The two known limits, stated rather than discovered.
 //
-// False negative: a whole-tree run written WITHOUT the marker is not seen.
+// False negative: a command that runs a built program without naming it is not
+// seen. `exe=$(ls dist/randomx/*/zycordd); "$exe"` names it once and could name
+// it never. Closing that needs a rule about what a shell string MEANS, which is
+// the deciding this file spent three rounds proving it cannot do reliably; the
+// honest position is that the lists cover the literal markers and the four
+// checks around them cover the rest — a command like that still has to live in
+// a job, in a file, and a new one of either is a diff.
 //
-//	go test -race -timeout 5m ./node/... ./core/... ./sim/... ./wallet/...
-//
-// Splitting the suite by subtree to parallelise CI is realistic drift, not an
-// adversary, and it has that defect's exact shape — a second definition of how
-// the tree is tested, free to diverge from the Makefile's. `go test all` is the
-// same gap and less likely. Closing it needs a rule about what the package
-// arguments MEAN, which is the deciding this file just spent three rounds
-// proving it cannot do reliably; the honest position is that the check covers
-// the literal pattern and the reviewer covers the rest.
-//
-// False positive: a step whose
-// command merely *mentions* `./...` — an `echo` in a help message, say — lands
-// in the list too, because the marker is matched in the raw text and nothing
-// here parses shell any more. CONTRIBUTING.md is right that a check firing for a
-// benign reason is worse than silence, so the trade is worth naming: the cost is
-// one line added to a list, in a file that has no such command today and gains
-// one about never; the thing bought is that no shell SYNTAX evades the check,
-// which nine measured evasions say the alternative could not offer.
+// False positive: a command that merely *mentions* a program — an `echo` in an
+// error message — lands in the list too, because the marker is matched in the
+// raw text and nothing here parses shell. That is four of the entries below.
+// The trade is worth naming: the cost is four lines somebody read once, and the
+// thing bought is that no shell SYNTAX evades the check.
 //
 // # A job may be a call rather than a list of steps
 //
@@ -98,17 +109,16 @@
 // blindness the parser checks guard against, arriving through the one door they
 // did not watch: `parseJobs` still saw the job, so the job list was green, and
 // `parseRuns` found no step inside it, so every command it runs left the golden
-// list at once. The three `windows` entries went that way when the job was
-// extracted into its own file — the commands did not change, the file the
-// parser reads did.
+// list at once. That is how three `windows` entries once vanished — the
+// commands did not change, the file the parser reads did.
 //
-// The per-job blindness check below is what catches this class, and it caught
-// this instance: a job the parser SEES but reaches no command in. That is why
-// it is a condition on the reading rather than on a count.
+// No workflow calls another today, and the file list is what keeps it that way.
+// The machinery stays because removing it would make the next `workflow_call`
+// silent, which is the state the paragraph above describes.
 //
 // Commands from a called workflow are attributed to the CALLING job, because
 // that is the job the golden list names and the one a reader sees in the checks
-// list. The callee's own job id is not used: renaming it is invisible to CI's
+// list. The callee's own job id is not used: renaming it is invisible to the
 // caller and must not churn the list here.
 //
 // Deliberately textual rather than a YAML parse. The tree carries two direct
@@ -121,14 +131,29 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// workflowPath is the CI definition, relative to this package.
-const workflowPath = "../../.github/workflows/ci.yml"
+// workflowDir holds every workflow this repository has, relative to this
+// package. It is read as a directory rather than by naming one file, so that a
+// second workflow appearing is seen by every check here on the day it lands and
+// not only by the file list.
+const workflowDir = "../../.github/workflows"
 
-// makefilePath is the file it is required not to duplicate.
+// workflowFiles is that directory's contents, and it is the shortest statement
+// of the policy in the tree.
+//
+// One file, which builds release artefacts. Nothing else runs on a hosted
+// runner: no tests, no fuzzing, no vector regeneration, no job that starts a
+// binary this repository built. The account this project published from was
+// permanently suspended for the last of those, so a second entry here is not a
+// tidiness question — it is the decision that cost the account, being taken
+// again.
+var workflowFiles = []string{"release.yml"}
+
+// makefilePath is where the whole tree is now tested from, and the only place.
 const makefilePath = "../../Makefile"
 
 // repoRoot is the repository root, relative to this package. A workflow's
@@ -173,15 +198,64 @@ func localWorkflows() resolver {
 	}
 }
 
-// treeWide is the whole-tree package pattern.
-//
-// It is matched against the command's RAW text, quotes and all. Stripping quotes
-// first — which an earlier version did, to stop an `echo` about `go test` firing
-// the check — made `go test -race "./..."` invisible, which is ordinary
-// defensive shell and the exact thing being guarded. The marker is the marker
-// wherever it appears; whether the command is prose is settled by the list
-// below, not by parsing shell.
+// treeWide is the whole-tree package pattern. It no longer appears in any
+// workflow — nothing there runs a test — and it is still the marker the
+// Makefile's own targets are read for, which is where the whole tree is
+// exercised now.
 const treeWide = "./..."
+
+// builtPrograms are the names of the programs this repository compiles.
+//
+// They are the marker for "this command touches something we built", and they
+// are matched against a command's RAW text, quotes and all. Stripping quotes
+// first — which an earlier version of the `./...` check did, to stop an `echo`
+// firing it — made `go test -race "./..."` invisible, which is ordinary
+// defensive shell and was the exact thing being guarded. The marker is the
+// marker wherever it appears; whether the command is prose is settled by the
+// list in TestNothingInAWorkflowRunsWhatItBuilt, not by parsing shell.
+//
+// `zcd-randomx` and `zycordd.exe` need no entry: they contain `zcd` and
+// `zycordd`, and a substring match is what makes that free.
+var builtPrograms = []string{"zcd", "zycordd", "zycord-wallet"}
+
+// goSubcommands are the ways of invoking the Go tool that EXECUTE code rather
+// than compile it. None of them may appear in a workflow.
+//
+// A rule rather than a list, and that is the one place this file still decides
+// something. It can afford to: it is a policy, not a judgement about shell — a
+// build workflow has no honest use for any of these, so there is no case to
+// argue and nothing to exempt. A golden list here would be an invitation to add
+// a line to it, and the line somebody would add is `go test ./core/pow/randomx/`.
+var goSubcommands = []string{"go test", "go run", "go generate", "go tool"}
+
+// makeTargets is every Make target a workflow is allowed to call.
+//
+// The Makefile is where building and running are told apart, so an allow-list
+// over target names reads with the grain of the tree: `dist` and `dist-randomx`
+// compile, `dist-deb-check` unpacks an archive and reads its metadata,
+// `repro-desktop` builds the wallet three times and compares the bytes. What is
+// NOT here is the half of the Makefile that starts things — `release-smoke`
+// starts a node and waits for it to name its proof-of-work engine, `test`,
+// `race`, `test-randomx`, `fuzz`, `differential`, `bench`, `soak` and `localnet`
+// run the suites, and `ci` runs most of them at once. Every one of those is
+// worth running; none of them may run here.
+//
+// Adding a target to this list is a decision about what a hosted runner does,
+// and the reasoning belongs in the pull request that adds it.
+var makeTargets = []string{
+	"build",
+	"dist",
+	"dist-deb",
+	"dist-deb-check",
+	"dist-desktop",
+	"dist-randomx",
+	"repro-desktop",
+}
+
+// makeCall finds a `make <target>` invocation anywhere in a command's raw text,
+// including one behind `sudo`, `env VAR=x`, a pipe or a `&&` — because the
+// target name is what is being read and none of those hide it.
+var makeCall = regexp.MustCompile(`\bmake\s+([a-z][a-z0-9-]*)`)
 
 // runLine matches a step's `run:` key and captures whatever follows it on the
 // same line: either the command itself, or a block-scalar indicator.
@@ -278,22 +352,172 @@ type command struct {
 	Text       string
 }
 
-// readWorkflowCommands returns every shell command in the workflow, tagged with
-// the job and working directory it runs under.
+// workflowNames returns the .yml files in the workflow directory, in name
+// order.
+func workflowNames(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Clean(workflowDir))
+	if err != nil {
+		t.Fatalf("reading %s: %v", workflowDir, err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yml") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return names
+}
+
+// readWorkflowCommands returns every shell command in EVERY workflow, tagged
+// with the job and working directory it runs under.
+//
+// Every workflow rather than a named one: the file list below says there is
+// exactly one, and reading the directory means a second is scanned by every
+// check here the day it appears rather than only by the list that forbids it.
+// Two checks seeing the same file is the cheap half of a belt and braces; a
+// smuggled file that only one of them looks at is the expensive half.
 func readWorkflowCommands(t *testing.T) []command {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Clean(workflowPath))
-	if err != nil {
-		t.Fatalf("reading the workflow: %v", err)
+	var cmds []command
+	for _, name := range workflowNames(t) {
+		path := filepath.Join(workflowDir, name)
+		b, err := os.ReadFile(filepath.Clean(path))
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		// A resolver per file: the cycle guard is per-traversal state, and one
+		// shared across files would leave the second walk blind to whatever the
+		// first had already followed.
+		cmds = append(cmds, parseRuns(string(b), localWorkflows())...)
 	}
-	cmds := parseRuns(string(b), localWorkflows())
 	if len(cmds) == 0 {
-		t.Fatalf("parsed no run: steps out of %s; the parser has gone stale", workflowPath)
+		t.Fatalf("parsed no run: steps out of %s; the parser has gone stale", workflowDir)
 	}
 	return cmds
 }
 
+// TestTheWorkflowDirectoryHoldsOnlyTheBuild is the shortest check in this file
+// and the one that carries the most.
+//
+// The property: **`.github/workflows/` holds exactly the files written down
+// here.**
+//
+// This project's forge account was permanently suspended, with no appeal,
+// because workflow jobs computed proof-of-work hashes and the forge's abuse
+// detection read that as mining on its runners. The response was to delete
+// every workflow but the one that builds release artefacts, and to move all
+// testing onto the developer's machine, before the push.
+//
+// A file added here is that decision being reversed, whatever the file is
+// called and whatever it contains. It may be the right decision — but it is a
+// decision, and this is where somebody has to take it in writing rather than by
+// adding a file nobody reviews twice. Every other check in this file assumes
+// the answer to "what runs on a hosted runner" is short enough to read.
+func TestTheWorkflowDirectoryHoldsOnlyTheBuild(t *testing.T) {
+	got := workflowNames(t)
+	want := append([]string(nil), workflowFiles...)
+	sort.Strings(want)
+
+	if len(got) != len(want) {
+		t.Errorf("%s holds %d workflow(s) and %d are written down here:\n"+
+			"    holds:   %v\n    written: %v", workflowDir, len(got), len(want), got, want)
+	}
+	for _, name := range got {
+		if !contains(want, name) {
+			t.Errorf("%s/%s is a workflow this list does not name.\n"+
+				"Adding a workflow is not a tidiness question here. The account this\n"+
+				"project published from was permanently suspended, with no appeal, for\n"+
+				"jobs that computed proof-of-work hashes on hosted runners; what is left\n"+
+				"is one workflow that builds release artefacts and runs nothing.\n"+
+				"Everything that tests this tree runs on the developer's machine before\n"+
+				"the push — CONTRIBUTING.md and docs/RELEASE.md name the commands.\n"+
+				"If this file genuinely belongs, add it here and say in the pull request\n"+
+				"what it runs and why a hosted runner's log could not be read as mining.",
+				workflowDir, name)
+		}
+	}
+	for _, name := range want {
+		if !contains(got, name) {
+			t.Errorf("%s/%s is written down here and is not in the tree.\n"+
+				"If it was deliberately removed, remove it from this list too.",
+				workflowDir, name)
+		}
+	}
+}
+
+// TestNoWorkflowExecutesGoCode is the rule, and it is the only one here.
+//
+// The property: **no command in any workflow invokes `go test`, `go run`,
+// `go generate` or `go tool`.**
+//
+// It is a rule and not a golden list on purpose. The lists in this file exist
+// because deciding whether a shell string does something is unreliable — nine
+// measured evasions say so. This is not that question. It is a policy about
+// what a hosted runner is for, it admits no exemptions, and a list would only
+// give somebody a place to write one down. The line that would be written is
+// `go test -count=1 -run TestVendoredTreeMatchesPinned ./core/pow/randomx/`,
+// which was a real step of a real job, was worth running, and is now run on the
+// release machine instead.
+//
+// `go build` and `go vet` are absent from the forbidden set and that is not an
+// oversight: they compile, they do not execute, and compiling a binary that
+// contains a proof-of-work engine is not the thing that got this project
+// banned. Running one is.
+func TestNoWorkflowExecutesGoCode(t *testing.T) {
+	for _, c := range readWorkflowCommands(t) {
+		for _, sub := range goSubcommands {
+			if strings.Contains(c.Text, sub) {
+				t.Errorf("a workflow command invokes %q:\n    %s\n"+
+					"Nothing in a workflow may execute Go code. The whole tree is tested on\n"+
+					"the developer's machine before the push, and that is the only gate\n"+
+					"there is — `make ci`, and the release additions in docs/RELEASE.md.\n"+
+					"The reason is in this file's header and in the surviving workflow's:\n"+
+					"a job that runs the engine is what cost this project its account.",
+					sub, show(c))
+			}
+		}
+	}
+}
+
+// TestAWorkflowCallsOnlyTheBuildTargets is the allow-list, and it is where the
+// distinction this whole policy turns on is actually written down.
+//
+// The property: **every `make <target>` in a workflow names a target from
+// `makeTargets`.**
+//
+// Compiling a binary that contains the proof-of-work engine is not mining, and
+// hashing a finished artefact to show two builds agree is ordinary build
+// practice. Running the proof-of-work function is the thing that looks like
+// mining. The Makefile is where those two are already separated by name —
+// `dist-randomx` compiles the engine, `release-smoke` starts a node and waits
+// for it to print which engine it selected — so an allow-list over target names
+// says the policy in the tree's own vocabulary instead of in a regular
+// expression about shell.
+//
+// The failure names the target rather than the command, because the target is
+// the thing to think about.
+func TestAWorkflowCallsOnlyTheBuildTargets(t *testing.T) {
+	for _, c := range readWorkflowCommands(t) {
+		for _, m := range makeCall.FindAllStringSubmatch(c.Text, -1) {
+			if contains(makeTargets, m[1]) {
+				continue
+			}
+			t.Errorf("a workflow calls `make %s`:\n    %s\n"+
+				"Only the build targets may run on a hosted runner: %v.\n"+
+				"Everything else in the Makefile either runs the test suites or starts a\n"+
+				"binary this repository built, and a runner log full of proof-of-work\n"+
+				"hashes is what got this project's account permanently suspended.\n"+
+				"If this target genuinely only builds, add it to makeTargets and say so\n"+
+				"in the pull request.", m[1], show(c), makeTargets)
+		}
+	}
+}
+
 // TestTheParserStillSeesTheWholeWorkflow is the obsolescence check, and it is
+
 // the one this file most needs.
 //
 // The property: **the set of jobs the parser finds is exactly the set of jobs
@@ -348,23 +572,27 @@ func readWorkflowCommands(t *testing.T) []command {
 // silence.
 //
 // The narrower pair gives up detecting a step that was *deleted*. The golden
-// list already catches deletion of the five whole-tree commands, the positive
-// half catches deletion of `make test` and `make race`, and a deleted `echo`
-// step is not worth a red build.
+// list of commands touching a built program already catches deletion of those,
+// and a deleted `echo` step is not worth a red build.
+//
+// The job names carry a second job now, and it is the one this file cares most
+// about. `cli`, `cli-randomx` and `desktop` compile; `publish` collects, attests
+// and releases. A fifth entry is somebody proposing that a hosted runner do
+// something else, which is the decision the file list above is about.
 func TestTheParserStillSeesTheWholeWorkflow(t *testing.T) {
-	want := []string{
-		"build", "vectors", "differential", "fuzz", "randomx",
-		"canonical", "desktop", "windows", "reproducible",
-	}
+	want := []string{"cli", "cli-randomx", "desktop", "publish"}
 
-	b, err := os.ReadFile(filepath.Clean(workflowPath))
-	if err != nil {
-		t.Fatalf("reading the workflow: %v", err)
+	var src string
+	for _, name := range workflowNames(t) {
+		b, err := os.ReadFile(filepath.Clean(filepath.Join(workflowDir, name)))
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		src += string(b) + "\n"
 	}
-	src := string(b)
 
 	// A fresh resolver for each traversal: they are independent walks of the
-	// same file, and the cycle guard is per-resolver state.
+	// same text, and the cycle guard is per-resolver state.
 	for _, blind := range blindSteps(src, localWorkflows()) {
 		t.Errorf("the parser cannot read this step:\n%s\n"+
 			"It has what looks like a `run:` key and no `uses:`, and yet produced no\n"+
@@ -409,8 +637,9 @@ func TestTheParserStillSeesTheWholeWorkflow(t *testing.T) {
 	for _, j := range got {
 		if !contains(want, j) {
 			t.Errorf("the workflow defines a job this list does not name: %q.\n"+
-				"Add it — and while you are here, check that it does not run the whole\n"+
-				"tree inline.", j)
+				"Add it — and while you are here, check that it BUILDS rather than\n"+
+				"runs. A job that starts what it compiled is the one thing that may\n"+
+				"never come back.", j)
 		}
 	}
 }
@@ -478,71 +707,93 @@ func parseJobs(src string) []string {
 	return jobs
 }
 
-// TestTheWholeTreeSuitesRunOnlyWhereTheyWereReviewed is the duplication itself,
-// stated as an equality.
+// TestNothingInAWorkflowRunsWhatItBuilt is the equality with the sharpest
+// teeth, and it is the old whole-tree list with the marker changed.
 //
-// The property, in one sentence: **every CI command naming the whole-tree
-// package pattern is one of the commands written down here, and there are no
-// others.**
+// The property, in one sentence: **every workflow command whose raw text names
+// a program this repository builds is one of the commands written down here,
+// and there are no others.**
 //
-// That is the negative half — no step re-implements what the Makefile defines —
-// expressed as an equality rather than as a judgement about shell syntax. See
-// the package comment for why: nine evasions got through three generations of
-// judgement, one of them introduced by the previous one's fix.
+// The marker used to be `./...`, which meant "runs the whole tree". It is now
+// `zcd`, `zycordd` and `zycord-wallet`, which mean "touches something we
+// compiled" — because the thing that has to be impossible here is no longer a
+// duplicated test command, it is a job that STARTS a binary. This project's
+// forge account was permanently suspended for exactly that: the engine tests
+// and two smoke jobs computed proof-of-work hashes on hosted runners, and the
+// abuse detection read them as mining.
 //
-// The list is short because the property is narrow, and each entry is an
-// exemption someone had to write down and a reviewer had to read:
+// The two checks either side of this one — the Go-tool rule and the Make
+// allow-list — cover the two ordinary ways of running something. This one
+// covers the third, and it is the way the job that mattered most was actually
+// written: `randomx-smoke-windows` downloaded the published archive, unzipped
+// it, and used PowerShell's `Start-Process` on `zycordd.exe` with a loop
+// waiting for the engine line. No Makefile, no Go tool, nothing a rule about
+// either would have seen. What it could not avoid was naming the binary.
 //
-//	windows           GNU make is absent from the `windows-latest` image, so the
-//	                  Makefile is not the entry point on that platform.
-//	                  CONTRIBUTING.md says so, and that job's own header says so
-//	                  at length.
+// The list is short because the property is narrow, and each entry is a
+// command somebody had to write down and a reviewer had to read:
 //
-//	desktop/          A separate Go module. `./...` evaluated there names a
-//	                  package set no target in this Makefile builds, and keeping
-//	                  `make ci` unaware of it is why the module is separate. Note
-//	                  the two entries carrying `windows` as the job: the desktop
-//	                  wallet is built on both runners.
+//	cli      four lines of the rebuild-and-compare step. Two read a hash out of
+//	         a file and out of `bin/zcd`; two are error text that mentions the
+//	         program. Hashing a finished artefact to show two builds of one
+//	         commit agree is ordinary build practice and is the whole of the
+//	         reproducibility claim docs/INSTALL.md makes — it is not running
+//	         anything, and it stays.
 //
-// The `build` job appears nowhere in this list, and that absence is the change
-// the fix asked for: after routing `tests` through `make test`, no step of that
-// job names the whole tree at all — the Makefile does.
+//	publish  two lines that stage the wallet archives and merge their checksum
+//	         lists, and the update manifest, which is the one place a workflow
+//	         executes a
+//	         binary from a release archive. `zcd update manifest --sign` hashes
+//	         the staged files and signs the list with an ed25519 key; `zcd
+//	         update verify` reads that signature back. Neither touches the
+//	         proof-of-work engine — `randomx.Available()` is a build-tag
+//	         question — and the round trip is the only way to know the manifest
+//	         a node will read is one this release can produce. It is the entry
+//	         to look hardest at if this list ever grows.
 //
-// Adding a step that runs `./...` fails here. If it belongs — a new platform
-// job, a new separate module — add it, and say in the pull request why the
-// Makefile is not the entry point for it. If it does not, call the target.
-func TestTheWholeTreeSuitesRunOnlyWhereTheyWereReviewed(t *testing.T) {
-	// Every reviewed use of the whole-tree pattern in ci.yml. Ordered as the
-	// file is.
+// Adding a command that names a built program fails here. If it belongs, add
+// it, and say in the pull request what it does with the binary. If it starts
+// it, it does not belong, and no wording in a pull request changes that.
+func TestNothingInAWorkflowRunsWhatItBuilt(t *testing.T) {
+	// Every reviewed command naming a built program. Ordered as the file is.
 	want := []command{
-		{"desktop", "desktop", "go vet -tags desktop,webkit2_41 ./..."},
-		{"desktop", "desktop", "go test -tags desktop,webkit2_41 ./..."},
-		{"windows", "", "go vet ./..."},
-		{"windows", "", "go test -timeout 30m ./..."},
-		{"windows", "desktop", "go test -tags desktop ./..."},
+		{"cli", "", `host=$(cat dist/SHA256SUMS.binaries | grep 'linux-amd64/zcd$' | cut -d' ' -f1)`},
+		{"cli", "", `local=$(sha256sum bin/zcd | cut -d' ' -f1)`},
+		{"cli", "", `echo "the linux/amd64 zcd in dist/ does not match a fresh make build"`},
+		{"cli", "", `echo "zcd is reproducible: $local"`},
+		{"publish", "", `cp staging/zycord-wallet-*/zycord-wallet-* release/`},
+		{"publish", "", `cat staging/zycord-wallet-*/SHA256SUMS.desktop     | sort -k2 > release/SHA256SUMS.desktop`},
+		{"publish", "", `tar xzf "$cli" --strip-components=1 -C tools --wildcards '*/zcd'`},
+		{"publish", "", `test -x tools/zcd || { echo "no zcd was unpacked from $cli" >&2; exit 1; }`},
+		{"publish", "", `./tools/zcd update manifest --dir release --version "${GITHUB_REF_NAME}" --sign`},
+		{"publish", "", `test -x tools/zcd || { echo "tools/zcd is missing; the signing step did not run" >&2; exit 1; }`},
+		{"publish", "", `./tools/zcd update verify --dir release`},
 	}
 
 	var got []command
 	for _, c := range readWorkflowCommands(t) {
-		if strings.Contains(c.Text, treeWide) {
-			got = append(got, c)
+		for _, prog := range builtPrograms {
+			if strings.Contains(c.Text, prog) {
+				got = append(got, c)
+				break
+			}
 		}
 	}
 
 	// Compared as multisets, not as sequences. Moving two job blocks past each
-	// other in the YAML is a pure reorder that changes nothing about what CI
-	// runs, and an ordered comparison reported four "command changed" errors for
-	// it — four failures naming real commands, none of them a real change. Job
-	// and working-directory are already part of each entry's identity, so
-	// ordering carries no information that would be lost.
+	// other in the YAML is a pure reorder that changes nothing about what runs,
+	// and an ordered comparison reported four "command changed" errors for it —
+	// four failures naming real commands, none of them a real change. Job and
+	// working-directory are already part of each entry's identity, so ordering
+	// carries no information that would be lost.
 	missing, extra := diff(want, got)
 	for _, c := range extra {
-		t.Errorf("unreviewed whole-tree command:\n    %s\n%s", show(c), why)
+		t.Errorf("unreviewed command naming a program this repository builds:\n    %s\n%s", show(c), why)
 	}
 	for _, c := range missing {
-		t.Errorf("a reviewed whole-tree command is gone from the workflow:\n    %s\n"+
+		t.Errorf("a reviewed command is gone from the workflows:\n    %s\n"+
 			"If it was deliberately removed or edited, update the list here too — and if\n"+
-			"it was NOT, something is running the whole tree somewhere else now.", show(c))
+			"it was NOT, something else is touching a built binary now.", show(c))
 	}
 }
 
@@ -573,95 +824,95 @@ func diff(want, got []command) (missing, extra []command) {
 // the person who trips it is editing YAML and has no reason to have read this
 // file's package comment.
 const why = "" +
-	"The Makefile defines how the whole tree is tested, and a copy in the workflow is a\n" +
-	"copy that stops tracking it. That is the defect: a commit gave `make race` " +
-	"an explicit\n" +
-	"-timeout 30m because node/mempool exceeds Go's ten-minute default under the race\n" +
-	"detector, CI kept its own inline command, and the fix never reached the job that\n" +
-	"was failing.\n" +
-	"If this command should call a Makefile target, call it: `make test`, `make race`.\n" +
-	"If it genuinely should not — a separate module, or a runner without GNU make —\n" +
-	"update the list in this test and say why in the pull request."
+	"A workflow may BUILD the programs in this tree. It may not RUN them.\n" +
+	"That is not a style preference: this project's forge account was permanently\n" +
+	"suspended, with no appeal, because jobs computed proof-of-work hashes on hosted\n" +
+	"runners and the abuse detection read it as mining. Compiling a binary that\n" +
+	"contains the engine is fine. Hashing a finished artefact to show that two builds\n" +
+	"agree is fine. Starting one is what ended the account.\n" +
+	"Everything that runs this tree runs on the developer's machine before the push:\n" +
+	"`make ci` for a contributor, plus the release additions in docs/RELEASE.md.\n" +
+	"If this command only reads or names an artefact, add it to the list in this test\n" +
+	"and say so in the pull request."
 
 // show renders a command the way a reader needs it, spelling out the working
 // directory: the same text is a different fact at the repository root and inside
 // `desktop/`, and a failure has to say which one it is looking at.
 func show(c command) string {
-	wd := "at the repository root, so ./... is the root module"
+	wd := "at the repository root"
 	if c.WorkingDir != "" {
 		wd = "working-directory: " + c.WorkingDir
 	}
 	return "job " + c.Job + " (" + wd + "): " + c.Text
 }
 
-// TestTheWholeTreeSuitesAreInvokedThroughTheMakefile is the positive half.
+// TestTheLocalGateStillRunsTheWholeTree pins the gate itself, at its source.
 //
-// The property: **the `build` job reaches the whole-tree suites by calling the
-// Makefile targets that define them.**
+// The property: **`make ci` reaches `test` and `race`, `make test` runs the
+// whole tree, and `make race` runs it with `-race` and an explicit `-timeout`.**
 //
-// The list above forbids the inline form; on its own it is satisfied by deleting
-// the steps entirely, which is a worse defect than the one it guards. This one
-// requires them present, by exact equality — an earlier `strings.Contains` was
-// satisfied by `make test-randomx`, a target this Makefile really defines, so a
-// build job that had stopped running the whole-tree suites passed the check that
-// exists to notice exactly that.
-func TestTheWholeTreeSuitesAreInvokedThroughTheMakefile(t *testing.T) {
-	cmds := readWorkflowCommands(t)
-
-	for _, target := range []string{"make test", "make race"} {
-		found := false
-		for _, c := range cmds {
-			if c.Job == "build" && c.WorkingDir == "" && c.Text == target {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("no step of the build job runs exactly %q.\n"+
-				"The whole-tree suites must be invoked through the Makefile, which is where\n"+
-				"the flags they need are defined and explained.", target)
-		}
-	}
-}
-
-// TestTheMakefileTargetsStillRunWhatCICallsThemFor pins the thing the
-// duplication was actually about, at its source.
+// This used to be the smaller half of the file: CI ran the suites, and this
+// checked that the target CI called still carried the flags. The suites do not
+// run in CI any more — nothing does — so `make ci` on a developer's machine
+// before the push is now the ONLY thing standing between a defect and `dev`.
+// A gate with nothing behind it is worth checking; a gate with everything
+// behind it is worth checking more.
 //
-// The property: **`make test` runs the whole tree, and `make race` runs it with
-// `-race` and an explicit `-timeout`.**
+// The three assertions are the three ways it can go quietly hollow. `ci:` can
+// lose a prerequisite. `test:`'s recipe can stop naming the whole tree —
+// replacing it with `@echo 'skipping the suite'` once left every assertion in
+// this file green. And `race:` can lose its `-timeout`, which is the original
+// defect this file was written for: Go's ten-minute default cuts
+// `node/mempool`'s eviction suite under the race detector, so the target
+// carries an explicit ceiling and a comment explaining the measurement.
 //
-// The two tests above route CI through the target. They say nothing about
-// whether the target still carries the flag that made routing worth doing — and
-// a `race:` recipe that lost its `-timeout` would satisfy both of them while
-// putting CI back at Go's ten-minute default, which is the original defect
-// wearing the fix's clothes. The Makefile is read directly, because the flag is
-// the ground truth here and `make -n` would only report it second-hand.
-func TestTheMakefileTargetsStillRunWhatCICallsThemFor(t *testing.T) {
+// The Makefile is read directly, because the recipe is the ground truth here
+// and `make -n` would only report it second-hand.
+func TestTheLocalGateStillRunsTheWholeTree(t *testing.T) {
 	b, err := os.ReadFile(filepath.Clean(makefilePath))
 	if err != nil {
 		t.Fatalf("reading the Makefile: %v", err)
 	}
 
-	// The `test` target, pinned for the reason the golden list exists: routing CI
-	// through a target is worth nothing if the target stops running the suite.
-	// Replacing `test:`'s recipe with `@echo 'skipping the suite'` left every
-	// assertion in this file green — a CI running no whole-tree suite at all,
-	// which is the state this file's own comments call strictly worse than the
-	// duplication itself, reachable from one file over.
+	// `make ci` is the command CONTRIBUTING.md and docs/RELEASE.md both name as
+	// the gate, and it is a list of prerequisites rather than a recipe — so it
+	// is read from the target line, not through recipeFor. A prerequisite
+	// silently dropped from here is the whole gate losing a suite while every
+	// document that names `make ci` goes on being true.
+	gate := regexp.MustCompile(`(?m)^ci:(.*)$`).FindStringSubmatch(string(b))
+	if gate == nil {
+		t.Fatal("the Makefile has no `ci:` target; it is the local gate both\n" +
+			"CONTRIBUTING.md and docs/RELEASE.md tell people to run before pushing")
+	}
+	for _, prereq := range []string{"test", "race"} {
+		if !contains(strings.Fields(gate[1]), prereq) {
+			t.Errorf("`make ci` no longer runs `%s`:\n    ci:%s\n"+
+				"Nothing runs on a hosted runner any more, so this target is the gate. A\n"+
+				"suite dropped from here is a suite nothing runs at all, and every\n"+
+				"document that says \"run `make ci`\" stays true while meaning less.",
+				prereq, gate[1])
+		}
+	}
+
+	// The `test` target, pinned for the reason the golden lists exist: naming a
+	// target in a document is worth nothing if the target stops running the
+	// suite. Replacing `test:`'s recipe with `@echo 'skipping the suite'` left
+	// every assertion in this file green — no whole-tree suite running
+	// anywhere, reachable from one file over.
 	testRecipe, ok := recipeFor(string(b), "test")
 	if !ok {
-		t.Fatal("the Makefile has no `test:` target; CI was routed through it")
+		t.Fatal("the Makefile has no `test:` target; it is the whole-tree suite")
 	}
 	if !strings.Contains(testRecipe, treeWide) {
 		t.Errorf("the test target no longer runs the whole tree:\n%s\n"+
-			"`ci.yml` calls `make test` instead of an inline `go test ./...`, so\n"+
-			"this recipe is now the only definition of what the whole-tree suite is.",
+			"No workflow runs a test, so this recipe is the only definition of what the\n"+
+			"whole-tree suite is and the only place it is ever run from.",
 			testRecipe)
 	}
 
 	recipe, ok := recipeFor(string(b), "race")
 	if !ok {
-		t.Fatal("the Makefile has no `race:` target; CI was routed through it")
+		t.Fatal("the Makefile has no `race:` target; `make ci` runs it")
 	}
 	if !strings.Contains(recipe, "-race") {
 		t.Errorf("the race target does not pass -race:\n%s", recipe)
@@ -670,8 +921,8 @@ func TestTheMakefileTargetsStillRunWhatCICallsThemFor(t *testing.T) {
 		t.Errorf("the race target no longer passes an explicit -timeout:\n%s\n"+
 			"Go's ten-minute default is not enough for node/mempool's eviction suite under\n"+
 			"the race detector — measured at 709s and then 984s on darwin/arm64, and cut at\n"+
-			"exactly 600s on the CI runner. Removing the flag restores the\n"+
-			"failure that routing CI through this target was meant to fix.\n"+
+			"exactly 600s on the runner that used to run it. Removing the flag restores\n"+
+			"the failure this target's explicit ceiling exists to prevent.\n"+
 			"The VALUE is deliberately not checked, so that the ceiling can be lowered\n"+
 			"again once node/mempool's own runtime leaves room for it.",
 			recipe)

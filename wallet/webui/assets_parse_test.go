@@ -199,18 +199,20 @@ var controls = []struct {
 // It skips when node is absent, so `go test ./...` and `make ci` need no new
 // toolchain on a contributor's machine — the same shape as
 // TestSaveKeyFileOnAFilesystemWithoutHardLinks, which skips without hdiutil.
-// The skip is what CI removes rather than what CI relies on:
-// .github/workflows/ci.yml installs a pinned node before this step, so on the
-// runner the skip cannot fire. The controls above are the other half — they
-// are why a node that is present but wrong fails loudly instead of passing.
+// A workflow used to install a pinned node so the skip could not fire on the
+// runner. No workflow runs a test any more — see sim/wiring/workflow_test.go —
+// so the skip is now real wherever node is missing, and this test is only run
+// by someone who has node installed. The controls above are what stops that
+// being worse than nothing: they are why a node that is present but WRONG fails
+// loudly instead of passing, which is the failure a silent skip would hide.
 func TestTheEmbeddedFrontendParses(t *testing.T) {
 	scripts := embeddedScripts(t)
 
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skipf("node not on PATH (%v); the wallet frontend is not compiled on this machine. "+
-			"CI installs node and runs this test — see the 'the wallet frontend parses' "+
-			"step in .github/workflows/ci.yml", err)
+		t.Skipf("node not on PATH (%v); the wallet frontend is not compiled on this machine, "+
+			"so this test proves nothing here. Nothing runs it for you: install node and "+
+			"re-run before pushing a change to wallet/webui/", err)
 	}
 
 	for _, c := range controls {

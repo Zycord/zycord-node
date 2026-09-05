@@ -41,8 +41,10 @@ different one, and for this project a stronger one:
 > A reproducible build asserts *"this came from this source, and anyone can check."*
 
 For an anonymous L1 the second is the argument that carries, and it is not a
-slogan here: CI rebuilds `zcd` twice on every push to `main` and every tag, and fails if the two
-binaries differ by a byte (`.github/workflows/ci.yml`, job `reproducible`). You
+slogan here: the release workflow rebuilds `zcd` at every tag and fails if the
+freshly built binary differs by a byte from the one it is about to publish, and
+`make repro` builds it in two directories and compares — which is a command you
+can run yourself, on this source, right now. You
 do not have to trust the person who built the binary you downloaded. You can
 build it yourself and compare hashes — and if they match, the question of who
 built it stops mattering.

@@ -13,12 +13,15 @@
 // the canonical build certified an artefact no release contains, and the
 // artefact every release does contain was deleted by the same command.
 //
-// Nothing caught it, and the reason is the part worth keeping. ci.yml's
-// canonical job runs `make canonical` twice and diffs the checksums, which reads
-// like exactly the check for this. It is not: both sides of that diff are the
-// surviving binary, so the comparison has no term for what was lost and is
-// structurally incapable of reporting it. A check whose signal is derived from
-// the state the defect corrupts is the mirror CONTRIBUTING.md tabulates.
+// Nothing caught it, and the reason is the part worth keeping. The canonical CI
+// job of the day ran `make canonical` twice and diffed the checksums, which
+// reads like exactly the check for this. It was not: both sides of that diff
+// are the surviving binary, so the comparison has no term for what was lost and
+// is structurally incapable of reporting it. A check whose signal is derived
+// from the state the defect corrupts is the mirror CONTRIBUTING.md tabulates.
+// That job no longer exists — nothing but the release build runs on a hosted
+// runner now, and sim/wiring/workflow_test.go records why — so the comparison
+// below is run from the release checklist instead.
 //
 // Two properties are pinned here, and they are the two halves of the fix.
 //
@@ -53,6 +56,10 @@ import (
 	"strings"
 	"testing"
 )
+
+// releaseDocPath is the release procedure, which is where the caller of
+// `canonical-dist-diff` lives now that no workflow runs it.
+const releaseDocPath = repoRoot + "/docs/RELEASE.md"
 
 // outputFlag finds a `go build -o PATH` argument in a recipe.
 var outputFlag = regexp.MustCompile(`-o\s+(\S+)`)
@@ -145,9 +152,9 @@ func TestTheCanonicalBuildIsComparedAgainstWhatDistShips(t *testing.T) {
 	recipe, ok := recipeFor(makefile, target)
 	if !ok {
 		t.Fatalf("the Makefile has no `%s:` target.\n"+
-			"ci.yml's canonical job diffs `make canonical` against itself, so both sides\n"+
-			"of that diff are the same binary and it has no term for the artefact a\n"+
-			"release ships. This target is the comparison that does.", target)
+			"Diffing `make canonical` against itself compares the surviving binary with\n"+
+			"itself, so it has no term for the artefact a release ships. This target is\n"+
+			"the comparison that does.", target)
 	}
 
 	// The dist half. Without it the target compares the canonical build against
@@ -202,21 +209,26 @@ func TestTheCanonicalBuildIsComparedAgainstWhatDistShips(t *testing.T) {
 		}
 	}
 
-	// And CI calls it. The canonical job is where it belongs: the container is
-	// already built there, and building it a second time in another job would
-	// be the duplication this package exists to prevent.
-	called := false
-	for _, c := range readWorkflowCommands(t) {
-		if c.Job == "canonical" && strings.Contains(c.Text, target) {
-			called = true
-			break
-		}
-	}
-	if !called {
-		t.Errorf("no step of ci.yml's canonical job runs `make %s`.\n"+
-			"The target existing is not the guard; running it is. The comparison it\n"+
-			"makes is the one no job made when the canonical build was overwriting the\n"+
-			"artefact every release ships.", target)
+	// And something calls it. This used to read ci.yml's canonical job; there is
+	// no ci.yml any more — see sim/wiring/workflow_test.go for why nothing but
+	// the release build runs on a hosted runner — so the caller is a person
+	// working through the release checklist, and the checklist is what has to
+	// name the target.
+	//
+	// That is a weaker guarantee than a job and it is stated rather than
+	// glossed: a checklist item can be skipped and a job cannot. What has not
+	// changed is the failure this half exists to prevent, which was never a
+	// runner going missing but a fix landing in the Makefile and reaching
+	// nothing — the target existing while no caller of it does. A checklist
+	// item is a caller, and one that has been deleted is the same silence as a
+	// deleted job.
+	if !strings.Contains(readRepoFile(t, releaseDocPath), "make "+target) {
+		t.Errorf("docs/RELEASE.md does not name `make %s`.\n"+
+			"The target existing is not the guard; running it is. Nothing runs on a\n"+
+			"hosted runner except the release build, so the release checklist is the\n"+
+			"only caller this target has — and a comparison nobody is told to make is\n"+
+			"the state that let the canonical build certify a binary no release\n"+
+			"contains.", target)
 	}
 }
 
@@ -233,9 +245,10 @@ func TestTheCanonicalBuildIsComparedAgainstWhatDistShips(t *testing.T) {
 // the half a C toolchain can make irreproducible, which is why the container
 // exists at all.
 //
-// Satisfied by either file, because the check may reasonably live in the
-// workflow or in the Makefile target it calls, and moving it between them is not
-// a regression.
+// Read from the Makefile alone. It used to also read ci.yml's canonical job,
+// because the check could reasonably live in either; there is no ci.yml now, and
+// a workflow read that can only ever come back empty is a term that quietly
+// stops carrying its half of the condition.
 func TestTheCanonicalCheckSeesBothPairsOfBinaries(t *testing.T) {
 	makefile := readMakefile(t)
 
@@ -250,11 +263,6 @@ func TestTheCanonicalCheckSeesBothPairsOfBinaries(t *testing.T) {
 	}
 	if recipe, ok := recipeFor(makefile, "canonical-dist-diff"); ok {
 		seen.WriteString(recipe)
-	}
-	for _, c := range readWorkflowCommands(t) {
-		if c.Job == "canonical" {
-			seen.WriteString(c.Text)
-		}
 	}
 	text := seen.String()
 

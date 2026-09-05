@@ -249,8 +249,8 @@ canonical: canonical-image
 #
 # `make canonical` certifies $(BIN)/zcd. `make dist` builds what every archive
 # contains and what .github/workflows/release.yml publishes. Nothing compared
-# the two: ci.yml's canonical job runs `make canonical` twice and diffs the
-# results, so both sides of its diff are the same binary — and while
+# the two: the canonical CI job of the day ran `make canonical` twice and
+# diffed the results, so both sides of its diff were the same binary — and while
 # build-randomx wrote $(BIN)/zcd too, that binary was the RandomX one, which no
 # release ships. A comparison with no term for the pure-Go artefact cannot
 # notice that the pure-Go artefact was destroyed.
@@ -335,7 +335,7 @@ test-randomx:
 # `canonical` below runs, in ONE container invocation — silently replaced the
 # pure-Go binaries with the cgo ones. The canonical build then certified an
 # artefact no release contains and destroyed the one every release does, in the
-# same command, and ci.yml's canonical job diffed the survivor against itself, so
+# same command, and the canonical CI job diffed the survivor against itself, so
 # it was structurally incapable of noticing.
 #
 # Distinct names fix that family at once: both artefacts exist at the same time,
@@ -352,7 +352,7 @@ build-randomx:
 test-short:
 	$(GO) test -short ./...
 
-# The race detector is part of CI, not an optional extra.
+# The race detector is part of `make ci`, not an optional extra.
 #
 # A node touches the chain from the miner, a goroutine per peer, the sync
 # driver and the RPC server. An unsynchronised read there is not a stale value:
@@ -486,7 +486,7 @@ bench:
 # green CI — which is exactly what happened when §8.1 added a protocol cell
 # that `benchBlock` seeds by hand and nothing updated the list (I6-H2). The
 # figures whitepaper §15 publishes come from these benchmarks, so "they still
-# run" is a claim CI should make on every commit, and it costs seconds.
+# run" is a claim `make ci` makes on every run, and it costs seconds.
 .PHONY: bench-smoke
 bench-smoke:
 	$(GO) test -run XXX -bench . -benchtime 1x ./... > /dev/null
@@ -543,7 +543,7 @@ lint:
 	$(GO) vet ./...
 	@test -z "$$(gofmt -l . | tee /dev/stderr)" || { echo 'gofmt: files need formatting'; exit 1; }
 
-# CI enforces the import graph: arrows point inward only. core/ may import
+# `make ci` enforces the import graph: arrows point inward only. core/ may import
 # nothing outside itself and the standard library, and nothing in core/ may
 # import the node, the wallet or the simulator.
 .PHONY: check-imports
@@ -686,6 +686,25 @@ check-imports:
 check-links:
 	$(GO) test ./docs/linkcheck/ -count=1
 
+# THE GATE. Nothing else is one.
+#
+# This target used to be a convenience that mirrored what a hosted runner did
+# anyway. It is now the only thing that runs this tree before a push, because
+# there is no CI: the project's forge account was permanently suspended, with no
+# appeal, for workflow jobs that computed proof-of-work hashes -- read as mining
+# on the forge's runners -- and every workflow but the release build was deleted
+# in response. .github/workflows/release.yml compiles artefacts and runs
+# nothing; sim/wiring/workflow_test.go holds it to that by equality.
+#
+# So: run this before you push, and read the output. A red run pushed anyway is
+# a red `dev`, and nobody downstream will find it for you.
+#
+# What this target does NOT cover, because it is slow, needs Docker, or needs a
+# platform this machine is not: `make fuzz`, `make soak-long`, `make canonical`
+# and `canonical-dist-diff`, `make repro` and `repro-desktop`, `make
+# test-randomx`, `make release-smoke`, and the Windows suite. CONTRIBUTING.md
+# says which of those a contributor owes for which change; docs/RELEASE.md
+# section 8 lists every one a release owes.
 .PHONY: ci
 ci: lint check-imports wiring test race guard differential bench-smoke
 
@@ -844,9 +863,9 @@ endif
 # dist-desktop builds the artefact and repro-desktop rebuilds it to compare, so
 # the two have to *be* the same command -- otherwise the comparison certifies
 # something the release does not ship. The alternative arrangement has a price
-# tag already recorded in this tree: .github/workflows/ci.yml's `make race`
-# comment is about a fix that landed in the Makefile and left the second copy of
-# the same command still failing.
+# tag already recorded in this tree: the `race` target's own comment is about a
+# fix that landed in the Makefile and left CI's second copy of the same command
+# still failing.
 #
 # The output path and the working directory are the caller's. The tags, the
 # build flags, the link flags and CGO_ENABLED are not.

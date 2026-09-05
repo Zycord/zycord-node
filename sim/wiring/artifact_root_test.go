@@ -67,10 +67,11 @@ func TestAnArtefactsPathsShareOneDirectory(t *testing.T) {
 			}
 		}
 	}
-	// The arming check, over the whole directory rather than per file: most
-	// workflows have no multi-path upload at all, and requiring one from each
-	// is how the first version of this test failed on ci.yml while the parser
-	// was working perfectly.
+	// The arming check, over the whole directory rather than per file: a
+	// workflow may have no multi-path upload at all, and requiring one from each
+	// is how the first version of this test failed on a workflow while the
+	// parser was working perfectly. There is one workflow left and it carries
+	// four such uploads, so the floor still has room under it.
 	if total < 3 {
 		t.Fatalf("found %d multi-path uploads across every workflow; the parser has probably "+
 			"stopped matching, which would make this test pass by seeing nothing", total)
