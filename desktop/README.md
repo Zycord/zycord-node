@@ -149,16 +149,37 @@ travels with it — while `zycord-wallet.exe` stays pure Go and byte-identical.
 `make dist-desktop` builds both; `DESKTOP_NODE=0` ships the wallet alone, and
 the wallet then asks for a node to talk to.
 
+**There is no way to name somebody else's node, and that is the design rather
+than a gap.** A person opening a wallet is in no position to judge whose node
+to trust, and the honest alternative to "run your own" is not "use a stranger's"
+— it is a broken install, which the first-run screen says in those words when
+the package has lost its zycordd. `webui.API.Configure` starts the bundled node
+for the chosen network and uses the address it picked, whatever address reached
+it. The only decisions a person makes are the key file, the network, and whether
+this computer mines.
+
+The node runs with no `--listen`, so it is periphery: it dials out and can never
+be dialled. That needs no forwarded port, offers no inbound surface, and is a
+shape the network already expects — a seed cannot tell one of these from any
+other outbound-only node.
+
 Three consequences the interface is built around:
 
 - **Sync first.** The first launch shows a sync screen with a progress
   estimate (the tip's timestamp against the clock, since the node cannot know
   the chain's height before it has it), the peer count and the node's own log.
+  Nothing claims to be in sync until the wallet has actually asked: reachable
+  with the question unanswered reads "Checking sync…", because "in sync" is what
+  decides whether a person believes the balance under it.
   A person can go in before it finishes; balances may then be stale and the
   wallet refuses to sign anything until the node is in sync
   (`webui.API.Sync`, checked at the top of `Send`). "In sync" is: not below the
   checkpoint floor this release enforces, a tip younger than twenty block
   intervals, and at least one peer on a public network.
+- **A node that exits explains itself.** `zycordd` refuses to start on a public
+  network when it was built without RandomX, and says so in one clear sentence.
+  `localnode` reports that sentence as the exit reason rather than the exit
+  status, because "exit status 1" is not something anybody can act on.
 - **A node already running is adopted.** If something answers on 9420 and is
   on the network the wallet wants, the wallet uses it and starts nothing; if
   it is on another network, the bundled node goes to 9440.

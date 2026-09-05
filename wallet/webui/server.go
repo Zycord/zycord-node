@@ -262,13 +262,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/localnode/stop", s.json(func(*http.Request) (any, error) {
 		return s.api.StopLocalNode()
 	}))
-	mux.HandleFunc("POST /api/probe", s.json(func(r *http.Request) (any, error) {
-		var req ProbeRequest
-		if err := decode(r, &req); err != nil {
-			return nil, err
-		}
-		return s.api.Probe(req), nil
-	}))
 	// Refused by `zcd ui` for the same reason /api/configure is: the key file
 	// was named on the command line. Registered so the frontend is one file.
 	mux.HandleFunc("POST /api/create", s.json(func(r *http.Request) (any, error) {

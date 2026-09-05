@@ -204,7 +204,7 @@
     });
     gateError("");
     var focus = {
-      token: "token", unlock: "passphrase", create: "create-key", open: "open-key", setup: "setup-rpc",
+      token: "token", unlock: "passphrase", create: "create-key", open: "open-key",
     }[which];
     if (focus && $(focus)) $(focus).focus();
   }
@@ -230,6 +230,10 @@
     text($("foot-build"), Transport.mode === "desktop"
       ? "Desktop build — no network port is open"
       : "Browser build — loopback only, token-authenticated");
+    var v = w.version ? "wallet " + w.version : "";
+    if (w.node_version) v += (v ? " · " : "") + "node " + w.node_version;
+    text($("foot-version"), v);
+    text($("gate-version"), v);
     show($("tab-settings"), !!w.configurable);
     show($("unlock-switch"), !!w.configurable);
     show($("settings-switch"), !!w.configurable);
@@ -239,6 +243,8 @@
    * anything listening" is the question behind most confusion: this wallet
    * never syncs, so a blank screen is never "still syncing" — it is a node
    * that did not answer. */
+  /* True for the graphical wallet, which runs its own node; false under
+   * `zcd ui`, which was handed a node on a command line. */
   function isLocalMode() {
     return !!(state.wallet && state.wallet.node_mode === "local");
   }
@@ -257,8 +263,14 @@
       cls = "warn";
       label = sy.no_peers && !sy.stale && !sy.behind_floor ? "Looking for peers"
         : "Syncing · " + Math.floor(sy.progress) + "%";
-    } else if (n.reachable) {
+    } else if (n.reachable && sy) {
       cls = "ok"; label = "In sync · height " + n.height;
+    } else if (n.reachable) {
+      /* Reachable, and nothing has answered the question this pill exists to
+       * answer. "In sync" is the one claim that must never come out of
+       * missing information: it is what decides whether a person believes the
+       * balance under it. */
+      cls = ""; label = "Checking sync…";
     } else if (n.mismatch) {
       cls = "warn"; label = "Node is on " + networkLabel(n.node_network);
     } else if (localStarting()) {
@@ -280,7 +292,8 @@
     var sy = state.sync;
     if (!n) return null;
     if (n.reachable && !(sy && sy.syncing)) return null;
-    var card = el("div", "card callout " + (n.mismatch || n.reachable ? "warn" : "bad"));
+    var settling = n.reachable || n.mismatch || localStarting();
+    var card = el("div", "card callout " + (settling ? "warn" : "bad"));
     var body = el("div");
     if (n.reachable) {
       body.appendChild(el("h3", null, sy.no_peers && !sy.stale && !sy.behind_floor
@@ -336,8 +349,8 @@
     try {
       var cfg = state.settings || await Transport.settings();
       state.wallet = await Transport.configure({
-        key_path: cfg.key_path, rpc: cfg.rpc, confirm_rpc: cfg.confirm_rpc, network: name,
-        node_mode: cfg.node_mode, mine: cfg.mine, mine_threads: cfg.mine_threads,
+        key_path: cfg.key_path, network: name,
+        mine: cfg.mine, mine_threads: cfg.mine_threads,
       });
       state.balances = null;
       state.settings = null;
@@ -400,7 +413,6 @@
       input.checked = input.value === name;
       card.classList.toggle("selected", input.value === name);
     });
-    show($(prefix + "-test-result"), false);
   }
 
   async function fillForm(prefix) {
@@ -413,109 +425,31 @@
     state.settings = cfg;
     await loadNetworks();
     $(prefix + "-key").value = cfg.key_path || "";
-    $(prefix + "-rpc").value = cfg.rpc || "http://127.0.0.1:9420";
-    $(prefix + "-confirm").value = cfg.confirm_rpc || "";
     renderNetworkCards(prefix, cfg.network || "zycord");
-    show($(prefix + "-test-result"), false);
-    var available = !!(state.wallet && state.wallet.local_node_available);
-    var mode = cfg.node_mode === "local" || (cfg.node_mode !== "external" && available) ? "local" : "external";
-    if (!available) mode = "external";
-    selectMode(prefix, mode);
+    if (prefix === "setup") {
+      /* A package that lost its node program cannot work at all, and saying
+       * so is better than offering a node address box: this version of the
+       * wallet is its own node, and the alternative to that is not "somebody
+       * else's node", it is a broken install. */
+      show($("setup-nonode"), !(state.wallet && state.wallet.local_node_available));
+    }
     if (prefix === "settings") {
       $("settings-mine").checked = !!cfg.mine;
       $("settings-threads").value = cfg.mine_threads || 0;
     }
   }
 
-  /* Built-in node or another one. The radios are the control, the hidden
-   * input is what the form reads, and the fields that only make sense for
-   * an external node come and go with the choice. */
-  function selectMode(prefix, mode) {
-    var available = !!(state.wallet && state.wallet.local_node_available);
-    if (!available) mode = "external";
-    $(prefix + "-mode").value = mode;
-    document.querySelectorAll("input[name=" + prefix + "-modeseg]").forEach(function (r) {
-      r.checked = r.value === mode;
-      r.disabled = r.value === "local" && !available;
-    });
-    show($(prefix + "-external"), mode === "external");
-    var note = $(prefix + "-mode-note");
-    if (!available) {
-      text(note, "No node is bundled with this build of the wallet, so it talks to one you name.");
-    } else if (mode === "local") {
-      text(note, "The wallet runs its own full node on this computer. It downloads the chain once " +
-        "and keeps up from there; nothing outside this computer is trusted for your balance.");
-    } else {
-      text(note, "Talk to a node somewhere else. Its word is what your balance is, so choose one you trust.");
-    }
-    if (prefix === "settings") show($("settings-mining"), mode === "local" && available);
-  }
-
-  /* "Test" on either node form: ask the node who it is, and say what that
-   * means against the network selected above it. */
-  async function testNode(prefix) {
-    var button = $(prefix + "-test");
-    var box = $(prefix + "-test-result");
-    busy(button, true);
-    try {
-      var r = await Transport.probe({
-        rpc: $(prefix + "-rpc").value.trim(),
-        network: $(prefix + "-network").value,
-      });
-      renderProbe(prefix, r);
-    } catch (e) {
-      box.className = "probe bad";
-      text(box, e.message);
-      show(box, true);
-    } finally {
-      busy(button, false);
-    }
-  }
-
-  function renderProbe(prefix, r) {
-    var box = $(prefix + "-test-result");
-    box.replaceChildren();
-    if (!r.reachable) {
-      box.className = "probe bad";
-      box.appendChild(el("strong", null, "Nothing answered at " + (r.rpc || "that address") + ". "));
-      box.appendChild(document.createTextNode(
-        r.error && /not a network/.test(r.error) ? r.error :
-        "Check that a node is running there, and that the address is right."));
-    } else if (!r.matches) {
-      box.className = "probe warn";
-      box.appendChild(el("strong", null, "That node is on " + networkLabel(r.network) + "."));
-      box.appendChild(document.createTextNode(
-        " You selected " + networkLabel(r.expected) + ". Pick the network you mean, or a node that is on it."));
-      var actions = el("div", "actions");
-      var use = el("button", "small", "Use " + networkLabel(r.network));
-      use.type = "button";
-      use.addEventListener("click", function () {
-        selectNetwork(prefix, r.network);
-        renderProbe(prefix, Object.assign({}, r, { matches: true, expected: r.network }));
-      });
-      actions.appendChild(use);
-      box.appendChild(actions);
-    } else {
-      box.className = "probe ok";
-      box.appendChild(el("strong", null, "Connected. "));
-      box.appendChild(document.createTextNode(
-        networkLabel(r.network) + ", height " + r.height + "."));
-    }
-    show(box, true);
-  }
-
+  /* What a person actually decides: which key file, which network, and
+   * whether this computer mines. The node address is the wallet's own and is
+   * never in a form. */
   function formRequest(prefix) {
-    var local = $(prefix + "-mode").value === "local";
     var req = {
       key_path: $(prefix + "-key").value.trim(),
-      rpc: $(prefix + "-rpc").value.trim(),
       network: $(prefix + "-network").value,
-      confirm_rpc: local ? "" : $(prefix + "-confirm").value.trim(),
-      node_mode: local ? "local" : "external",
       mine: false,
       mine_threads: 0,
     };
-    if (prefix === "settings" && local) {
+    if (prefix === "settings") {
       req.mine = $("settings-mine").checked;
       req.mine_threads = Number($("settings-threads").value) || 0;
     }
@@ -660,8 +594,8 @@
     try {
       var cfg = state.settings || await Transport.settings();
       state.wallet = await Transport.configure({
-        key_path: path, rpc: cfg.rpc, confirm_rpc: cfg.confirm_rpc, network: cfg.network,
-        node_mode: cfg.node_mode, mine: cfg.mine, mine_threads: cfg.mine_threads,
+        key_path: path, network: cfg.network,
+        mine: cfg.mine, mine_threads: cfg.mine_threads,
       });
       state.settings = null;
       renderChrome();
@@ -886,7 +820,9 @@
     b.addresses.forEach(function (a) { total += BigInt(a.balance); });
     hero.replaceChildren(document.createTextNode(formatZcd(total.toString())), el("span", "unit", "ZCD"));
     text(sub, formatDrops(total.toString()) + " drops" +
-      (b.confirmed ? " · cross-checked against a second node" : " · as reported by " + (state.wallet ? state.wallet.rpc : "the node")));
+      (b.confirmed ? " · cross-checked against a second node"
+        : isLocalMode() ? " · computed by this computer's own node"
+        : " · as reported by " + (state.wallet ? state.wallet.rpc : "the node")));
 
     b.addresses.forEach(function (a) {
       var card = el("div", "card");
@@ -1422,7 +1358,6 @@
     $("welcome-open").addEventListener("click", function () { beginWizard("open"); });
     $("gate-setup").addEventListener("submit", setupNext);
     $("setup-back").addEventListener("click", function () { showGate("welcome"); });
-    $("setup-test").addEventListener("click", function () { testNode("setup"); });
     $("gate-create").addEventListener("submit", createWallet);
     $("create-back").addEventListener("click", function () { showGate("setup"); });
     $("create-browse").addEventListener("click", function () { browseFor("create-key", true); });
@@ -1436,6 +1371,7 @@
       renderReceive();
       refreshBalances();
       refreshNode();
+      refreshSync();
     });
 
     $("settings-form").addEventListener("submit", async function (e) {
@@ -1454,14 +1390,8 @@
         show(box, true);
       }
     });
-    $("settings-test").addEventListener("click", function () { testNode("settings"); });
     $("settings-browse").addEventListener("click", function () { browseFor("settings-key", false); });
 
-    ["setup", "settings"].forEach(function (prefix) {
-      document.querySelectorAll("input[name=" + prefix + "-modeseg]").forEach(function (r) {
-        r.addEventListener("change", function () { selectMode(prefix, r.value); });
-      });
-    });
     $("sync-continue").addEventListener("click", function () {
       state.syncSkipped = true;
       showGate("unlock");

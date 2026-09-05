@@ -52,6 +52,15 @@ var ErrNotConfigurable = errors.New(
 var ErrPreviewChanged = errors.New(
 	"wallet: the amounts changed between the preview and the confirmation; nothing was submitted — check the new numbers and approve again")
 
+// ErrNoBundledNode reports a graphical wallet with no node to run.
+//
+// This version of the wallet is its own node and offers no way to name
+// somebody else's, so a package that lost its zycordd cannot work at all. The
+// interface says so rather than presenting a node address box that would put
+// the person's balance in a stranger's gift.
+var ErrNoBundledNode = errors.New(
+	"wallet: this package is missing its zycordd, so the wallet has no node to run; download the wallet again")
+
 // ErrNotApproved reports a spend that reached the API without the explicit
 // approval the interface is required to collect.
 var ErrNotApproved = errors.New("wallet: this spend was not approved; nothing was submitted")
@@ -73,12 +82,19 @@ type Config struct {
 	// the idle lock, which is a choice a caller has to make explicitly.
 	LockAfter time.Duration
 
-	// LocalNode, when set, is a zycordd the wallet can run beside itself.
+	// Version is what this build of the wallet calls itself. Displayed, and
+	// nothing else depends on it.
+	Version string
+
+	// LocalNode, when set, is a zycordd the wallet runs beside itself.
 	// NodeMode says whether it does: "local" starts it and talks to it,
-	// "external" (or empty) talks to RPC as given. Mine, MineThreads and
-	// Payout are the bundled node's mining settings; Payout is the wallet's
-	// persistent address as of when mining was switched on, remembered so
-	// the node can start mining before the key is unlocked.
+	// "external" talks to RPC as given, which is what `zcd ui` does with the
+	// address on its command line. A configurable wallet is always local:
+	// choosing a node is not a decision this version puts to a person.
+	// Mine, MineThreads and Payout are the bundled node's mining settings;
+	// Payout is the wallet's persistent address as of when mining was
+	// switched on, remembered so the node can start mining before the key is
+	// unlocked.
 	LocalNode   *localnode.Manager
 	NodeMode    string
 	Mine        bool
@@ -140,6 +156,11 @@ type WalletState struct {
 	Persistent       string `json:"persistent"`
 	OneShot          string `json:"one_shot"`
 	LockAfterSeconds int    `json:"lock_after_seconds"`
+	// Version is this build of the wallet; NodeVersion is the bundled node
+	// beside it, empty when there is none. The two are shown together, so a
+	// mismatched pair is visible rather than inferred.
+	Version     string `json:"version"`
+	NodeVersion string `json:"node_version"`
 	// NodeMode is "local" when the wallet runs the node it talks to;
 	// LocalNodeAvailable says whether it could. Mining and Payout are the
 	// bundled node's mining settings.
@@ -175,15 +196,17 @@ func (a *API) Configure(req ConfigureRequest) (*WalletState, error) {
 	a.mu.RLock()
 	mgr := a.cfg.LocalNode
 	a.mu.RUnlock()
-	local := strings.TrimSpace(req.NodeMode) == "local"
-	if local && mgr == nil {
-		return nil, errors.New("wallet: this wallet has no built-in node; name a node to talk to instead")
+	if mgr == nil {
+		return nil, ErrNoBundledNode
 	}
-	if local && strings.TrimSpace(req.RPC) == "" {
-		// The address is the node's to decide; the field is required by
-		// resolve for the external case only.
+	// The address is the wallet's to decide, so whatever arrived in the
+	// request is replaced below. It is filled in here only because resolve
+	// refuses an empty one, which is the right rule for the command-line
+	// interface it was written for.
+	if strings.TrimSpace(req.RPC) == "" {
 		req.RPC = "http://127.0.0.1:9420"
 	}
+	req.ConfirmRPC = ""
 	next, err := req.resolve()
 	if err != nil {
 		return nil, err
@@ -199,9 +222,6 @@ func (a *API) Configure(req ConfigureRequest) (*WalletState, error) {
 	// before anything below locks.
 	payout := ""
 	if req.Mine {
-		if !local {
-			return nil, errors.New("wallet: mining is a setting of the built-in node; switch to it first")
-		}
 		a.mu.RLock()
 		if a.key != nil {
 			payout = session.HexAddr(a.key.Persistent())
@@ -214,18 +234,11 @@ func (a *API) Configure(req ConfigureRequest) (*WalletState, error) {
 		}
 	}
 
-	if local {
-		rpc, err := mgr.Start(next.Params.Name, localnode.Options{Mine: req.Mine, Payout: payout, Threads: req.MineThreads})
-		if err != nil {
-			return nil, err
-		}
-		next.RPC = rpc
-	} else if mgr != nil {
-		_ = mgr.Stop()
+	rpc, err := mgr.Start(next.Params.Name, localnode.Options{Mine: req.Mine, Payout: payout, Threads: req.MineThreads})
+	if err != nil {
+		return nil, err
 	}
-	if next.ConfirmRPC != "" && session.SameEndpoint(next.RPC, next.ConfirmRPC) {
-		return nil, fmt.Errorf("%w: both name %s", session.ErrConfirmRPCNotIndependent, next.RPC)
-	}
+	next.RPC, next.ConfirmRPC = rpc, ""
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -234,10 +247,7 @@ func (a *API) Configure(req ConfigureRequest) (*WalletState, error) {
 		a.key = nil
 	}
 	a.cfg.KeyPath, a.cfg.RPC, a.cfg.ConfirmRPC, a.cfg.Params = next.KeyPath, next.RPC, next.ConfirmRPC, next.Params
-	a.cfg.NodeMode = "external"
-	if local {
-		a.cfg.NodeMode = "local"
-	}
+	a.cfg.NodeMode = "local"
 	a.cfg.Mine, a.cfg.MineThreads = req.Mine, req.MineThreads
 	if payout != "" {
 		a.cfg.Payout = payout
@@ -404,7 +414,6 @@ func (a *API) Settings() ConfigureRequest {
 		RPC:         a.cfg.RPC,
 		ConfirmRPC:  a.cfg.ConfirmRPC,
 		Network:     a.cfg.Params.Name,
-		NodeMode:    a.cfg.NodeMode,
 		Mine:        a.cfg.Mine,
 		MineThreads: a.cfg.MineThreads,
 	}
@@ -493,60 +502,6 @@ func (a *API) Create(req CreateRequest) (*WalletState, error) {
 	return a.stateLocked(), nil
 }
 
-// ProbeRequest names a node to ask, and the network the person means it to
-// be on.
-type ProbeRequest struct {
-	RPC     string `json:"rpc"`
-	Network string `json:"network"`
-}
-
-// ProbeResult is what one node said about itself, against what was expected.
-type ProbeResult struct {
-	RPC       string `json:"rpc"`
-	Reachable bool   `json:"reachable"`
-	Error     string `json:"error"`
-
-	// What the node reports.
-	Network string `json:"network"`
-	ChainID uint64 `json:"chain_id"`
-	Height  uint64 `json:"height"`
-
-	// What was asserted, and whether the two agree. A reachable node on the
-	// wrong network is the case the interface has to name rather than fold
-	// into "unreachable": the fix is different.
-	Expected        string `json:"expected"`
-	ExpectedChainID uint64 `json:"expected_chain_id"`
-	Matches         bool   `json:"matches"`
-}
-
-// Probe asks a node who it is, without saving anything and without a key.
-//
-// It is what a settings form's "test" button does: the node address and the
-// network are the two things a person can get wrong on the first screen, and
-// both are cheaper to find out about before Save than after.
-func (a *API) Probe(req ProbeRequest) *ProbeResult {
-	out := &ProbeResult{RPC: strings.TrimSpace(req.RPC)}
-	resolved, err := (ConfigureRequest{RPC: out.RPC, Network: req.Network}).resolve()
-	if err != nil {
-		out.Error = err.Error()
-		return out
-	}
-	out.Expected, out.ExpectedChainID = resolved.Params.Name, resolved.Params.ChainID
-	status, err := session.NewClient(out.RPC).Status()
-	if err != nil {
-		out.Error = err.Error()
-		return out
-	}
-	out.Reachable = true
-	out.Network, out.ChainID, out.Height = status.Network, status.ChainID, status.Height
-	out.Matches = status.ChainID == resolved.Params.ChainID
-	if !out.Matches {
-		out.Error = fmt.Sprintf("%s is on %q (chain id %d), not %q (chain id %d)",
-			out.RPC, status.Network, status.ChainID, resolved.Params.Name, resolved.Params.ChainID)
-	}
-	return out
-}
-
 // ConfigureRequest names a key file, a node and a network.
 type ConfigureRequest struct {
 	KeyPath    string `json:"key_path"`
@@ -556,9 +511,6 @@ type ConfigureRequest struct {
 	// zcd command calls them. An empty value means mainnet, which is the
 	// default everywhere else too.
 	Network string `json:"network"`
-	// NodeMode is "local" to run the bundled node, anything else to talk to
-	// RPC as given.
-	NodeMode string `json:"node_mode"`
 	// Mine and MineThreads are the bundled node's mining settings. The
 	// payout is always the wallet's own persistent address.
 	Mine        bool `json:"mine"`
@@ -606,6 +558,7 @@ func (a *API) stateLocked() *WalletState {
 		RPC:                a.cfg.RPC,
 		ConfirmRPC:         a.cfg.ConfirmRPC,
 		LockAfterSeconds:   int(a.cfg.LockAfter / time.Second),
+		Version:            a.cfg.Version,
 		NodeMode:           a.cfg.NodeMode,
 		LocalNodeAvailable: a.cfg.LocalNode != nil && a.cfg.LocalNode.Binary != "",
 		Mining:             a.cfg.Mine,
@@ -614,6 +567,9 @@ func (a *API) stateLocked() *WalletState {
 	}
 	if a.cfg.NodeMode == "" {
 		s.NodeMode = "external"
+	}
+	if a.cfg.LocalNode != nil {
+		s.NodeVersion = a.cfg.LocalNode.Version()
 	}
 	if a.key != nil {
 		s.Persistent = session.HexAddr(a.key.Persistent())
