@@ -113,11 +113,21 @@ What that means for you, in one line each:
 x86-64 engine is cross-compiled from the Linux runner with a MinGW-w64
 toolchain, and it is the one leg of the release that is not built natively:
 `windows-latest` ships neither GNU make nor `zip` on `PATH`, so being the target
-would cost two tools to buy one compiler. Because a cross-compiled archive
-cannot be started by the job that built it, a separate `randomx-smoke-windows`
-job downloads that exact archive on a Windows runner, unzips it and starts
-`zycordd.exe` — the platform nobody can test locally is not the platform nobody
-tested at all.
+would cost two tools to buy one compiler.
+
+**Nothing starts that archive before it ships, and you should know it.** A
+`randomx-smoke-windows` job used to: it downloaded the published `.zip` on a
+Windows runner, unzipped it and started `zycordd.exe` to read its engine line.
+That job is gone. Repeatedly computing RandomX hashes on a hosted runner is what
+got this project's first forge account permanently suspended, and starting the
+mining binary was the clearest instance of it — so it was removed by name rather
+than quietly dropped ([RELEASE.md](RELEASE.md) §0).
+
+The consequence is narrow and it is yours to carry: a cross-compiled archive is
+built by a machine that cannot run it, and no automated step now runs it either.
+`zcd version` on Windows is therefore the first execution that has to agree with
+`zcd params` — run it before you point the node at a network, rather than
+learning at start-up.
 
 **Windows arm64 ships nothing, and the reason is narrower than this page used to
 claim.** It said there was no cross-toolchain and no native runner. The first

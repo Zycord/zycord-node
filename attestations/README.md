@@ -40,10 +40,12 @@ macOS builds — a system C toolchain and a platform SDK end up in the output an
 two machines will not agree byte for byte — but it is not true of the Windows
 one, which reaches WebView2 through pure Go and *is* byte-identical across
 rebuilds. Nor is the second reason that was given for a while — that nothing
-rebuilt the wallet and compared, the way the `reproducible` job does for `zcd`.
-Something does: `make repro-desktop` rebuilds the Windows wallet
-from two other paths and compares, on every push to `main` and every tag, and
-again on the release's Windows leg.
+rebuilt the wallet and compared. Something does: `make repro-desktop` rebuilds
+the Windows wallet from two other paths and compares them. A `reproducible` job
+used to run the equivalent for `zcd` on every push to `main`; it is gone with the
+rest of the test workflow ([RELEASE.md](../docs/RELEASE.md) §0), and the release
+workflow has no `main` trigger at all. What runs it now is the release's Windows
+leg, at a tag, and the release machine by hand before that.
 
 The rule does not change with either fact, and the reason that holds on every
 platform is the one to keep in mind. What a release publishes for the wallet is

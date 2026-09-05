@@ -18,8 +18,10 @@ make check-imports             # unchanged, still green
 make build && make build       # zcd and zycordd still byte-identical
 ```
 
-`go test ./...` at the root never compiles a webview, and the `reproducible` CI
-job keeps checking `bin/zcd` byte for byte.
+`go test ./...` at the root never compiles a webview. A `reproducible` job used
+to keep checking `bin/zcd` byte for byte on every push; it is gone, and what
+checks it now is the release build at a tag, plus whoever runs `make build`
+twice before pushing. There is no hosted runner watching this for you.
 
 ## Two tiers of assurance, stated rather than implied
 
