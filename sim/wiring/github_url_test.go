@@ -93,17 +93,17 @@ var forgeURL = regexp.MustCompile(`(?i)https?://(?:www\.)?github\.com/([A-Za-z0-
 // placeholders and third-party upstreams, so the account this repository must
 // never publish is refused by the default rather than by an exception.
 var allowedAccounts = map[string]string{
-	// The account this repository is published under.
+	// The organisation this repository is published under.
 	//
-	// **This is the one entry that is the author, and adding it was a decision
-	// rather than a convenience.** The list was built so that the publishing
-	// account is refused BY DEFAULT, on the argument that publication is a
-	// one-way door and a name in the tree is an identity. That argument was
-	// written before publication. It has since happened: the repository lives
-	// at this account, every release archive is served from it, and a reader
-	// holding this tree got it from a URL that already carried the name. The
-	// guard was refusing to write down something the reader had to know to
-	// arrive.
+	// **This is the one entry that is the project's own account, and adding it
+	// was a decision rather than a convenience.** The list was built so that
+	// the publishing account is refused BY DEFAULT, on the argument that
+	// publication is a one-way door and a name in the tree is an identity.
+	// That argument was written before publication. It has since happened: the
+	// repository lives at this account, every release archive is served from
+	// it, and a reader holding this tree got it from a URL that already
+	// carried the name. The guard was refusing to write down something the
+	// reader had to know to arrive.
 	//
 	// What it cost while it held is the part worth recording, because it is
 	// what tipped this. Install instructions could not name where to install
@@ -112,11 +112,19 @@ var allowedAccounts = map[string]string{
 	// could carry no contact_links at all, since those take an absolute URL.
 	// Three places where a reader was sent looking rather than pointed.
 	//
+	// The entry has moved once, and the move is the reason to read it as an
+	// address rather than as a name. The account this project first published
+	// under was permanently suspended, and the repository now lives at this
+	// organisation under a new name. The old account is deliberately NOT kept
+	// beside this one: it serves nothing, so a URL still naming it is a broken
+	// download rather than a historical note, and this guard going red is how
+	// the next one gets found.
+	//
 	// **The property that matters survives intact**: this list is closed, so
 	// every OTHER account still fails, including the one that would actually
 	// deanonymise. Nothing about this entry loosens that -- it names one
 	// account, and the sweep for the rest is exactly as tight as it was.
-	"thesimstoshi": "the publishing account; see the note above for why it is here",
+	"zycord": "the publishing organisation; see the note above for why it is here",
 
 	// The substitution placeholder, kept beside the real account rather than
 	// replaced by it. packaging/ still writes it: those files are copied into

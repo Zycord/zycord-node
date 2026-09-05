@@ -11,11 +11,11 @@
 # toolchain. Nobody has to believe anything about our build machine.
 class Zycord < Formula
   desc "Proof-of-work-launched L1 built from self-certifying state transitions"
-  homepage "https://github.com/thesimstoshi/zycord"
-  url "https://github.com/thesimstoshi/zycord/archive/refs/tags/v0.0.0.tar.gz"
+  homepage "https://github.com/Zycord/zycord-node"
+  url "https://github.com/Zycord/zycord-node/archive/refs/tags/v0.0.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "MIT"
-  head "https://github.com/thesimstoshi/zycord.git", branch: "main"
+  head "https://github.com/Zycord/zycord-node.git", branch: "main"
 
   depends_on "go" => :build
 

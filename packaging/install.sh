@@ -30,7 +30,7 @@ set -eu
 # nobody performs only breaks the clone somebody does have.
 #
 # --repo is still here and still works, which is what a fork or a mirror uses.
-REPO_URL="${ZYCORD_REPO_URL:-https://github.com/thesimstoshi/zycord}"
+REPO_URL="${ZYCORD_REPO_URL:-https://github.com/Zycord/zycord-node}"
 
 # `gh attestation verify` wants owner/name, not a URL, and deriving it here
 # means the --repo flag keeps working for a fork or a mirror without a second

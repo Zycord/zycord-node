@@ -200,7 +200,7 @@ release zip — [Windows without Scoop](#windows-without-scoop), two sections do
 avoids the mark of the web, not that the bytes are different.
 
 ```powershell
-scoop bucket add zycord https://github.com/thesimstoshi/scoop-zycord
+scoop bucket add zycord https://github.com/Zycord/scoop-zycord
 scoop install zycord
 ```
 
@@ -248,9 +248,9 @@ from the release zip](#macos-from-the-release-zip), below — and expect
 Gatekeeper, which that section is about.
 
 ```sh
-brew tap thesimstoshi/zycord https://github.com/thesimstoshi/homebrew-zycord
-brew install thesimstoshi/zycord/zycord         # zcd + zycordd
-brew install thesimstoshi/zycord/zycord-wallet  # the desktop application
+brew tap Zycord/zycord https://github.com/Zycord/homebrew-zycord
+brew install Zycord/zycord/zycord         # zcd + zycordd
+brew install Zycord/zycord/zycord-wallet  # the desktop application
 ```
 
 `brew tap` names a tap as `user/repo`; a bare word is not a tap name and the
@@ -339,8 +339,8 @@ does not have. See [`packaging/appimage/`](../packaging/appimage/).
 For a server, this is the one that does more than move files.
 
 ```sh
-curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/zycord_<version>_amd64.deb
-curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/SHA256SUMS.deb
+curl -fsSLO https://github.com/Zycord/zycord-node/releases/download/v<version>/zycord_<version>_amd64.deb
+curl -fsSLO https://github.com/Zycord/zycord-node/releases/download/v<version>/SHA256SUMS.deb
 sha256sum --check --ignore-missing SHA256SUMS.deb
 sudo dpkg -i zycord_<version>_amd64.deb
 ```
@@ -433,7 +433,7 @@ checksum and the signature, and only then installs**. Fetch it, read it, then ru
 it:
 
 ```sh
-curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/install.sh
+curl -fsSLO https://github.com/Zycord/zycord-node/releases/download/v<version>/install.sh
 less install.sh
 sh install.sh --version v<version>
 ```
@@ -458,7 +458,7 @@ and what the token in the printed URL is, are in
 ### The checksum
 
 ```sh
-curl -fsSLO https://github.com/thesimstoshi/zycord/releases/download/v<version>/SHA256SUMS.randomx
+curl -fsSLO https://github.com/Zycord/zycord-node/releases/download/v<version>/SHA256SUMS.randomx
 sha256sum --check --ignore-missing SHA256SUMS.randomx   # shasum -a 256 --check --ignore-missing on macOS
 ```
 
@@ -483,7 +483,7 @@ has to remember, which is a step nobody performs and a promise the documents
 keep making anyway. What is published instead is produced by the build:
 
 ```sh
-gh attestation verify zycord-<version>-<os>-<arch>-randomx.tar.gz --repo thesimstoshi/zycord
+gh attestation verify zycord-<version>-<os>-<arch>-randomx.tar.gz --repo Zycord/zycord-node
 ```
 
 That is a signed statement, made by GitHub's own infrastructure at build time,

@@ -278,7 +278,7 @@ and is described as one.
 release workflow emits a provenance attestation over every archive, keylessly:
 GitHub signs, at build time, that these exact bytes came out of this
 repository's workflow at a named commit, and the statement lands in a public
-transparency log. `gh attestation verify <archive> --repo thesimstoshi/zycord`
+transparency log. `gh attestation verify <archive> --repo Zycord/zycord-node`
 checks it with no key of ours and no keyring of the reader's.
 
 **Releases are not signed with the project key, and dropping that was a

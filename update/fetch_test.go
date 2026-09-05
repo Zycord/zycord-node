@@ -257,7 +257,7 @@ func TestAPlaintextReleaseHostIsRefusedUnlessItIsThisMachine(t *testing.T) {
 		base string
 		ok   bool
 	}{
-		{"https://github.com/thesimstoshi/zycord", true},
+		{"https://github.com/Zycord/zycord-node", true},
 		{"http://127.0.0.1:9999/x", true},   // the test harness and a local mirror
 		{"http://localhost:9999/x", true},   //
 		{"http://[::1]:9999/x", true},       //

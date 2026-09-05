@@ -12,7 +12,7 @@ Architecture: @ARCH@
 Maintainer: Simstoshi
 Section: net
 Priority: optional
-Homepage: https://github.com/thesimstoshi/zycord
+Homepage: https://github.com/Zycord/zycord-node
 Depends: libc6, libstdc++6
 Description: Zycord node and command-line tool
  A Zycord full node with the RandomX proof-of-work engine, so it joins mainnet
