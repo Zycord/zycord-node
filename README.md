@@ -253,7 +253,7 @@ this repository keeps literally: `go list -m all` at the root does not mention
 it, `go test ./...` never compiles a webview, and `bin/zcd` stays byte-identical
 and cgo-free.
 
-Dependency arrows point inward only (`node → core`, never the reverse), and `core/` imports nothing outside the standard library. Both are enforced by `make check-imports` in CI, not by convention. `core/` and `spec/` changes require golden vectors and simulator runs **before** human review is scheduled — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Dependency arrows point inward only (`node → core`, never the reverse), and `core/` imports nothing outside the standard library. Both are enforced by `make check-imports`, which `make ci` runs on the developer's machine before a push — no hosted runner checks anything here ([RELEASE.md §0](docs/RELEASE.md)). `core/` and `spec/` changes require golden vectors and simulator runs **before** human review is scheduled — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Contributing
 

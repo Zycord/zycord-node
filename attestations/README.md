@@ -23,11 +23,13 @@ binary". A certificate cannot see that. Six strangers rebuilding the tag can.
 ## What is attested, and what is not
 
 Only `zcd` and `zycordd`. They are pure Go, `CGO_ENABLED=0`, built with
-`-trimpath` and `-buildid=`, and two builds of one commit are byte-identical —
-CI checks that on every push to `main` and every tag (`.github/workflows/ci.yml`,
-job `reproducible`). It is skipped on a pull request, where the same commit is
-pushed repeatedly and the check would be re-run against bytes nothing has yet
-accepted; the merge re-runs it minutes later.
+`-trimpath` and `-buildid=`, and two builds of one commit are byte-identical.
+The release workflow checks that at every tag: it rebuilds `zcd` and compares
+the hash against the one it is about to publish, and refuses to go on if they
+differ. `make repro` is the same claim as a command anybody can run, and the
+release checklist requires it before the tag exists — there is no CI that runs
+it for anyone, which is why the claim is written as a command rather than as a
+badge.
 
 **The desktop wallet is not attested and cannot be.** Do not sign a claim about
 it. Anyone who declines to trust a binary they cannot rebuild uses `zcd`, which

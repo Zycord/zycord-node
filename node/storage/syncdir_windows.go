@@ -36,11 +36,14 @@ import (
 // fsync on Windows to prefer.
 //
 // This function used to close by saying "and CI is ubuntu-only, so this
-// platform is built and not exercised", which was true when it was written and
-// is not any more: the `windows` job in .github/workflows/ci.yml runs the whole
-// suite on windows/amd64, and node/storage is one of the packages that was
-// failing there when it was added — not here, but one line away, in
-// compactLocked's truncate (truncate_windows.go).
+// platform is built and not exercised". A `windows` job then ran the whole
+// suite on windows/amd64, and node/storage was one of the packages failing
+// there when it was added — not here, but one line away, in compactLocked's
+// truncate (truncate_windows.go). That job is gone with every other workflow
+// but the release build (sim/wiring/workflow_test.go says why), so this path is
+// exercised only when somebody runs the suite on Windows before pushing.
+// CONTRIBUTING.md names that as an obligation rather than a courtesy, and the
+// defect above is what it costs when nobody does.
 func isUnsupportedDirSync(err error) bool {
 	return errors.Is(err, syscall.ENOTSUP) ||
 		errors.Is(err, syscall.EINVAL) ||

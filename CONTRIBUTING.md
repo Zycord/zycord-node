@@ -87,30 +87,60 @@ Two carve-outs, both narrow. A record's **Confidence** list is a forward list ra
 ```sh
 make ci          # vet, formatting, the import graph, every test, the differential fold
 make fuzz        # a minute of decoder fuzzing; the farm runs hours
+make check-links # every relative link in the documents resolves
 ```
 
-**Run these locally, because a pull request no longer runs all of them.** CI
-skips four things on `pull_request` and runs them on every push to `main`, every
-tag and on manual dispatch: the `canonical` container job, both legs of
-`randomx`, `reproducible`, and the `make race` step. They are most of the bill on
-a workflow where the same commit is pushed a dozen times, and none of them
-catches a defect a reviewer would otherwise merge blind. `make ci` covers the
-race detector locally; if you touch `build/Dockerfile`, `core/pow/randomx/` or
-anything that could move a build byte, run the workflow by hand
-(*Actions → ci → Run workflow*) on your branch before asking for review rather
-than finding out at the merge. Everything else — lint, the import graph,
-`make test`, the vectors, the fuzzers, the desktop bridge and the whole Windows
-suite — still runs on every pull request.
+**There is no CI. Your machine is the only gate, and nothing will catch this
+for you.**
+
+That is not a preference and it is not temporary. This project's forge account
+was **permanently suspended, with no appeal**: workflow jobs computed RandomX
+hashes — the engine test suite, and two jobs that started a built node and
+waited for it to name its proof-of-work engine — and the forge's abuse detection
+read repeated hash computation in a runner's log as using its infrastructure to
+mine cryptocurrency, which its terms forbid. Everything went with the account.
+
+So one workflow survives,
+[`.github/workflows/release.yml`](.github/workflows/release.yml), and it compiles
+release artefacts and does nothing else. **What may never go back:** any job that
+runs a test, a fuzzer, a benchmark, a soak, the vector generator, or a built
+binary of this project. The line to hold is not "no proof of work" but
+*compiling* an artefact is fine and *running* it is not — so `make dist-randomx`
+stays, and `make release-smoke`, which starts the archived node for two seconds
+to read one line of its output, may not. When a job is arguable, it does not
+ship: the cost of dropping a build check is a rebuild, and the cost of being
+wrong twice is the account. `sim/wiring/workflow_test.go` holds all of that to an
+equality — the set of workflow files, the set of jobs, the Make targets a
+workflow may call — so the decision has to be taken in writing rather than by
+adding a file nobody reads twice.
+
+`make ci` covers lint, the import graph, the whole suite, the race detector, the
+wiring guards, the differential fold and a benchmark smoke run. Beyond it, run
+what your change touches: `make fuzz` for a decoder, `make test-randomx` and
+`make repro-randomx` for `core/pow/randomx/`, `make canonical` and
+`make canonical-dist-diff` for `build/Dockerfile`, `make repro` for anything that
+could move a build byte, `make soak-long` for consensus or networking. A red run
+pushed anyway is a red `dev`.
 
 **On Windows, `make` is not the entry point and is not expected to be.** GNU make
-is not installed on a stock Windows machine and is absent from the
-`windows-latest` runner image too, and the recipes are POSIX `sh` throughout.
-The equivalent is the `windows` job in
-[`.github/workflows/windows.yml`](.github/workflows/windows.yml) — `go vet`, `gofmt`,
-`go test ./...`, the three platform primitives, the build, and the desktop wallet
-— which is kept as the list of commands a Windows contributor actually runs.
+is not installed on a stock Windows machine, and the recipes are POSIX `sh`
+throughout. The equivalent is this list, which is what a job on a Windows runner
+used to run and what a Windows contributor now runs by hand:
+
+```
+go vet ./...
+gofmt -l .
+go test -timeout 30m ./...
+go test -count=1 -run 'TestRenameNoReplaceIsAnExclusiveRename|TestWriteFileNoClobberPublishesWithTheExclusiveRename|TestTruncateOpenLogWorksOnTheAppendHandle|TestSyncDirOnlyIgnoresUnsupportedPlatformErrors' -v ./wallet/ ./node/storage/
+CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid=' -o bin/zcd.exe ./cmd/zcd
+CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -buildid=' -o bin/zycordd.exe ./cmd/zycordd
+cd desktop && go test -tags desktop ./...
+```
+
 Run those before opening a pull request, and note that `go build -o` there needs
-an explicit `.exe`, because it does not add one.
+an explicit `.exe`, because it does not add one. Windows is one of the six
+platforms every release ships and nothing else exercises it — there is no runner
+left that does.
 
 **If you cloned before `.gitattributes` existed, rewrite the working tree once.**
 That file gives every text file LF, but only as git rewrites each file, so an
@@ -144,7 +174,7 @@ up in the pull request that added the job.
 ## Commits and releases
 
 - Commits in a release are PGP-signed.
-- CI must be green. A red build is not "flaky"; it is a build you have not understood yet.
+- The local gate must be green before you push. There is no CI to be red for you — see "Before you open a pull request" — and a failure you did not understand is not "flaky", it is a failure you have not understood yet.
 - Vendored dependencies change only in a pull request that changes nothing else.
 - Releases build byte-identically from source. If your change breaks reproducibility, it is a breaking change regardless of what it does.
 
