@@ -259,8 +259,14 @@ open**, under the rule at the top of this document.
 
 ### 1.5 The health signal ships, or the decision to ship without it is made explicitly
 
-⬜ **Not decided.** The mechanism is not implemented, and the decision that
-closes this item has not been recorded either way.
+⬜ **Not decided — the options are now written down, the choice is not made.**
+The mechanism is not implemented.
+[decisions/health-signal.md](decisions/health-signal.md) is the record: it
+establishes from source what the tree implements and what it does not, costs the
+three available branches, and recommends shipping the gate **latent by decision**.
+It deliberately does not decide. **This item closes when the owner answers
+§8 of that document**, either way; answering *latent* closes it with no code
+change, answering *implement* puts miner-side gathering on the pre-freeze clock.
 
 **What exists and what does not.** The citation *rules* are complete: the header
 carries `CitesRoot`, blocks carry `Cites`, the fold checks them (B15–B17, C0–C5)
@@ -302,7 +308,12 @@ than an optimisation of it.
 
 **This item does not record which way the decision goes**, and that is deliberate
 — it is the owner's to make, alongside the byte-capacity question it is coupled
-to. What this list asserts is only that it is an open decision, that shipping
+to. [decisions/health-signal.md](decisions/health-signal.md) §6 adds one fact this
+summary did not carry, and it changes what implementing the mechanism is worth:
+the citation window is structurally **one block** (C1 and C2 together), so an armed
+gate under-detects precisely under slow propagation — the regime it exists for —
+and widening the window needs a cited-id set in consensus state, which after block 0
+is a fork. Implementing the miner side is therefore not the same as arming the gate. What this list asserts is only that it is an open decision, that shipping
 without the mechanism is a permitted outcome under §20 provided it is chosen
 rather than defaulted into, and that the choice is written down before block 0
 rather than discovered afterwards from an empty field.
