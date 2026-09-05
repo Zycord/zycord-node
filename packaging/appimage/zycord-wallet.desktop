@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Zycord Wallet
+Comment=Wallet for the Zycord network
+Exec=zycord-wallet
+Icon=zycord-wallet
+Categories=Office;Finance;
+Terminal=false

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "algorithm": "ed25519",
+  "keys": [
+    {
+      "id": "zu1",
+      "role": "current",
+      "key": "2bb4ba8a60ebfd018761b2347b14c37c17716b432837fdc066a27a63d131f6bd"
+    },
+    {
+      "id": "zu2",
+      "role": "next",
+      "key": "0a45e0ec71f973456f02a9b4df98c29d11f5dfeeffb5a14f3c4de78637f2051f"
+    }
+  ]
+}

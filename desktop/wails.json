@@ -1,0 +1,10 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "zycord-wallet",
+  "outputfilename": "zycord-wallet",
+  "frontend:dir": "../wallet/webui/assets",
+  "info": {
+    "productName": "Zycord Wallet",
+    "comments": "Reproducible builds are the trust an anonymous project offers. This binary uses cgo and is not one of them; zcd is. See docs/INSTALL.md."
+  }
+}

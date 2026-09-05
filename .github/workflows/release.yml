@@ -1,0 +1,685 @@
+# Release artefacts, built on a tag. This is the ONLY workflow in this
+# repository, and adding a second one is a release decision rather than a
+# convenience.
+#
+# ---------------------------------------------------------------------------
+# WHY THERE IS ONLY ONE, AND WHAT MAY NEVER GO BACK IN
+# ---------------------------------------------------------------------------
+#
+# This project's forge account was permanently suspended, with no appeal.
+# Workflow jobs computed proof-of-work hashes -- the `randomx` engine tests, and
+# the smoke jobs that started a built node and waited for it to name its engine
+# -- and the forge's abuse detection read repeated hash computation in a hosted
+# runner's logs as cryptocurrency mining, which its terms forbid. Every job in
+# the repository died with the account, and none of them was worth that.
+#
+# The rule that replaced them is a shape, not a list, so that it still decides
+# cases nobody thought of:
+#
+#   COMPILING a binary that contains the proof-of-work engine is not mining, and
+#   hashing a finished artefact to show that two builds agree is ordinary build
+#   practice. Both stay.
+#
+#   RUNNING the proof-of-work function is what looks like mining, whatever the
+#   job is called and whatever it is for. If a job's own log would show the
+#   engine computing hashes, it cannot exist here. That covers the engine test
+#   suite, the fuzzers, the soak and the differential fold, and it covers
+#   starting a released node to watch it print its engine line -- which was the
+#   single clearest instance and is the reason to name it: the check was real,
+#   it caught a real class of defect, and it still may not run here.
+#
+# When a job is arguable, it does not ship. The cost of dropping a build check
+# is a rebuild. The cost of being wrong a second time is the account.
+#
+# So EVERYTHING that tests this tree now runs on the developer's machine, before
+# the push, and that is the only gate there is. CONTRIBUTING.md names the
+# commands for a contributor and docs/RELEASE.md names them for whoever cuts a
+# release. Neither is a fallback for this file; this file has no opinion about
+# whether the tree is green, because nothing here looks.
+#
+# `sim/wiring/workflow_test.go` holds this to an equality -- the set of workflow
+# files, the set of jobs, and every command that names a binary this repository
+# builds -- so that a job which starts what it built cannot be added quietly.
+# Read that file before editing this one.
+#
+# ---------------------------------------------------------------------------
+#
+# Three jobs build, and they are separate because the artefacts have different
+# assurance stories and mixing them would blur it:
+#
+#   cli      -- zcd and zycordd, cross-compiled from one Linux runner. Pure
+#              Go, CGO_ENABLED=0, so one machine can build every platform and
+#              every output is byte-identical to anyone else's build of the
+#              same tag. This job also *proves* that rather than asserting it,
+#              by rebuilding and comparing two hashes -- an artefact hashed
+#              once each, which is the practice the rule above keeps.
+#
+#              What it does NOT produce is a binary that can join a network.
+#              CGO_ENABLED=0 and no `-tags randomx` means no engine compiled
+#              in, and both spec/params.json and spec/params.testnet.json
+#              declare pow_engine randomx-v1 -- so every archive from this job
+#              refuses to start on mainnet and on the public testnet, and runs
+#              only --devnet. That is not a defect in this job; it is what the
+#              attested tier costs, and the next job is the other half of it.
+#
+#   cli-randomx -- the same two programs with the engine COMPILED in, one
+#              native runner per target because cgo cannot be cross-compiled
+#              without a per-target C++ toolchain. These are the binaries a
+#              miner runs, and they are UNATTESTED: not byte-identical across
+#              machines, never a line in SHA256SUMS.binaries. The attested tier
+#              and the runnable tier are disjoint sets and the release notes
+#              have to say so (docs/RELEASE.md section 5).
+#
+#              Compiled here, never started here. `make release-smoke` is the
+#              check that a released binary does not refuse the tagged
+#              parameters, it is worth as much as it ever was, and it belongs
+#              to the release checklist now -- run by hand, on the archive that
+#              is about to be published, on the release machine.
+#
+#   desktop  -- the wallet application, one runner per operating system *where
+#              that is the reason* -- cgo cannot be cross-compiled without a
+#              cross toolchain and a platform SDK per target, so linux and
+#              darwin each build on their own. Not reproducible there, and
+#              labelled as such in the release notes rather than quietly
+#              shipped alongside things that are.
+#
+#              Windows is the exception, and it is the rule above applied
+#              rather than bent: Wails reaches WebView2 through pure Go, so the
+#              Windows wallet has no cgo, needs no cross toolchain and no SDK,
+#              and is therefore built the same way every `zcd` artefact is --
+#              cross-compiled from the Linux runner, byte-identical across
+#              rebuilds. Measured on windows/amd64 and in a Linux container:
+#              CGO_ENABLED=0 with no C compiler present, PE subsystem 2, and
+#              two builds of one commit identical to the byte.
+#
+#              Moving the leg does not change the artefact. What byte-identity
+#              across the two hosts needs is that both use the same Go
+#              toolchain. `go-version-file: go.mod` below is what INSTALLS it,
+#              and the Makefile's exported GOTOOLCHAIN is what makes it binding
+#              on every leg and on a stranger's machine as well -- a
+#              go.mod directive alone is a floor, so a runner image carrying a
+#              newer Go would have used the newer one. Measured on a
+#              matched pair rather than asserted: with GOTOOLCHAIN pinned to
+#              go1.26.0 on both sides, the wallet cross-compiled on linux/amd64
+#              and the wallet built natively on windows/amd64 are the same file,
+#              a2f690bacb6af658fae4552414ae2d6cc4511f5f827606a29307fca4357bb638.
+#
+#              The toolchain, not the host, is what moves the bytes, and the
+#              numbers in this repository's comments are only meaningful next to
+#              the version that produced them. Same source, same flags:
+#
+#                go1.25.0  fe73d405dd707cfb56ed46f4d45cac0f877ab7718b92ec3a171c41d769b48194
+#                go1.26.0  375af0c55de6ead9f9196db1660a928bebd5242fe5b536a02e49e34396701839
+#                go1.26.6  b248619342b420249f1a37c6f19d54a16ae61f936f98c08f77226c50bcf47429
+#
+#              Three hashes for one commit and one flag set is the whole of
+#              the unpinned-toolchain defect in three lines, and none of them
+#              is wrong: a hash without a toolchain beside it is not evidence
+#              of anything. The build is now
+#              pinned to a single toolchain -- `GO_TOOLCHAIN` in the Makefile,
+#              matched by go.mod's `toolchain` line and build/Dockerfile's
+#              GO_VERSION -- so exactly one of these numbers can be produced
+#              from a given tag, and a fourth appearing means the pin moved.
+#              Re-measure them when it does; they are dated by their version.
+#
+#              That leg must not run on windows-latest. It calls
+#              `make dist-desktop`, and the windows-latest image ships neither
+#              GNU make nor Info-ZIP `zip` (MSYS2 is present but not on PATH);
+#              the recipe is POSIX sh throughout and its Windows branch
+#              archives with `zip`. So the Windows desktop artefact had never
+#              been produced and could not be. Building it on Linux fixes both
+#              missing tools at once and keeps the Makefile as the single
+#              release path, instead of forking the recipe into YAML for one
+#              platform.
+#
+# The fourth job builds nothing: `publish` collects what the three produced,
+# attests it, writes the update manifest and opens the release. It runs no
+# proof of work -- `zcd update manifest` hashes release files and signs a
+# document with an ed25519 key, and `zcd update verify` reads that signature
+# back. Neither touches the engine; `randomx.Available()` is a build-tag
+# question, answered without computing anything.
+#
+# Nothing here signs anything with the project key, and nothing downstream does
+# either. What this workflow produces instead is a build-provenance attestation
+# made by the build, about the build, with no secret to hold or to leak.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  # Buildable on demand, so the pipeline can be exercised without minting a
+  # tag nobody wanted.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # `git describe` needs the tags
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      - name: build every platform
+        run: make dist
+
+      # The claim docs/INSTALL.md makes to every user — "build it yourself and
+      # compare hashes" — is checked here, on the artefacts about to be
+      # published, rather than left for the first person who tries it.
+      - name: the published binaries are byte-identical to a fresh build
+        run: |
+          make build
+          host=$(cat dist/SHA256SUMS.binaries | grep 'linux-amd64/zcd$' | cut -d' ' -f1)
+          local=$(sha256sum bin/zcd | cut -d' ' -f1)
+          if [ "$host" != "$local" ]; then
+            echo "the linux/amd64 zcd in dist/ does not match a fresh make build"
+            echo "  dist:  $host"
+            echo "  build: $local"
+            exit 1
+          fi
+          echo "zcd is reproducible: $local"
+
+      # zycord-release-key.asc rides along with the archives, and no longer
+      # because a download has to be verified with it -- nothing in a release is
+      # signed, and `gh attestation verify` is what covers origin now. It ships
+      # because the key signs ANNOUNCEMENTS, and the default keyserver serves a
+      # copy stripped of its user ID that `gpg --import` refuses outright: a
+      # reader checking a signed announcement needs a source that works, and the
+      # release page is one that needs no keyserver. Nothing signs anything in
+      # CI, and this file is a public key -- an asset to publish, not a secret.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zycord-cli
+          # The archives are built and NOT collected, on purpose.
+          #
+          # The pure-Go tier is devnet-only: it refuses mainnet and the public
+          # testnet, because it carries no RandomX engine. Publishing it put a
+          # download on the release page that cannot do the one thing somebody
+          # came for, next to one that can, distinguished by a suffix. That is a
+          # trap rather than a choice.
+          #
+          # What the tier is actually for survives untouched: SHA256SUMS.binaries
+          # is the list a reader compares their own `make build` against, and the
+          # rebuild-and-compare check in docs/INSTALL.md never downloaded the
+          # archive to begin with — it builds one. So the evidence is published
+          # and the trap is not.
+          path: |
+            dist/SHA256SUMS.binaries
+            dist/zycord-release-key.asc
+            dist/install.sh
+          if-no-files-found: error
+
+  # The tier a user can actually join a network with.
+  #
+  # `cli` above is CGO_ENABLED=0 with no `-tags randomx`, so everything it
+  # publishes refuses to start on mainnet and on the public testnet -- both
+  # parameter sets declare pow_engine randomx-v1, and a node that cannot verify
+  # that engine refuses rather than falling back. Until this job existed there
+  # was no released binary, from any archive or any package manager, that could
+  # join either network.
+  #
+  # One runner per target, and it is the same reasoning the `desktop` matrix
+  # below is built on rather than a second convention: RandomX is C++, so this
+  # is cgo, so a cross build needs a C++ toolchain and headers for the target.
+  # A native runner has exactly one and has it already. `make dist-randomx`
+  # names its archive after `go env`, so a leg cannot mislabel itself.
+  #
+  # linux amd64/arm64 and macOS first, by deliberate decision. There is no
+  # windows leg: its users get the pure-Go archive and INSTALL.md says in its
+  # own note what that binary will and will not do, rather than the release
+  # waiting on a mingw-w64 RandomX build nobody here has exercised.
+  #
+  # fail-fast: false because these legs are independent artefacts. A macOS
+  # toolchain problem must not delete the Linux archives from the release.
+  #
+  # Nothing from this job may be added to SHA256SUMS.binaries. It is cgo and
+  # therefore not byte-identical across machines; docs/RELEASE.md §5 is explicit
+  # that the attested file covers only what a stranger can rebuild and compare.
+  # `make dist-randomx` writes its own SHA256SUMS.randomx under dist/randomx/,
+  # which is why the upload path below is that directory and not `dist/`.
+  cli-randomx:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-amd64
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+          - os: macos-15-intel
+            label: darwin-amd64
+          - os: macos-latest
+            label: darwin-arm64
+          # Windows is CROSS-COMPILED from Linux, and it is the only leg that
+          # is. The others build natively because cgo needs a C++ toolchain for
+          # the target and the cheapest way to have one is to BE the target.
+          # `windows-latest` is the exception that argues the other way: it
+          # ships neither GNU make nor `zip`, both of which this recipe uses, so
+          # being the target would cost two tools to buy one compiler. mingw on
+          # Ubuntu has all three.
+          #
+          # The Makefile treats this as a supported path rather than a
+          # workaround: `dist-randomx` refuses a GOOS assigned on the command
+          # line and its own error message tells you to put it in the
+          # environment instead, which is exactly what the build step does.
+          - os: ubuntu-latest
+            label: windows-amd64
+            goos: windows
+            cc: x86_64-w64-mingw32-gcc
+            cxx: x86_64-w64-mingw32-g++
+            apt: gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # `git describe` needs the tags
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      - name: the cross toolchain
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+
+      # The vendored C++ tree is checked against its pinned upstream tag by
+      # `go test -run TestVendoredTreeMatchesPinned ./core/pow/randomx/`, and that
+      # check runs on the release machine before the tag is pushed rather than
+      # here (docs/RELEASE.md section 8). Go's build cache does not see into
+      # core/pow/randomx/upstream/, so a modified vendor tree can be compiled
+      # here without anything noticing -- which is why the local run is a
+      # precondition of cutting the tag rather than a nicety.
+      #
+      # This step compiles the engine and does not run it. That distinction is
+      # the whole of the rule in the header.
+      - name: build the RandomX archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: make dist-randomx
+
+      # The Debian package, on the two legs that are native Linux. It carries
+      # this same -randomx build plus a systemd unit, an unprivileged account
+      # and a data directory, for the operators this project is trying to reach:
+      # somebody putting a node on a VPS.
+      #
+      # dist-deb-check is not decoration. A .deb is an ar archive of tarballs,
+      # and tarballs store owner NAMES and modification times: an uncontrolled
+      # build writes the builder's account and the exact minute it ran into a
+      # published artefact, which is an identity and a timezone (RELEASE.md
+      # section 2). The check unpacks what was just built and fails on either.
+      - name: the Debian package
+        if: matrix.goos == '' && startsWith(matrix.os, 'ubuntu')
+        run: |
+          make dist-deb DEB_ARCH=${{ matrix.label == 'linux-arm64' && 'arm64' || 'amd64' }}
+          make dist-deb-check DEB_ARCH=${{ matrix.label == 'linux-arm64' && 'arm64' || 'amd64' }}
+
+      # The Debian packages, in their own artefact and not folded into the one
+      # above -- see the comment there.
+      - uses: actions/upload-artifact@v4
+        if: matrix.goos == '' && startsWith(matrix.os, 'ubuntu')
+        with:
+          name: zycord-deb-${{ matrix.label }}
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS.deb
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zycord-cli-randomx-${{ matrix.label }}
+          # Every path here MUST stay under dist/randomx/.
+          #
+          # upload-artifact roots the artefact at the common ancestor of its
+          # paths, so adding one file from dist/ moves every archive down a
+          # level inside the artefact. The .deb was added here once and did
+          # exactly that, and the job that downloaded this artefact and looked
+          # in its root then reported the archive absent rather than moved.
+          # That job is gone -- it started the binary, which is the pattern this
+          # workflow may not carry -- but `publish` globs this artefact by name
+          # and the trap is the same one. The .deb has its own artefact below.
+          path: |
+            dist/randomx/*.tar.gz
+            dist/randomx/*.zip
+            dist/randomx/SHA256SUMS.randomx
+          if-no-files-found: error
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # No `tags:` key here, and its absence is deliberate. The webview
+          # selector -- Wails v2.15.0 asks pkg-config for webkit2gtk-4.0 unless
+          # it is built with webkit2_41, and 4.0 was dropped after Ubuntu 22.04
+          # -- is chosen by the Makefile's DESKTOP_TAGS, which is what
+          # `make dist-desktop` builds with. The matrix used to carry a copy for
+          # the vet and test steps that are now gone; a second definition of the
+          # build tags, free to drift from the one that produces the artefact,
+          # is not worth keeping for nothing to read.
+          - os: ubuntu-latest
+            goos: linux
+            label: linux-amd64
+          - os: macos-latest
+            goos: darwin
+            label: darwin-arm64
+          - os: macos-15-intel
+            goos: darwin
+            label: darwin-amd64
+          # Cross-compiled, not built on windows-latest -- see the header.
+          #
+          # The WALLET needs no C toolchain (pure-Go WebView2). The zycordd
+          # that ships beside it does: it is the RandomX build, and this is the
+          # same mingw pair the cli-randomx windows leg uses. The wallet is
+          # still built at CGO_ENABLED=0 by DESKTOP_BUILD and still checked by
+          # repro-desktop; the compiler installed here is for the node alone.
+          - os: ubuntu-latest
+            goos: windows
+            label: windows-amd64
+            cc: x86_64-w64-mingw32-gcc
+            cxx: x86_64-w64-mingw32-g++
+            apt: gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: false
+
+      # The webview each platform already ships. On Linux it is a package; on
+      # macOS it is in the SDK the runner has; on Windows it is a runtime that
+      # is preinstalled on the users' machines and not needed to compile.
+      # Conditioned on the *target*, not the runner: the Windows leg runs on a
+      # Linux runner now and needs none of this, because its webview is a
+      # runtime on the user's machine rather than a library at build time.
+      - name: webview build dependencies (linux)
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      # For the node beside the wallet, on the one leg whose host cannot
+      # compile C for its target.
+      - name: the cross toolchain for the bundled node
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ${{ matrix.apt }}
+
+      # Three checks used to sit here and now sit on the release machine
+      # (docs/RELEASE.md section 8): the vendored engine tree against its pinned
+      # upstream tag, the desktop module's own suite, and `go vet` over the
+      # Windows WebView2 path with `-tags desktop,production` -- which is not
+      # the same package set as `-tags desktop`, measured at 301 packages
+      # against 240, and the 61 only the first set reaches are the pure-Go
+      # WebView2 packages that let this leg be cross-compiled at all.
+      #
+      # They were removed because nothing except building runs here any more,
+      # not because any of them was wrong. Run them before pushing the tag.
+
+      # Rebuild and compare, before anything is archived.
+      #
+      # docs/RELEASE.md §5 puts zcd in the reproducible tier because the `cli`
+      # job rebuilds it and compares hashes, and says in the same paragraph that
+      # the Windows wallet -- byte-identical when it was measured -- had
+      # nothing rebuilding it. This is the missing half. A measurement
+      # describes one commit; a gate describes the tag being cut.
+      #
+      # `make repro-desktop` and not two `go build` lines here: the comparison
+      # has to run the same command `make dist-desktop` runs three steps down,
+      # or it certifies a binary the release does not ship. The Makefile shares
+      # one DESKTOP_BUILD between them so that stays true without anyone
+      # remembering it.
+      #
+      # Before `make dist-desktop` because that recipe archives the binary and
+      # then deletes it, so afterwards there is nothing left to hash. (Order is
+      # not forced by the clean-tree check repro-desktop carries: /dist/ is in
+      # .gitignore, so `git status --porcelain` does not see it either way.)
+      #
+      # It writes no file and adds nothing to the upload. SHA256SUMS.binaries
+      # covers zcd and zycordd only and must never grow a line for the wallet
+      # (docs/RELEASE.md §5); a SHA256SUMS.desktop.binaries beside the existing
+      # SHA256SUMS.desktop would read to a downloader as the per-binary
+      # attestation this project declines to make. The verdict goes to the log.
+      - name: the windows wallet is byte-identical across rebuilds
+        if: matrix.goos == 'windows'
+        env:
+          GOOS: ${{ matrix.goos }}
+        run: make repro-desktop
+
+      # GOOS is set for every leg, not only the cross one, so the recipe's own
+      # `$(GO) env GOOS` branches (the .exe suffix, -H windowsgui, the tags,
+      # CGO_ENABLED, the archiver) are driven by one value that is visible here
+      # rather than by whatever the runner happens to be.
+      - name: build the desktop wallet
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          GOOS: ${{ matrix.goos }}
+        run: make dist-desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zycord-wallet-${{ matrix.label }}
+          path: |
+            dist/zycord-wallet-*
+            dist/SHA256SUMS.desktop
+          if-no-files-found: error
+
+  # The GitHub Release itself: everything the build jobs produced, in one place
+  # a stranger can download without an account.
+  #
+  # **This job exists because `upload-artifact` is not a download.** The three
+  # jobs above end by uploading to the run, and an artifact there needs a
+  # GitHub login to fetch, expires in ninety days, and has no stable URL. So a
+  # tag produced binaries that nobody outside could get at, and the download
+  # buttons on the site had nothing to point at. A Release has none of those
+  # properties, and `/releases/latest` is the URL that stops rotting at the
+  # next tag.
+  #
+  # **It publishes rather than drafting, and nothing here is signed by hand.**
+  # The draft existed so two checksum lists could be signed with the project key
+  # off CI, and that was never a process anybody performed: a release is built
+  # here and downloaded there, so nothing passes through a machine that could
+  # hold the key. What covers origin instead is the attestation step below,
+  # which the build makes about itself, keylessly, and which anyone can check
+  # with `gh attestation verify`.
+  #
+  # `gh release create` rather than a third-party action: the CLI is already on
+  # the runner, so this adds no supply-chain surface to the one job in this
+  # workflow that holds a write token.
+  publish:
+    needs: [cli, cli-randomx, desktop]
+    # Tags only. This workflow also answers `workflow_dispatch`, which exists so
+    # the pipeline can be exercised without minting a tag -- and on that event
+    # GITHUB_REF_NAME is a BRANCH name, so without this line a test run would
+    # open a draft release called `main`. Nothing depends on this job, so
+    # skipping it satisfies no `needs:` and hides nothing.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      # Only this job writes. The workflow's default stays `contents: read`.
+      contents: write
+      # For the provenance attestation below. No secret is involved: the
+      # identity is the workflow's own OIDC token.
+      id-token: write
+      attestations: write
+    steps:
+      # Pinned to commits, not tags, because this job holds a write token and a
+      # tag is mutable. The rest of this workflow reads only.
+      - name: Collect every artefact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: staging
+
+      # The per-leg checksum files have to be merged, and this is the step that
+      # would be wrong to skip.
+      #
+      # `cli-randomx` runs once per target and each leg writes its OWN
+      # `SHA256SUMS.randomx` covering only the archive that leg built. Four legs
+      # therefore produce four files of the same name. What INSTALL.md and the
+      # release notes describe -- and what `--check --ignore-missing` is written
+      # against -- is ONE list covering every archive the release publishes, so
+      # the legs are concatenated rather than one of them being picked. The
+      # wallet's `SHA256SUMS.desktop` has the same shape for the same reason.
+      - name: Stage the release
+        run: |
+          set -eu
+          mkdir -p release
+          cp staging/zycord-cli/* release/
+          # tar.gz AND zip: dist-randomx archives Windows with zip, and an
+          # upload glob that listed only tar.gz is what shipped a 249-byte
+          # artefact holding a checksum file and no binary.
+          cp staging/zycord-cli-randomx-*/*.tar.gz release/
+          cp staging/zycord-cli-randomx-*/*.zip release/ 2>/dev/null || true
+          cp staging/zycord-deb-*/*.deb release/ 2>/dev/null || true
+          cat staging/zycord-deb-*/SHA256SUMS.deb 2>/dev/null | sort -k2 > release/SHA256SUMS.deb || true
+          [ -s release/SHA256SUMS.deb ] || rm -f release/SHA256SUMS.deb
+          cp staging/zycord-wallet-*/zycord-wallet-* release/
+          cat staging/zycord-cli-randomx-*/SHA256SUMS.randomx | sort -k2 > release/SHA256SUMS.randomx
+          cat staging/zycord-wallet-*/SHA256SUMS.desktop     | sort -k2 > release/SHA256SUMS.desktop
+          echo '--- staged ---'
+          ls -l release/
+          echo '--- SHA256SUMS.randomx ---'
+          cat release/SHA256SUMS.randomx
+
+      # Provenance, and it is a THIRD claim rather than a substitute for either
+      # of the two the project already makes.
+      #
+      # `SHA256SUMS.binaries` answers "rebuild this and compare" and no cgo
+      # artefact can ever appear in it. The project key answers "same author as
+      # every other release". This answers "these exact bytes came out of this
+      # workflow, from this commit" -- and it needs no stored secret, because
+      # the identity is the OIDC token GitHub mints for this run.
+      #
+      # It is worth most for the `-randomx` tier, which is the one people
+      # actually run and the one nothing can reproduce.
+      - name: Attest what this workflow built
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: 'release/*.tar.gz,release/*.zip,release/*.deb'
+
+      # Published, not drafted, and the draft went with the signatures it was
+      # waiting for.
+      #
+      # The job used to hold the release back so two checksum lists could be
+      # signed with the project key off CI. That never worked as a process: a
+      # release is built here and downloaded there, so nothing passes through a
+      # machine that could hold the key, and the step lived in the documents
+      # rather than in anybody's terminal. An instruction a reader cannot follow
+      # is worse than none, because it teaches them that checking is optional.
+      # The attestation step above replaced it -- made by the build, about the
+      # build, with no secret to hold or to leak.
+      #
+      # So the bytes go from this runner to whoever downloads them with nobody
+      # in between, which is the property the pipeline exists for.
+      # The update manifest, written and signed here.
+      #
+      # This job never checks the source out -- it only downloads artefacts,
+      # which is why `gh release create` below needs --repo -- so the generator
+      # comes from the release itself: unpack the linux/amd64 archive that was
+      # just staged and use ITS zcd. That is self-consistent, because the code
+      # that writes the manifest is the code that ships and the code that reads
+      # it, and it adds no build step to the one job holding a write token.
+      #
+      # About the key: it is a CI key, and docs/UPDATES.md says plainly what
+      # that is worth. A key here belongs to whoever can push a workflow file,
+      # so this signature does NOT defend against a compromise of the pipeline
+      # or the account. It defends against a mirror, a CDN, a fork publishing
+      # under the same asset names, and a broken TLS chain -- the same root as
+      # the build-provenance attestation above. It exists because a
+      # standard-library client can verify an ed25519 signature and cannot
+      # verify a Sigstore attestation.
+      - name: Write and sign the update manifest
+        env:
+          ZYCORD_UPDATE_SIGNING_KEY: ${{ secrets.ZYCORD_UPDATE_SIGNING_KEY }}
+        run: |
+          set -eu
+          # A tag build that cannot sign must FAIL here rather than publish a
+          # release that updates nobody and does it silently.
+          if [ -z "${ZYCORD_UPDATE_SIGNING_KEY}" ]; then
+            echo "the update signing key is not configured; refusing to publish a release nobody can update to" >&2
+            exit 1
+          fi
+          # The archive is named EXACTLY, from the tag, and not matched with a
+          # glob. `release/zycord-*-linux-amd64.tar.gz` looks specific and is
+          # not: `*` also matches `wallet-<version>`, so it expanded to the CLI
+          # archive AND the desktop wallet's, tar took the second as a member
+          # name to extract from the first, and the publish job died with
+          # "Not found in archive" after every build had already succeeded.
+          # A name built from ${GITHUB_REF_NAME} cannot match two things.
+          # The generator comes out of the -randomx archive, which is now the
+          # only linux/amd64 CLI archive published. It is built on this same
+          # runner image, so it runs here; and it is the tier a user actually
+          # receives, so the binary that writes the manifest is one of the
+          # binaries the manifest describes.
+          ver="${GITHUB_REF_NAME#v}"
+          cli="release/zycord-${ver}-linux-amd64-randomx.tar.gz"
+          test -f "$cli" || {
+            echo "the linux/amd64 CLI archive is not staged as $cli; the generator cannot be unpacked" >&2
+            ls -1 release/ >&2
+            exit 1
+          }
+          mkdir -p tools
+          tar xzf "$cli" --strip-components=1 -C tools --wildcards '*/zcd'
+          test -x tools/zcd || { echo "no zcd was unpacked from $cli" >&2; exit 1; }
+          ./tools/zcd update manifest \
+            --dir release \
+            --version "${GITHUB_REF_NAME}" \
+            --sign
+
+      # The round trip, and the one check in this workflow that is not a hash:
+      # every other step here builds something and hashes it, and a hash cannot
+      # tell you a signature verifies. It runs no proof of work -- `update
+      # verify` reads an ed25519 signature over a list of file hashes.
+      - name: Verify the manifest the way a node will
+        run: |
+          set -eu
+          # tools/zcd is still here from the step above, which is the point:
+          # the binary that WROTE the manifest is the one that reads it back,
+          # so this proves the round trip rather than two builds agreeing.
+          test -x tools/zcd || { echo "tools/zcd is missing; the signing step did not run" >&2; exit 1; }
+          ./tools/zcd update verify --dir release
+          rm -rf tools
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          notes=$(mktemp)
+          {
+            printf 'Built by GitHub Actions from `%s`.\n\n' "${GITHUB_SHA}"
+            printf 'Verify what you downloaded:\n\n'
+            printf '```sh\n'
+            printf 'gh attestation verify <archive> --repo %s\n' "${GITHUB_REPOSITORY}"
+            printf 'sha256sum --check --ignore-missing SHA256SUMS\n'
+            printf '```\n\n'
+            printf 'See docs/INSTALL.md for which archive you want, and why there are two.\n'
+          } > "$notes"
+          # --repo is not optional here. This job never checks the source out
+          # -- it only downloads artefacts -- so there is no git repository in
+          # the working directory for `gh` to infer the target from, and
+          # without the flag it exits with "not a git repository" after every
+          # build job has already succeeded. The job is guarded by
+          # `if: startsWith(github.ref, 'refs/tags/')`, so a workflow_dispatch
+          # run skips it and cannot surface this; v0.1.1 was the first tag it
+          # ever ran on, and it failed there.
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file "$notes" \
+            release/*
+          echo "published ${GITHUB_REF_NAME}"

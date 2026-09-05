@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zycord Wallet</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 40 40%22><defs><linearGradient id=%22g%22 x1=%220%22 y1=%220%22 x2=%221%22 y2=%221%22><stop offset=%220%25%22 stop-color=%22#6ee7ff%22/><stop offset=%2255%25%22 stop-color=%22#8b5cf6%22/><stop offset=%22100%25%22 stop-color=%22#f472b6%22/></linearGradient></defs><circle cx=%2220%22 cy=%2220%22 r=%2219%22 fill=%22#0b0d14%22/><circle cx=%2220%22 cy=%2220%22 r=%2217.6%22 fill=%22none%22 stroke=%22url(#g)%22 stroke-width=%221.4%22/><path d=%22M9 14 C 14.5 8.5, 22 19, 31 14 M9 20 C 14.5 14.5, 22 25, 31 20 M9 26 C 14.5 20.5, 22 31, 31 26%22 fill=%22none%22 stroke=%22url(#g)%22 stroke-width=%222.2%22 stroke-linecap=%22round%22/></svg>">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- ============================================================
+     The gate: everything that happens before the key is in memory.
+     One screen is visible at a time; app.js decides which.
+     ============================================================ -->
+<div id="gate" class="gate">
+  <div class="gate-card">
+    <div class="brand-block">
+      <svg class="mark" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="coin-grad-gate" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6ee7ff"/><stop offset="55%" stop-color="#8b5cf6"/><stop offset="100%" stop-color="#f472b6"/></linearGradient></defs><circle cx="20" cy="20" r="19" fill="#0b0d14"/><circle cx="20" cy="20" r="17.6" fill="none" stroke="url(#coin-grad-gate)" stroke-width="1.4"/><path d="M9 14 C 14.5 8.5, 22 19, 31 14 M9 20 C 14.5 14.5, 22 25, 31 20 M9 26 C 14.5 20.5, 22 31, 31 26" fill="none" stroke="url(#coin-grad-gate)" stroke-width="2.2" stroke-linecap="round"/></svg>
+      <div>
+        <h1 class="logo">Zycord</h1>
+        <p class="muted small" id="gate-sub">Wallet</p>
+      </div>
+      <span class="status-pill" id="gate-status" title="Node status">…</span>
+    </div>
+
+    <!-- Browser build only: the page was opened without its session token. -->
+    <form id="gate-token" class="screen hidden" autocomplete="off">
+      <h2>Session token</h2>
+      <p class="muted small">This page was opened without the token from the URL <code>zcd ui</code> printed. Paste it here, or reopen the full URL.</p>
+      <label for="token">Token</label>
+      <input type="password" id="token" autocomplete="off" spellcheck="false">
+      <button type="submit" id="token-submit" class="primary">Continue</button>
+    </form>
+
+    <!-- First run: nothing is configured yet. -->
+    <div id="gate-welcome" class="screen hidden">
+      <h2>Welcome</h2>
+      <p class="muted">A wallet is a key file. Create a new one, or open one you already have.</p>
+      <button type="button" id="welcome-create" class="choice">
+        <span class="choice-icon">+</span>
+        <span class="choice-body">
+          <strong>Create a new wallet</strong>
+          <span class="muted small">Generates a key and saves it encrypted with a passphrase you choose.</span>
+        </span>
+      </button>
+      <button type="button" id="welcome-open" class="choice">
+        <span class="choice-icon">↥</span>
+        <span class="choice-body">
+          <strong>Open an existing key file</strong>
+          <span class="muted small">A file made by this wallet or by <code>zcd wallet new</code>.</span>
+        </span>
+      </button>
+    </div>
+
+    <!-- Network and node. Shared with the settings panel by id family:
+         every setup-* field here has a settings-* twin below. -->
+    <form id="gate-setup" class="screen hidden" autocomplete="off">
+      <h2>Choose a network</h2>
+      <div id="setup-networks" class="net-cards"></div>
+      <input type="hidden" id="setup-network" value="zycord">
+      <input type="hidden" id="setup-key" value="">
+      <p class="muted small">
+        The wallet is its own node. It joins the network, finds peers, downloads the chain and
+        works your balance out here, on this computer. Nothing is asked of anybody else's server,
+        and nothing outside this machine is trusted for what you hold.
+      </p>
+      <p class="error hidden" id="setup-nonode">This package is missing its node program, so the wallet cannot run one. Download the wallet again.</p>
+      <div class="actions">
+        <button type="button" id="setup-back" class="ghost">Back</button>
+        <button type="submit" id="setup-next" class="primary">Continue</button>
+      </div>
+    </form>
+
+    <form id="gate-create" class="screen hidden" autocomplete="off">
+      <h2>Create a new wallet</h2>
+      <label for="create-key">Save the key file as</label>
+      <div class="input-row">
+        <input type="text" id="create-key" spellcheck="false" placeholder="/path/to/zycord-wallet.json">
+        <button type="button" id="create-browse" class="ghost hidden">Choose…</button>
+      </div>
+      <label for="create-pass">Passphrase</label>
+      <input type="password" id="create-pass" autocomplete="new-password">
+      <div id="create-strength" class="strength"></div>
+      <label for="create-pass2">Repeat the passphrase</label>
+      <input type="password" id="create-pass2" autocomplete="new-password">
+      <p class="notice small"><strong>There is no way to recover a forgotten passphrase.</strong> The key file is encrypted with it and nothing else, and it is never written anywhere.</p>
+      <div class="actions">
+        <button type="button" id="create-back" class="ghost">Back</button>
+        <button type="submit" id="create-submit" class="primary">Create wallet</button>
+      </div>
+    </form>
+
+    <form id="gate-open" class="screen hidden" autocomplete="off">
+      <h2>Open a key file</h2>
+      <label for="open-key">Key file</label>
+      <div class="input-row">
+        <input type="text" id="open-key" spellcheck="false" placeholder="/path/to/zycord-wallet.json">
+        <button type="button" id="open-browse" class="ghost hidden">Browse…</button>
+      </div>
+      <p class="muted small">The passphrase is asked for next. Nothing about the file is trusted until it is decrypted.</p>
+      <div class="actions">
+        <button type="button" id="open-back" class="ghost">Back</button>
+        <button type="submit" id="open-submit" class="primary">Open</button>
+      </div>
+    </form>
+
+    <div id="gate-done" class="screen hidden">
+      <h2>Your wallet is ready</h2>
+      <div id="done-addresses"></div>
+      <div class="notice">
+        <strong>Back up the key file now.</strong>
+        Copy it somewhere safe. Anyone with the file <em>and</em> the passphrase controls the coins; without either, nobody does — including you.
+        <div class="mono small" id="done-keypath"></div>
+      </div>
+      <button type="button" id="done-continue" class="primary">Open the wallet</button>
+    </div>
+
+    <div id="gate-sync" class="screen hidden">
+      <h2 id="sync-title">Syncing</h2>
+      <p class="muted small" id="sync-message">Starting the node…</p>
+      <div class="progress"><div class="progress-bar" id="sync-bar"></div></div>
+      <p class="small mono muted" id="sync-detail"></p>
+      <p class="error hidden" id="sync-error"></p>
+      <details id="sync-log-box">
+        <summary>Node log</summary>
+        <pre class="log" id="sync-log"></pre>
+      </details>
+      <div class="actions">
+        <button type="button" id="sync-retry" class="ghost hidden">Start the node</button>
+        <button type="button" id="sync-continue" class="primary">Continue</button>
+      </div>
+      <p class="muted small">Balances shown before the node is in sync can be stale, and nothing is sent until it is. Everything else works.</p>
+      <button type="button" id="sync-switch" class="link hidden">Use a different node…</button>
+    </div>
+
+    <form id="gate-unlock" class="screen hidden">
+      <h2>Unlock</h2>
+      <p class="muted small mono" id="gate-keypath"></p>
+      <label for="passphrase">Passphrase</label>
+      <input type="password" id="passphrase" autocomplete="current-password">
+      <button type="submit" id="unlock" class="primary">Unlock</button>
+      <p class="muted small">The key is decrypted into memory and never written anywhere. Locking overwrites it.</p>
+      <button type="button" id="unlock-switch" class="link hidden">Use a different wallet or node…</button>
+    </form>
+
+    <p id="gate-error" class="error hidden"></p>
+    <p class="version small muted" id="gate-version"></p>
+  </div>
+</div>
+
+<!-- ============================================================
+     The wallet.
+     ============================================================ -->
+<div id="app" class="app hidden">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg class="mark small" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="coin-grad-side" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6ee7ff"/><stop offset="55%" stop-color="#8b5cf6"/><stop offset="100%" stop-color="#f472b6"/></linearGradient></defs><circle cx="20" cy="20" r="19" fill="#0b0d14"/><circle cx="20" cy="20" r="17.6" fill="none" stroke="url(#coin-grad-side)" stroke-width="1.4"/><path d="M9 14 C 14.5 8.5, 22 19, 31 14 M9 20 C 14.5 14.5, 22 25, 31 20 M9 26 C 14.5 20.5, 22 31, 31 26" fill="none" stroke="url(#coin-grad-side)" stroke-width="2.2" stroke-linecap="round"/></svg>
+      <span class="logo">Zycord</span>
+    </div>
+    <nav>
+      <button class="tab active" data-panel="panel-overview"><span class="tab-icon">◎</span>Overview</button>
+      <button class="tab" data-panel="panel-send"><span class="tab-icon">↗</span>Send</button>
+      <button class="tab" data-panel="panel-receive"><span class="tab-icon">↙</span>Receive</button>
+      <button class="tab" data-panel="panel-node"><span class="tab-icon">⌁</span>Node</button>
+      <button class="tab hidden" id="tab-settings" data-panel="panel-settings"><span class="tab-icon">⚙</span>Settings</button>
+    </nav>
+    <div class="sidebar-foot">
+      <span class="badge" id="network-badge">—</span>
+      <button type="button" class="status-pill" id="node-pill" title="Node status">…</button>
+      <button id="lock" class="ghost">Lock</button>
+    </div>
+  </aside>
+
+  <div class="content">
+    <!-- Updates. Desktop only, and hidden until there is something to say. -->
+    <div id="update-bar" class="update-bar hidden">
+      <span id="update-text"></span>
+      <span class="update-actions">
+        <button id="update-yes" class="primary small hidden">Install</button>
+        <button id="update-open" class="ghost small hidden">Open release page</button>
+        <button id="update-no" class="ghost small hidden">Not now</button>
+      </span>
+    </div>
+
+    <main>
+      <section id="panel-overview" class="panel">
+        <div class="hero">
+          <div class="kind">Total balance</div>
+          <div class="hero-amount" id="total-amount">—</div>
+          <div class="hero-sub muted small" id="total-sub"></div>
+          <div class="hero-actions">
+            <button type="button" id="go-send" class="primary">Send</button>
+            <button type="button" id="go-receive">Receive</button>
+            <button type="button" id="refresh-balance" class="ghost">Refresh</button>
+          </div>
+        </div>
+        <div id="overview-node"></div>
+        <h2>Addresses</h2>
+        <div id="balances"></div>
+        <p class="muted small">
+          There is no transaction list. A Zycord node keeps the current state and nothing else,
+          so an interface that showed history would be promising something the network does not have.
+        </p>
+      </section>
+
+      <section id="panel-send" class="panel hidden">
+        <h2>Send</h2>
+        <form id="send-form" autocomplete="off" class="card form-card">
+          <label for="send-to">To</label>
+          <input type="text" id="send-to" spellcheck="false" placeholder="0x02… or 0x01…">
+
+          <label for="send-amount">Amount</label>
+          <div class="input-row">
+            <input type="text" id="send-amount" inputmode="decimal" spellcheck="false" placeholder="0.00">
+            <select id="send-unit" class="unit">
+              <option value="zcd">ZCD</option>
+              <option value="drops">drops</option>
+            </select>
+          </div>
+          <label class="checkbox"><input type="checkbox" id="send-sweep"> Send the whole balance</label>
+
+          <label>From</label>
+          <div class="segmented" id="send-source-seg">
+            <label><input type="radio" name="send-source" value="persistent" checked><span>Persistent address</span></label>
+            <label><input type="radio" name="send-source" value="one-shot"><span>One-shot address</span></label>
+          </div>
+          <p class="muted small" id="send-source-note">Your everyday address. It can be spent from as often as you like.</p>
+
+          <details>
+            <summary>Fee and timing</summary>
+            <label for="send-refund">Refund address <span class="muted">(defaults to your persistent address)</span></label>
+            <input type="text" id="send-refund" spellcheck="false" placeholder="0x…">
+            <div class="grid-3">
+              <div>
+                <label for="send-headroom">Fee headroom ×</label>
+                <input type="number" id="send-headroom" min="1" value="8">
+              </div>
+              <div>
+                <label for="send-ttl">Valid for (blocks)</label>
+                <input type="number" id="send-ttl" min="1" value="30">
+              </div>
+              <div>
+                <label for="send-seqtip">Tip (sequential)</label>
+                <input type="number" id="send-seqtip" min="0" value="100">
+              </div>
+            </div>
+            <label for="send-partip">Tip (parallel)</label>
+            <input type="number" id="send-partip" min="0" value="5">
+            <p class="muted small">
+              Headroom is the most the fee may rise to before this payment is dropped; it is only
+              reserved, and refunded in the same block. The tip is what the block producer is paid.
+            </p>
+          </details>
+
+          <button type="submit" class="primary" id="send-preview">Review</button>
+        </form>
+        <p id="send-error" class="error hidden"></p>
+        <div id="send-review" class="review hidden"></div>
+        <div id="send-ok" class="card ok-card hidden"></div>
+      </section>
+
+      <section id="panel-receive" class="panel hidden">
+        <h2>Receive</h2>
+        <div id="receive"></div>
+      </section>
+
+      <section id="panel-node" class="panel hidden">
+        <div class="row-between">
+          <h2>Node</h2>
+          <button id="refresh-node" class="ghost">Refresh</button>
+        </div>
+        <div id="localnode"></div>
+        <div id="node"></div>
+      </section>
+
+      <section id="panel-settings" class="panel hidden">
+        <h2>Settings</h2>
+        <form id="settings-form" autocomplete="off" class="card form-card">
+          <label for="settings-key">Key file</label>
+          <div class="input-row">
+            <input type="text" id="settings-key" spellcheck="false">
+            <button type="button" id="settings-browse" class="ghost hidden">Browse…</button>
+          </div>
+          <label>Network</label>
+          <div id="settings-networks" class="net-cards"></div>
+          <input type="hidden" id="settings-network" value="zycord">
+          <p class="muted small">Changing the network downloads that chain from scratch the first time.</p>
+          <div id="settings-mining">
+            <label class="checkbox"><input type="checkbox" id="settings-mine"> Mine with this computer</label>
+            <p class="muted small">Rewards are paid to this wallet's persistent address. Mining uses every core by default and, on the public networks, about 3 GiB of memory for the RandomX dataset. The node syncs first and starts mining on its own.</p>
+            <label for="settings-threads">Mining threads <span class="muted">(0 = one per core)</span></label>
+            <input type="number" id="settings-threads" min="0" value="0">
+          </div>
+          <button type="submit" class="primary">Save and lock</button>
+          <p class="muted small">
+            Saving locks the wallet. A key unlocked against one network must not survive into
+            another: addresses exist on every network and read zero on one that has never seen
+            them, which looks like an empty wallet rather than like a mistake.
+          </p>
+          <button type="button" id="settings-switch" class="link">Set up a different wallet…</button>
+        </form>
+        <p id="settings-error" class="error hidden"></p>
+      </section>
+    </main>
+
+    <footer>
+      <span class="muted small" id="foot-node"></span>
+      <span class="muted small" id="foot-build"></span>
+      <span class="muted small" id="foot-version"></span>
+    </footer>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="transport.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

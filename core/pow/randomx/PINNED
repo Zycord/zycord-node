@@ -1,0 +1,7 @@
+upstream:  https://github.com/tevador/RandomX.git
+tag:       v2.0.1
+commit:    aaafe71322df6602c21a5c72937ac284724ae561
+vendored:  src/ minus tests/, unmodified
+tree-hash: 822401d806b4b8c172527c3fb2c1397d3d57e6dee2b7d753ef3e038610c9ab90
+
+Verify with: sh vendor.sh && git diff --exit-code -- upstream

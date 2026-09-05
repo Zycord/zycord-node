@@ -1,0 +1,26 @@
+{
+  "_purpose": "Launch-era history-rewrite defence: a cumulative-work floor and a table of hard-coded (height, block_id) pins, carried by the client release rather than by the protocol. See docs/ARCHITECTURE.md section 12, 'Launch checkpoints'.",
+  "_not_consensus": "THIS FILE IS NOT A PARAMETER SET. Nothing here enters params.ConsensusRoot() and nothing here is covered by the params blake3 that a release announces. That is the point: a checkpoint is edited in every routine release, and if editing one could move the parameter hash then every routine release would fork the network. node/checkpoints/checkpoints_test.go pins that boundary.",
+  "_schedule": "v1.0.0 none; v1.0.1 (~day 3) height 2880; v1.0.2 (~day 10) height 20160; v1.0.3 (~day 31) heights 40320 and 86400; monthly thereafter. Never pin a block younger than minimum_age_blocks. Past sunset_height no new pin is added and min_chain_work alone carries the floor.",
+
+  "minimum_age_blocks": 2880,
+  "sunset_height": 1051200,
+
+  "networks": {
+    "mainnet": {
+      "min_chain_work": "0",
+      "min_chain_work_height": 0,
+      "checkpoints": []
+    },
+    "testnet": {
+      "min_chain_work": "0",
+      "min_chain_work_height": 0,
+      "checkpoints": []
+    },
+    "devnet": {
+      "min_chain_work": "0",
+      "min_chain_work_height": 0,
+      "checkpoints": []
+    }
+  }
+}
